@@ -1,33 +1,32 @@
+import asyncio
+import re
+import time
+
 import pytest
+from fake_gateway import FakeGateway
 from fastapi.testclient import TestClient
 
 from agent_dashboard.app import ALLOWED_HOSTS, create_app, host_allowed
+from agent_dashboard.collector import run_cycle
 from agent_dashboard.config import Settings
-from agent_dashboard.fleet import FleetRow, FleetState
-
-
-class FakeGateway:
-    """Stand-in for DockerGateway; web tests must never reach real Docker."""
-
-    def __init__(self, rows=None, error=None):
-        self._rows = list(rows or [])
-        self._error = error
-        self.calls = 0
-
-    async def list_instances(self):
-        self.calls += 1
-        if self._error is not None:
-            raise self._error
-        return list(self._rows)
+from agent_dashboard.fleet import FleetState
+from agent_dashboard.gateway import ManagedInstance
 
 
 def make_client(rows=None, error=None, **kwargs):
+    """Build a client over a state populated by discovery (no telemetry yet)."""
     state = FleetState()
-    if rows:
-        state._instances = {
-            name: FleetRow(name=name, state=state_) for name, state_ in rows
-        }
-    state.last_error = error
+    instances = []
+    for row in rows or []:
+        if isinstance(row, ManagedInstance):
+            instances.append(row)
+        else:
+            name, container_state = row
+            raw = "running" if container_state == "running" else "exited"
+            instances.append(ManagedInstance(name, f"id-{name}", raw))
+    asyncio.run(state.apply_cycle(instances, {}, now=1000.0))
+    if error is not None:
+        asyncio.run(state.set_discovery_error(error))
     app = create_app(
         state=state,
         settings=Settings(poll_interval=5.0),
@@ -36,6 +35,32 @@ def make_client(rows=None, error=None, **kwargs):
         **kwargs,
     )
     return TestClient(app, base_url="http://localhost"), state
+
+
+def make_live_client(now=None):
+    """A client whose fleet ran one good telemetry cycle at `now`.
+
+    `id-up` reports a good snapshot, `id-old` keeps the fake's default
+    (an old agent without telemetry), `id-down` is exited.
+    """
+    now = time.time() if now is None else now
+    state = FleetState()
+    gateway = FakeGateway(
+        [
+            ManagedInstance("worker-up", "id-up", "running"),
+            ManagedInstance("worker-old", "id-old", "running"),
+            ManagedInstance("worker-down", "id-down", "exited"),
+        ]
+    )
+    gateway.set_snapshot("id-up", {"schema_version": 1})
+    asyncio.run(run_cycle(state, gateway, max_concurrent_execs=4, now=now))
+    app = create_app(
+        state=state,
+        settings=Settings(poll_interval=5.0),
+        gateway=gateway,
+        start_poller=False,
+    )
+    return TestClient(app, base_url="http://localhost"), state, gateway, now
 
 
 def test_index_has_one_row_per_instance():
@@ -57,6 +82,36 @@ def test_fleet_partial_matches_index_rows():
     assert "<table" in partial.text
 
 
+def test_table_has_reach_and_headline_columns():
+    client, _, _, _ = make_live_client()
+    body = client.get("/").text
+    assert "<th>Reach</th>" in body
+    assert "<th>Status headline</th>" in body
+    assert "live" in body
+    assert "Live: reporting telemetry" in body
+    assert "not running" in body
+    assert "Not running" in body
+    # Old agent without telemetry: unsupported with the spec sentence.
+    assert "unsupported" in body
+    assert "telemetry not supported by this agent version" in body
+
+
+def test_failed_poll_keeps_snapshot_age_visible():
+    # Cycles run on the wall clock so the handlers (which render age with
+    # the wall clock) show a fresh age. Exact ages are pinned through
+    # FleetState.snapshot(now=...) in the collector tests.
+    client, state, gateway, _ = make_live_client()
+    gateway.set_error_code("id-up", "agent_unreachable", "no socket")
+    asyncio.run(run_cycle(state, gateway, now=time.time()))
+    aged = client.get("/").text
+    assert "unreachable" in aged
+    assert "no socket" in aged
+    match = re.search(r"(\d+) s ago", aged)
+    assert match is not None
+    assert int(match.group(1)) <= 5
+    assert client.get("/fleet").status_code == 200
+
+
 def test_discovery_failure_banner_with_reason():
     client, _ = make_client([], error="docker CLI not found: install Docker")
     for path in ("/", "/fleet"):
@@ -69,15 +124,16 @@ def test_discovery_failure_banner_with_reason():
 def test_removed_container_disappears():
     client, state = make_client([("gone", "running")])
     assert "gone" in client.get("/").text
-    import asyncio
-
-    asyncio.run(state.refresh(FakeGateway([])))
+    asyncio.run(run_cycle(state, FakeGateway([]), now=1010.0))
     assert "gone" not in client.get("/").text
 
 
 def test_handlers_never_reach_gateway():
     class ExplodingGateway:
         async def list_instances(self):
+            raise AssertionError("request path reached the gateway")
+
+        async def telemetry(self, container_id):
             raise AssertionError("request path reached the gateway")
 
     state = FleetState()
@@ -129,22 +185,22 @@ def test_rejected_hosts(host):
 def test_background_poller_runs_discovery():
     import time
 
-    from agent_dashboard.gateway import ManagedInstance
-
-    gw = FakeGateway([ManagedInstance("auto", "id", "running")])
+    gateway = FakeGateway([ManagedInstance("auto", "id", "running")])
+    gateway.set_snapshot("id", {"schema_version": 1})
     state = FleetState()
     app = create_app(
-        state=state, settings=Settings(poll_interval=2.0), gateway=gw, start_poller=True
+        state=state, settings=Settings(poll_interval=2.0), gateway=gateway, start_poller=True
     )
     with TestClient(app, base_url="http://localhost") as client:
         deadline = time.time() + 5
-        while gw.calls == 0 and time.time() < deadline:
+        while gateway.list_calls == 0 and time.time() < deadline:
             time.sleep(0.05)
-        assert gw.calls >= 1
+        assert gateway.list_calls >= 1
         body = client.get("/").text
-    rows, error = __import__("asyncio").run(state.snapshot())
+    rows, error = asyncio.run(state.snapshot())
     assert error is None
     assert [r.name for r in rows] == ["auto"]
+    assert [r.reach for r in rows] == ["live"]
     assert "auto" in body
 
 

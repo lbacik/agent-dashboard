@@ -1,0 +1,25 @@
+These fixtures are copies of the synthetic telemetry examples published by
+the simple-coding-agent repository. That repository owns the telemetry
+snapshot contract (schema v1); this dashboard only reads it.
+
+Source repository: https://github.com/lbacik/simple-coding-agent
+Source path: examples/telemetry/
+Source commit: 58401c44753765813e47cd2367e79373ba81c437
+  ("Publish telemetry snapshot contract v1 with synthetic examples",
+   merged as PR #248 for "Make agent containers discoverable and publish
+   telemetry snapshot examples")
+Seen at: 69b15f1d9bf87639d1942a27c594996f269f38e8 (main)
+
+The files are synthetic: invented repositories (example-owner/...),
+invented attempt ids, and example.invalid URLs. No data was captured from
+live instances.
+
+Copies:
+- snapshot-idle-with-last-finished.json — idle agent, last finished attempt
+- snapshot-attempt-in-progress.json — attempt in progress, partly estimated
+- snapshot-soft-threshold-handoff.json — soft threshold crossed, handoff
+- snapshot-recovery-hold.json — recovery hold with next action
+- snapshot-truncated.json — trimmed snapshot, truncated: true
+- error-agent-unreachable.json — code agent_unreachable
+- error-unsupported-operation.json — code unsupported_operation
+- error-snapshot-failed.json — code snapshot_failed

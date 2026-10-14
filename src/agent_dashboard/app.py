@@ -66,7 +66,14 @@ def create_app(
         task: asyncio.Task | None = None
         if start_poller:
             gw = gateway if gateway is not None else DockerGateway(timeout=cfg.exec_timeout)
-            task = asyncio.create_task(poll_forever(fleet, gw, cfg.poll_interval))
+            task = asyncio.create_task(
+                poll_forever(
+                    fleet,
+                    gw,
+                    cfg.poll_interval,
+                    max_concurrent_execs=cfg.max_concurrent_execs,
+                )
+            )
         try:
             yield
         finally:
