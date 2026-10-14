@@ -1,0 +1,91 @@
+/* Variant A prototype layout: narrow column, top header bar, plain table. */
+:root {
+  --bg: #f6f7f9;
+  --ink: #1a1d21;
+  --muted: #5f6b76;
+  --line: #dfe3e8;
+  --accent: #1f6feb;
+  --danger-bg: #fdecec;
+  --danger-ink: #8c1d1d;
+  --ok-bg: #e6f4ea;
+  --ok-ink: #137333;
+  --off-bg: #eceff1;
+  --off-ink: #45525e;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+.topbar {
+  background: #101418;
+  color: #fff;
+  padding: 1.25rem 1.5rem;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.topbar .subtitle {
+  margin: 0.25rem 0 0;
+  color: #aeb8c2;
+  font-size: 0.9rem;
+}
+
+.container {
+  max-width: 720px;
+  margin: 1.5rem auto;
+  padding: 0 1rem;
+}
+
+.banner {
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+  border: 1px solid #f3b8b8;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+table.fleet {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+table.fleet th,
+table.fleet td {
+  text-align: left;
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+}
+
+table.fleet thead th {
+  background: #eef1f4;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.pill {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+}
+
+.pill-running { background: var(--ok-bg); color: var(--ok-ink); }
+.pill-not\ running { background: var(--off-bg); color: var(--off-ink); }
+
+.empty, .hint { color: var(--muted); }
