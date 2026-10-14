@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
 <div id="fleet"
-     hx-get="/fleet"
-     hx-trigger="every {{ poll_interval }}s"
+     hx-ext="sse"
+     sse-connect="/stream"
+     sse-swap="fleet"
      hx-swap="innerHTML">
   {% include "_fleet_table.html" %}
 </div>

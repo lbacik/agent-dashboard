@@ -49,11 +49,30 @@ class FleetState:
     _entries: dict[str, _InstanceEntry] = field(default_factory=dict)
     last_error: str | None = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    _subscribers: set[asyncio.Queue[int]] = field(default_factory=set, repr=False)
+    _version: int = 0
+
+    def subscribe(self) -> asyncio.Queue[int]:
+        """Register a stream listener; every cycle puts the new version."""
+        queue: asyncio.Queue[int] = asyncio.Queue()
+        self._subscribers.add(queue)
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue[int]) -> None:
+        """Remove a stream listener (client disconnect / shutdown)."""
+        self._subscribers.discard(queue)
+
+    def _publish(self) -> None:
+        """Wake every stream listener. Called with the fleet lock held."""
+        self._version += 1
+        for queue in list(self._subscribers):
+            queue.put_nowait(self._version)
 
     async def set_discovery_error(self, reason: str) -> None:
         """Record a discovery failure; previous rows stay visible."""
         async with self._lock:
             self.last_error = reason
+            self._publish()
 
     async def apply_cycle(
         self,
@@ -91,6 +110,7 @@ class FleetState:
                 entries[inst.name] = entry
             self._entries = entries
             self.last_error = None
+            self._publish()
 
     async def snapshot(self, now: float | None = None) -> tuple[list[FleetRow], str | None]:
         at = time.time() if now is None else now
