@@ -224,6 +224,51 @@ def test_rejected_hosts(host):
     assert client.get("/", headers={"host": host}).status_code == 403
 
 
+@pytest.mark.parametrize(
+    "host", ["raspberrypi", "raspberrypi:8000", "192.168.1.50", "192.168.1.50:8000"]
+)
+def test_configured_hosts_accepted_with_port(host):
+    extra = frozenset({"raspberrypi", "192.168.1.50"})
+    assert host_allowed(host, extra) is True
+
+
+@pytest.mark.parametrize(
+    "host", ["evil.example", "evil.example:8000", "other-pi", "10.9.9.9:8000"]
+)
+def test_unconfigured_hosts_rejected_with_allow_list(host):
+    assert host_allowed(host, frozenset({"raspberrypi", "192.168.1.50"})) is False
+
+
+def test_wildcard_never_matches():
+    assert host_allowed("evil.example", frozenset({"*"})) is False
+    assert host_allowed("anything", frozenset({"*"})) is False
+
+
+def test_configured_hosts_pass_middleware():
+    from agent_dashboard.config import Settings
+
+    state = FleetState()
+    app = create_app(
+        state=state,
+        settings=Settings(
+            poll_interval=5.0, allowed_hosts=frozenset({"raspberrypi", "192.168.1.50"})
+        ),
+        gateway=FakeGateway(),
+        start_poller=False,
+    )
+    client = TestClient(app, base_url="http://localhost")
+    assert client.get("/", headers={"host": "raspberrypi"}).status_code == 200
+    assert client.get("/", headers={"host": "192.168.1.50:8000"}).status_code == 200
+    assert client.get("/", headers={"host": "evil.example"}).status_code == 403
+    assert client.get("/", headers={"host": "evil.example:8000"}).status_code == 403
+
+
+def test_default_middleware_still_rejects_lan_host():
+    client, _ = make_client()
+    assert client.get("/", headers={"host": "raspberrypi"}).status_code == 403
+    assert client.get("/", headers={"host": "192.168.1.50:8000"}).status_code == 403
+
+
 def test_background_poller_runs_discovery():
     import time
 
