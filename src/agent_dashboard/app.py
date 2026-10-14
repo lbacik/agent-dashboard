@@ -67,27 +67,41 @@ async def fleet_event_stream(
         fleet.unsubscribe(queue)
 
 
-def host_allowed(host_header: str) -> bool:
-    """Accept only localhost / 127.0.0.1, with or without a port."""
+def host_allowed(
+    host_header: str, allowed_hosts: set[str] | frozenset[str] | None = None
+) -> bool:
+    """Accept loopback plus configured allow-list entries, with or without a port.
+
+    A ``*`` entry never matches: the allow-list cannot become allow-all.
+    """
+    allow = ALLOWED_HOSTS if allowed_hosts is None else set(allowed_hosts) | ALLOWED_HOSTS
+    allow = {h for h in allow if h != "*"}
     raw = host_header.strip().lower()
     if not raw:
         return False
     if raw.startswith("["):
-        # IPv6 bracketed form, e.g. [::1]:8000 -- not on the allow-list.
+        # IPv6 bracketed form, e.g. [::1]:8000 -- not on the allow-list
+        # unless explicitly configured.
         end = raw.find("]")
         hostname = raw[1:end] if end != -1 else raw
     elif raw.count(":") > 1:
         hostname = raw  # unbracketed IPv6: reject
     else:
         hostname = raw.split(":")[0]
-    return hostname in ALLOWED_HOSTS
+    return hostname in allow
 
 
 class HostGuardMiddleware(BaseHTTPMiddleware):
-    """Reject DNS-rebinding requests whose Host is not loopback."""
+    """Reject DNS-rebinding requests whose Host is not allow-listed."""
+
+    def __init__(self, app, allowed_hosts: set[str] | frozenset[str] | None = None):
+        super().__init__(app)
+        self.allowed_hosts = (
+            frozenset(ALLOWED_HOSTS) if allowed_hosts is None else frozenset(allowed_hosts)
+        )
 
     async def dispatch(self, request: Request, call_next):
-        if not host_allowed(request.headers.get("host", "")):
+        if not host_allowed(request.headers.get("host", ""), self.allowed_hosts):
             return PlainTextResponse("forbidden: unexpected Host header", status_code=403)
         return await call_next(request)
 
@@ -130,7 +144,8 @@ def create_app(
     app = FastAPI(title="agent-dashboard", lifespan=lifespan)
     app.state.fleet = fleet
     app.state.settings = cfg
-    app.add_middleware(HostGuardMiddleware)
+    extra_hosts = getattr(cfg, "allowed_hosts", frozenset()) or frozenset()
+    app.add_middleware(HostGuardMiddleware, allowed_hosts=set(ALLOWED_HOSTS) | set(extra_hosts))
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 

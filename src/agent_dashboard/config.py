@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -15,6 +15,9 @@ DEFAULT_MAX_CONCURRENT_EXECS = 4
 
 ENV_PREFIX = "AGENT_DASHBOARD_"
 
+#: Values of AGENT_DASHBOARD_ALLOW_NON_LOOPBACK that opt in to a non-loopback bind.
+TRUTHY = {"1", "true", "yes", "on"}
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -23,6 +26,8 @@ class Settings:
     poll_interval: float = DEFAULT_POLL_INTERVAL
     exec_timeout: float = DEFAULT_EXEC_TIMEOUT
     max_concurrent_execs: int = DEFAULT_MAX_CONCURRENT_EXECS
+    allow_non_loopback: bool = False
+    allowed_hosts: frozenset[str] = field(default_factory=frozenset)
 
 
 def is_loopback(host: str) -> bool:
@@ -33,9 +38,40 @@ def is_loopback(host: str) -> bool:
     return h.startswith("127.") and len(h) > 4
 
 
-def ensure_loopback(host: str) -> None:
-    if not is_loopback(host):
+def ensure_loopback(host: str, allow_non_loopback: bool = False) -> None:
+    if not allow_non_loopback and not is_loopback(host):
         raise ValueError(f"refusing to bind to non-loopback address: {host!r}")
+
+
+def parse_allowed_hosts(value: str | None) -> frozenset[str]:
+    """Parse a comma-separated AGENT_DASHBOARD_ALLOWED_HOSTS value.
+
+    Entries are lowercased hostnames/IPs without ports or brackets. Empty
+    entries and a lone ``*`` wildcard are dropped so the allow-list can
+    never become allow-all.
+    """
+    if not value:
+        return frozenset()
+    hosts: set[str] = set()
+    for entry in value.split(","):
+        name = entry.strip().lower()
+        if not name or name == "*":
+            continue
+        if name.startswith("[") and name.endswith("]"):
+            name = name[1:-1]
+        if ":" in name and not name.startswith("["):
+            # Host entries must not carry a port; "example:8000" keeps only
+            # the hostname part, unbracketed IPv6 stays rejected downstream.
+            name = name.split(":")[0]
+        name = name.strip("[]").strip()
+        if not name or name == "*":
+            continue
+        hosts.add(name)
+    return frozenset(hosts)
+
+
+def parse_truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in TRUTHY
 
 
 def _env(name: str) -> str | None:
@@ -55,6 +91,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--max-concurrent-execs", type=int, default=None, help="Max concurrent execs."
+    )
+    parser.add_argument(
+        "--allow-non-loopback",
+        action="store_true",
+        default=False,
+        help="Opt in to binding on a non-loopback address (test deployments only).",
+    )
+    parser.add_argument(
+        "--allowed-hosts",
+        default=None,
+        help="Comma-separated extra Host allow-list entries (no wildcard).",
     )
     return parser
 
@@ -89,11 +136,20 @@ def load_settings(argv: list[str] | None = None) -> Settings:
     if max_execs < 1:
         raise ValueError(f"max concurrent execs must be >= 1: {max_execs}")
 
-    ensure_loopback(host)
+    allow_non_loopback = bool(
+        args.allow_non_loopback or parse_truthy(_env("ALLOW_NON_LOOPBACK"))
+    )
+    allowed_hosts = parse_allowed_hosts(
+        args.allowed_hosts if args.allowed_hosts is not None else _env("ALLOWED_HOSTS")
+    )
+
+    ensure_loopback(host, allow_non_loopback)
     return Settings(
         host=host,
         port=port,
         poll_interval=poll_interval,
         exec_timeout=exec_timeout,
         max_concurrent_execs=max_execs,
+        allow_non_loopback=allow_non_loopback,
+        allowed_hosts=allowed_hosts,
     )

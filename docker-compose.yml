@@ -1,0 +1,32 @@
+# Test deployments only (see ADR 0002): the dashboard container talks to the
+# host Docker daemon through the mounted socket and serves the UI with no
+# authentication. Use only on a trusted, isolated network.
+#
+# LAN exposure is opt-in via .env (copied from .env.example):
+#   DASHBOARD_BIND=<pi-lan-ip>  AGENT_DASHBOARD_ALLOWED_HOSTS=<hostname>,<ip>
+# Defaults publish on loopback only.
+
+services:
+  dashboard:
+    build: .
+    image: agent-dashboard:test
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_BIND:-127.0.0.1}:${DASHBOARD_PORT:-8000}:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Socket access for the non-root appuser: the host's `docker` group GID
+    # differs per machine, so it comes from .env (see .env.example).
+    group_add:
+      - "${DOCKER_GID:-999}"
+    environment:
+      # Inside the container the process must listen on all interfaces for
+      # the port mapping to work; the loopback refusal is lifted by the
+      # explicit opt-in next to it.
+      AGENT_DASHBOARD_HOST: "0.0.0.0"
+      AGENT_DASHBOARD_ALLOW_NON_LOOPBACK: "1"
+      AGENT_DASHBOARD_PORT: "8000"
+      AGENT_DASHBOARD_ALLOWED_HOSTS: "${AGENT_DASHBOARD_ALLOWED_HOSTS:-}"
+      AGENT_DASHBOARD_POLL_INTERVAL: "${AGENT_DASHBOARD_POLL_INTERVAL:-}"
+      AGENT_DASHBOARD_EXEC_TIMEOUT: "${AGENT_DASHBOARD_EXEC_TIMEOUT:-}"
+      AGENT_DASHBOARD_MAX_CONCURRENT_EXECS: "${AGENT_DASHBOARD_MAX_CONCURRENT_EXECS:-}"
