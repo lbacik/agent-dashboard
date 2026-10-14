@@ -71,7 +71,6 @@ def create_app(
                     fleet,
                     gw,
                     cfg.poll_interval,
-                    exec_timeout=cfg.exec_timeout,
                     max_concurrent_execs=cfg.max_concurrent_execs,
                 )
             )

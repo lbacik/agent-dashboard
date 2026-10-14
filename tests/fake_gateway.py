@@ -51,8 +51,10 @@ class FakeGateway:
             1,
         )
 
-    def set_timeout(self, container_id: str) -> None:
-        self._scripts[container_id] = TelemetryTimeoutError("docker exec timed out")
+    def set_timeout(
+        self, container_id: str, message: str = "docker exec timed out after 5 s"
+    ) -> None:
+        self._scripts[container_id] = TelemetryTimeoutError(message)
 
     async def list_instances(self) -> list[ManagedInstance]:
         self.list_calls += 1

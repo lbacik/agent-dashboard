@@ -1,4 +1,6 @@
 import asyncio
+import re
+import time
 
 import pytest
 from fake_gateway import FakeGateway
@@ -41,9 +43,7 @@ def make_live_client(now=None):
     `id-up` reports a good snapshot, `id-old` keeps the fake's default
     (an old agent without telemetry), `id-down` is exited.
     """
-    import time as _time
-
-    now = _time.time() if now is None else now
+    now = time.time() if now is None else now
     state = FleetState()
     gateway = FakeGateway(
         [
@@ -53,9 +53,7 @@ def make_live_client(now=None):
         ]
     )
     gateway.set_snapshot("id-up", {"schema_version": 1})
-    asyncio.run(
-        run_cycle(state, gateway, exec_timeout=5.0, max_concurrent_execs=4, now=now)
-    )
+    asyncio.run(run_cycle(state, gateway, max_concurrent_execs=4, now=now))
     app = create_app(
         state=state,
         settings=Settings(poll_interval=5.0),
@@ -102,9 +100,6 @@ def test_failed_poll_keeps_snapshot_age_visible():
     # Cycles run on the wall clock so the handlers (which render age with
     # the wall clock) show a fresh age. Exact ages are pinned through
     # FleetState.snapshot(now=...) in the collector tests.
-    import re
-    import time
-
     client, state, gateway, _ = make_live_client()
     gateway.set_error_code("id-up", "agent_unreachable", "no socket")
     asyncio.run(run_cycle(state, gateway, now=time.time()))

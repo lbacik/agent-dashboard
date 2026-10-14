@@ -70,13 +70,15 @@ def _outcome(kind: str, reason: str, now: float) -> PollOutcome:
     return PollOutcome(kind=kind, reason=reason, at=now)
 
 
-def timeout_outcome(exec_timeout: float, now: float) -> PollOutcome:
-    """The dashboard-side timeout outcome: unreachable, with the budget."""
-    return _outcome(TIMEOUT, f"docker exec timed out after {exec_timeout:g} s", now)
-
-
 def _not_supported(now: float) -> tuple[PollOutcome, None]:
     return _outcome(NOT_SUPPORTED, NOT_SUPPORTED_REASON, now), None
+
+
+# Error codes the agent can report; a JSON error object is handled by its
+# code whatever the exit status (the contract gives them exits 1 and 2).
+ERROR_CODE_KINDS = frozenset(
+    {AGENT_UNREACHABLE, UNSUPPORTED_OPERATION, SNAPSHOT_FAILED}
+)
 
 
 def classify_telemetry(
@@ -84,9 +86,9 @@ def classify_telemetry(
 ) -> tuple[PollOutcome, dict[str, Any] | None]:
     """Classify one finished exec into a poll outcome plus snapshot (if good).
 
-    ``returncode`` only matters through the payload: a JSON error object is
-    handled by its ``code`` whatever the exit status, and any other JSON
-    object is the snapshot.
+    Only exit 0 with a JSON snapshot is good; a nonzero exit with a payload
+    that is not a recognised error object means the agent answered but the
+    snapshot failed, so the last good snapshot stays visible as stale.
     """
     try:
         payload = json.loads(stdout)
@@ -98,18 +100,18 @@ def classify_telemetry(
         error = payload.get("error")
         code = error.get("code") if isinstance(error, dict) else None
         message = error.get("message") if isinstance(error, dict) else None
-        if code == AGENT_UNREACHABLE:
-            return _outcome(AGENT_UNREACHABLE, str(message or code), now), None
-        if code == UNSUPPORTED_OPERATION:
-            return _outcome(UNSUPPORTED_OPERATION, str(message or code), now), None
-        if code == SNAPSHOT_FAILED:
-            return _outcome(SNAPSHOT_FAILED, str(message or code), now), None
+        if code in ERROR_CODE_KINDS:
+            return _outcome(str(code), str(message or code), now), None
         if message:
             reason = f"{message} (code: {code})"
         else:
             reason = f"unknown error code: {code!r}"
         return _outcome(SNAPSHOT_FAILED, reason, now), None
-    _ = returncode
+    if returncode != 0:
+        return (
+            _outcome(SNAPSHOT_FAILED, f"agentctl exited with status {returncode}", now),
+            None,
+        )
     return _outcome(GOOD, "", now), payload
 
 
@@ -117,15 +119,15 @@ async def _poll_one(
     gateway,
     instance: ManagedInstance,
     semaphore: asyncio.Semaphore,
-    exec_timeout: float,
     now: float,
 ) -> tuple[str, InstancePoll]:
     """One exec for one running instance, bounded by the shared semaphore."""
     async with semaphore:
         try:
             exec_result: TelemetryExec = await gateway.telemetry(instance.container_id)
-        except TelemetryTimeoutError:
-            return instance.name, InstancePoll(timeout_outcome(exec_timeout, now), None)
+        except TelemetryTimeoutError as exc:
+            # The gateway's message carries the budget that actually fired.
+            return instance.name, InstancePoll(_outcome(TIMEOUT, str(exc), now), None)
         except GatewayError as exc:
             return instance.name, InstancePoll(_outcome(AGENT_UNREACHABLE, str(exc), now), None)
         outcome, snapshot = classify_telemetry(
@@ -138,14 +140,16 @@ async def run_cycle(
     state,
     gateway,
     *,
-    exec_timeout: float = 5.0,
     max_concurrent_execs: int = 4,
     now: float | None = None,
 ) -> None:
     """Run one poll cycle: discovery, then telemetry for running instances.
 
     A discovery failure keeps the previous rows and records the reason; a
-    removed container disappears; exited containers get no exec.
+    removed container disappears; exited containers get no exec. The exec
+    timeout lives on the gateway; ``now`` stamps every outcome and snapshot
+    of the cycle as its receive time (exec-level skew inside one cycle is
+    milliseconds against second-granularity ages).
     """
     if max_concurrent_execs < 1:
         raise ValueError(f"max concurrent execs must be >= 1: {max_concurrent_execs}")
@@ -158,6 +162,6 @@ async def run_cycle(
     semaphore = asyncio.Semaphore(max_concurrent_execs)
     running = [inst for inst in discovered if inst.state == "running"]
     results = await asyncio.gather(
-        *(_poll_one(gateway, inst, semaphore, exec_timeout, at) for inst in running)
+        *(_poll_one(gateway, inst, semaphore, at) for inst in running)
     )
     await state.apply_cycle(discovered, dict(results), at)

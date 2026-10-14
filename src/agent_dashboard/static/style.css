@@ -11,6 +11,10 @@
   --ok-ink: #137333;
   --off-bg: #eceff1;
   --off-ink: #45525e;
+  --warn-bg: #fff4e0;
+  --warn-ink: #7a4b00;
+  --info-bg: #e8eaf6;
+  --info-ink: #3949ab;
 }
 
 * { box-sizing: border-box; }
@@ -89,10 +93,10 @@ table.fleet thead th {
 .pill-not\ running { background: var(--off-bg); color: var(--off-ink); }
 
 .pill-live { background: var(--ok-bg); color: var(--ok-ink); }
-.pill-stale { background: #fff4e0; color: #7a4b00; }
+.pill-stale { background: var(--warn-bg); color: var(--warn-ink); }
 .pill-unreachable { background: var(--danger-bg); color: var(--danger-ink); }
 .pill-not-running { background: var(--off-bg); color: var(--off-ink); }
-.pill-unsupported { background: #e8eaf6; color: #3949ab; }
+.pill-unsupported { background: var(--info-bg); color: var(--info-ink); }
 
 .age { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
 

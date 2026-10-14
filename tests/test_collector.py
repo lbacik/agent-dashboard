@@ -18,7 +18,6 @@ from agent_dashboard.collector import (
     UNSUPPORTED_OPERATION,
     classify_telemetry,
     run_cycle,
-    timeout_outcome,
 )
 from agent_dashboard.fleet import FleetState
 from agent_dashboard.gateway import (
@@ -71,16 +70,17 @@ def test_exit_zero_with_snapshot_is_good(name):
 
 
 @pytest.mark.parametrize(
-    ("name", "kind"),
+    ("name", "kind", "returncode"),
     [
-        ("error-agent-unreachable.json", AGENT_UNREACHABLE),
-        ("error-unsupported-operation.json", UNSUPPORTED_OPERATION),
-        ("error-snapshot-failed.json", SNAPSHOT_FAILED),
+        # Exit codes are the contract's: 2 for agent_unreachable, 1 for the rest.
+        ("error-agent-unreachable.json", AGENT_UNREACHABLE, 2),
+        ("error-unsupported-operation.json", UNSUPPORTED_OPERATION, 1),
+        ("error-snapshot-failed.json", SNAPSHOT_FAILED, 1),
     ],
 )
-def test_error_object_uses_its_code(name, kind):
+def test_error_object_uses_its_code(name, kind, returncode):
     payload = json.loads(read_fixture(name))
-    outcome, snapshot = classify_telemetry(read_fixture(name), 1, now=1000.0)
+    outcome, snapshot = classify_telemetry(read_fixture(name), returncode, now=1000.0)
     assert outcome.kind == kind
     assert outcome.reason == payload["error"]["message"]
     assert outcome.at == 1000.0
@@ -132,11 +132,14 @@ def test_non_object_stdout_is_not_supported(stdout):
     assert snapshot is None
 
 
-def test_timeout_outcome_reason_pins_exec_timeout():
-    outcome = timeout_outcome(5.0, now=1.0)
-    assert outcome.kind == TIMEOUT
-    assert outcome.reason == "docker exec timed out after 5 s"
-    assert outcome.at == 1.0
+def test_nonzero_exit_with_snapshot_shaped_payload_is_snapshot_failed():
+    """Only exit 0 with a JSON snapshot is good; anything else anomalous
+    keeps the last good snapshot visible as stale instead of claiming live."""
+    body = json.dumps({"schema_version": 1, "truncated": False}).encode()
+    outcome, snapshot = classify_telemetry(body, 2, now=1.0)
+    assert outcome.kind == SNAPSHOT_FAILED
+    assert "status 2" in outcome.reason
+    assert snapshot is None
 
 
 def test_collector_exports_every_poll_outcome_kind():
@@ -252,7 +255,7 @@ def test_dashboard_timeout_is_unreachable():
     state = FleetState()
     gateway = FakeGateway([ManagedInstance("w", "id", "running")])
     gateway.set_timeout("id")
-    run(state, gateway, exec_timeout=5.0)
+    run(state, gateway)
     rows, _ = asyncio.run(state.snapshot())
     assert rows[0].reach == "unreachable"
     assert rows[0].headline == "Unreachable: docker exec timed out after 5 s"

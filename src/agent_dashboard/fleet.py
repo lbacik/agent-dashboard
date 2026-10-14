@@ -130,23 +130,18 @@ async def poll_forever(
     poll_interval: float,
     stop: asyncio.Event | None = None,
     *,
-    exec_timeout: float = 5.0,
     max_concurrent_execs: int = 4,
 ) -> None:
     """Poll loop: refresh immediately, then repeat without overlapping.
 
     The next cycle starts one interval after the previous cycle started, or
-    when the previous cycle finishes, whichever is later.
+    when the previous cycle finishes, whichever is later. The exec timeout
+    lives on the gateway; the concurrency cap lives here.
     """
     loop = asyncio.get_running_loop()
     while True:
         start = loop.time()
-        await run_cycle(
-            state,
-            gateway,
-            exec_timeout=exec_timeout,
-            max_concurrent_execs=max_concurrent_execs,
-        )
+        await run_cycle(state, gateway, max_concurrent_execs=max_concurrent_execs)
         if stop is not None and stop.is_set():
             return
         elapsed = loop.time() - start
