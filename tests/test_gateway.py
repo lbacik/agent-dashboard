@@ -12,7 +12,9 @@ from agent_dashboard.gateway import (
     DockerNotAvailableError,
     GatewayError,
     ManagedInstance,
+    TelemetryTimeoutError,
     argv_list_instances,
+    argv_telemetry,
     parse_ps_output,
 )
 
@@ -41,8 +43,11 @@ def test_gateway_argv_matches_module_function():
 
 def test_every_argv_producer_is_pinned():
     """Every public argv builder on the gateway must be enumerated here."""
-    producers = {"argv_list_instances": argv_list_instances()}
-    assert set(producers) == {"argv_list_instances"}
+    producers = {
+        "argv_list_instances": argv_list_instances(),
+        "argv_telemetry": argv_telemetry("abc123"),
+    }
+    assert set(producers) == {"argv_list_instances", "argv_telemetry"}
     for argv in producers.values():
         assert isinstance(argv, list)
         assert all(isinstance(part, str) for part in argv)
@@ -164,3 +169,77 @@ def test_list_instances_permission_denied(monkeypatch):
     _patch_create_subprocess(monkeypatch, proc)
     with pytest.raises(GatewayError, match="permission denied"):
         asyncio.run(DockerGateway(timeout=5.0).list_instances())
+
+
+EXPECTED_TELEMETRY_ARGV = [
+    "docker",
+    "exec",
+    "--user",
+    "agent",
+    "abc123",
+    "/usr/local/bin/agentctl",
+    "telemetry",
+    "--json",
+]
+
+
+def test_telemetry_argv_pinned():
+    assert argv_telemetry("abc123") == EXPECTED_TELEMETRY_ARGV
+
+
+def test_telemetry_argv_has_no_tty_or_stdin_flags():
+    argv = argv_telemetry("abc123")
+    assert "-t" not in argv
+    assert "-i" not in argv
+    assert "--tty" not in argv
+    assert "--interactive" not in argv
+
+
+def test_telemetry_targets_container_id_not_name(monkeypatch):
+    proc = _FakeProcess(stdout=b"{}", returncode=0)
+    seen = _patch_create_subprocess(monkeypatch, proc)
+    result = asyncio.run(DockerGateway(timeout=5.0).telemetry("abc123"))
+    assert seen["argv"] == EXPECTED_TELEMETRY_ARGV
+    assert "shell" not in seen["kwargs"]
+    assert result.stdout == b"{}"
+    assert result.returncode == 0
+
+
+def test_telemetry_returns_stdout_and_exit_without_raising(monkeypatch):
+    """Exit codes are the collector's business; the gateway reports them."""
+    proc = _FakeProcess(stdout=b'{"ok": false}', returncode=2)
+    _patch_create_subprocess(monkeypatch, proc)
+    result = asyncio.run(DockerGateway(timeout=5.0).telemetry("abc123"))
+    assert result.stdout == b'{"ok": false}'
+    assert result.returncode == 2
+
+
+def test_telemetry_timeout_kills_client_process(monkeypatch):
+    killed = []
+
+    class SlowProcess(_FakeProcess):
+        async def communicate(self):
+            await asyncio.sleep(10)
+            return b"", b""
+
+        def kill(self):
+            killed.append(True)
+
+    async def fake_create(*argv, **kwargs):
+        return SlowProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    with pytest.raises(TelemetryTimeoutError, match="timed out"):
+        asyncio.run(DockerGateway(timeout=0.05).telemetry("abc123"))
+    assert killed == [True]
+
+
+def test_telemetry_missing_cli(monkeypatch):
+    _patch_create_subprocess(monkeypatch, exc=FileNotFoundError("no docker"))
+    with pytest.raises(DockerNotAvailableError):
+        asyncio.run(DockerGateway(timeout=5.0).telemetry("abc123"))
+
+
+def test_gateway_rejects_bad_telemetry_timeout():
+    with pytest.raises(ValueError):
+        DockerGateway(timeout=-1)

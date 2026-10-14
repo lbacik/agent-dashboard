@@ -88,4 +88,12 @@ table.fleet thead th {
 .pill-running { background: var(--ok-bg); color: var(--ok-ink); }
 .pill-not\ running { background: var(--off-bg); color: var(--off-ink); }
 
+.pill-live { background: var(--ok-bg); color: var(--ok-ink); }
+.pill-stale { background: #fff4e0; color: #7a4b00; }
+.pill-unreachable { background: var(--danger-bg); color: var(--danger-ink); }
+.pill-not-running { background: var(--off-bg); color: var(--off-ink); }
+.pill-unsupported { background: #e8eaf6; color: #3949ab; }
+
+.age { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
+
 .empty, .hint { color: var(--muted); }

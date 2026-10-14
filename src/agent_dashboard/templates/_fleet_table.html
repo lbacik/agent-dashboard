@@ -4,13 +4,15 @@
 {% if rows %}
 <table class="fleet">
   <thead>
-    <tr><th>Instance</th><th>Container state</th></tr>
+    <tr><th>Instance</th><th>Container state</th><th>Reach</th><th>Status headline</th></tr>
   </thead>
   <tbody>
     {% for row in rows %}
     <tr>
       <td>{{ row.name }}</td>
       <td><span class="pill pill-{{ row.state }}">{{ row.state }}</span></td>
+      <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.reach != "live" and row.age_text %} <span class="age">{{ row.age_text }} ago</span>{% endif %}</td>
+      <td>{{ row.headline }}</td>
     </tr>
     {% endfor %}
   </tbody>
