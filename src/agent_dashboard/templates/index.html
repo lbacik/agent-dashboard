@@ -1,13 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
-<div id="fleet"
+<div id="live"
      hx-ext="sse"
-     sse-connect="/stream"
-     sse-swap="fleet"
-     hx-swap="innerHTML">
-  {% include "_fleet_table.html" %}
+     sse-connect="/stream">
+  <div id="fleet"
+       sse-swap="fleet"
+       hx-swap="innerHTML">
+    {% include "_fleet_table.html" %}
+  </div>
+  <div id="drawer-holder">
+    {% if drawer_open %}
+    {% include "_drawer.html" %}
+    {% endif %}
+  </div>
 </div>
 <noscript>
   <p class="hint">Enable JavaScript for live updates; otherwise reload the page.</p>
 </noscript>
+<script src="/static/drawer.js" defer></script>
 {% endblock %}

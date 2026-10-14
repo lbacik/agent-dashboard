@@ -8,7 +8,11 @@
   </thead>
   <tbody>
     {% for row in rows %}
-    <tr>
+    <tr class="fleet-row"
+        hx-get="/instances/{{ row.name | urlencode }}"
+        hx-target="#drawer-holder"
+        hx-swap="innerHTML"
+        hx-push-url="/?instance={{ row.name | urlencode }}">
       <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{{ row.detail.repository_display }}</div></td>
       <td>{{ row.headline }}</td>
       <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.reach != "live" and row.age_text %} <span class="age">{{ row.age_text }} ago</span>{% endif %}</td>

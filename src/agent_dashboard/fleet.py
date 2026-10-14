@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .collector import GOOD, InstancePoll, run_cycle
+from .drawer import DrawerDetail, read_drawer
 from .gateway import ManagedInstance
 from .presentation import (
     attention_rank,
@@ -39,6 +40,7 @@ class FleetRow:
     has_snapshot: bool
     rank: int = 6
     detail: SnapshotDetail | None = None
+    drawer: DrawerDetail | None = None
 
 
 @dataclass
@@ -169,6 +171,7 @@ class FleetState:
             has_snapshot=has_snapshot,
             rank=rank,
             detail=detail,
+            drawer=read_drawer(entry.snapshot, control_stale=detail.control_stale),
         )
 
 

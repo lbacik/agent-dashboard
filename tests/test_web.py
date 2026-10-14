@@ -108,8 +108,10 @@ def test_index_has_one_row_per_instance():
     response = client.get("/")
     assert response.status_code == 200
     body = response.text
-    assert body.count("worker-a") == 1
-    assert body.count("worker-b") == 1
+    # The name also appears in the row's drawer hx-get/hx-push-url, so count
+    # the rendered name cells instead of raw occurrences.
+    assert body.count('<div class="inst-name">worker-a</div>') == 1
+    assert body.count('<div class="inst-name">worker-b</div>') == 1
     assert "running" in body
     assert "not running" in body
 
