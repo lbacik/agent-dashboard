@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -22,6 +22,47 @@ TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
 ALLOWED_HOSTS = {"localhost", "127.0.0.1"}
+
+SSE_RETRY_MS = 3000
+SSE_HEARTBEAT_S = 15.0
+
+
+def format_sse_event(event: str, data: str) -> str:
+    """Format one server-sent event; multiline data gets a `data:` prefix per line."""
+    lines = data.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    out = f"event: {event}\n"
+    for line in lines:
+        out += f"data: {line}\n"
+    return out + "\n"
+
+
+async def fleet_event_stream(fleet, render_fleet, is_disconnected) -> AsyncIterator[str]:
+    """Yield SSE chunks: `retry`, the current table, then one `fleet` event per cycle.
+
+    Ages are rendered at send time from the wall clock. `is_disconnected` is
+    the request's disconnect check; when the client goes away the generator
+    returns and unsubscribes. A task cancel (server shutdown) propagates
+    through the `finally`, which unsubscribes as well.
+    """
+    queue = fleet.subscribe()
+    try:
+        yield f"retry: {SSE_RETRY_MS}\n\n"
+        rows, error = await fleet.snapshot()
+        yield format_sse_event("fleet", render_fleet(rows, error))
+        while True:
+            try:
+                await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_S)
+            except TimeoutError:
+                if await is_disconnected():
+                    break
+                yield ": ping\n\n"
+                continue
+            if await is_disconnected():
+                break
+            rows, error = await fleet.snapshot()
+            yield format_sse_event("fleet", render_fleet(rows, error))
+    finally:
+        fleet.unsubscribe(queue)
 
 
 def host_allowed(host_header: str) -> bool:
@@ -106,6 +147,35 @@ def create_app(
         rows, error = await fleet.snapshot()
         return templates.TemplateResponse(
             request, "_fleet_table.html", {**context(request), "rows": rows, "error": error}
+        )
+
+    def render_fleet(rows, error) -> str:
+        """Re-render the whole table body; ages are stamped at send time."""
+        template = templates.get_template("_fleet_table.html")
+        return template.render(rows=rows, error=error)
+
+    @app.get("/stream")
+    async def stream(request: Request) -> StreamingResponse:
+        """Server-sent events: a `fleet` event with the whole table after every cycle.
+
+        Ages are rendered at send time from the wall clock. EventSource
+        reconnects by itself after a dashboard restart; the `retry:` directive
+        sets the reconnect delay. Disconnects and shutdown cancel the
+        generator, whose `finally` unsubscribes the client.
+        """
+
+        async def event_generator() -> AsyncIterator[str]:
+            async for chunk in fleet_event_stream(fleet, render_fleet, request.is_disconnected):
+                yield chunk
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     return app
