@@ -46,7 +46,7 @@ FROM busybox:stable
 LABEL io.github.lbacik.simple-coding-agent.role="agent"
 COPY agentctl /usr/local/bin/agentctl
 COPY snapshot.json /snapshot.json
-RUN chmod +x /usr/local/bin/agentctl
+RUN chmod +x /usr/local/bin/agentctl && adduser -D agent
 CMD ["sh", "-c", "while true; do sleep 3600; done"]
 """
 
