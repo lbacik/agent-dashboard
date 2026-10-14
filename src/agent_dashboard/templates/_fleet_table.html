@@ -4,15 +4,29 @@
 {% if rows %}
 <table class="fleet">
   <thead>
-    <tr><th>Instance</th><th>Container state</th><th>Reach</th><th>Status headline</th></tr>
+    <tr><th>Instance</th><th>Status headline</th><th>Reach</th><th>Intake</th><th>Attempt</th><th>Budget</th><th>Main context</th><th>Turns</th><th>Cache hit rate</th><th>Errors</th></tr>
   </thead>
   <tbody>
     {% for row in rows %}
     <tr>
-      <td>{{ row.name }}</td>
-      <td><span class="pill pill-{{ row.state }}">{{ row.state }}</span></td>
-      <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.reach != "live" and row.age_text %} <span class="age">{{ row.age_text }} ago</span>{% endif %}</td>
+      <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{{ row.detail.repository_display }}</div></td>
       <td>{{ row.headline }}</td>
+      <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.reach != "live" and row.age_text %} <span class="age">{{ row.age_text }} ago</span>{% endif %}</td>
+      <td>{{ row.detail.intake_text }}{% if row.detail.intake_stale %} <span class="stale-tag">stale</span>{% endif %}</td>
+      <td>{{ row.detail.attempt_text }}{% if row.detail.attempt_stale %} <span class="stale-tag">stale</span>{% endif %}</td>
+      <td>
+        {% if row.detail.budget_has_bar %}
+        <div class="budget-bar{% if row.detail.budget_hatched %} hatched{% endif %}" role="img" aria-label="budget {{ row.detail.budget_text }}">
+          <div class="budget-fill" style="width: {{ row.detail.budget_used_pct }}%"></div>
+          {% if row.detail.budget_has_tick %}<div class="budget-tick" style="left: {{ row.detail.budget_soft_pct }}%"></div>{% endif %}
+        </div>
+        {% endif %}
+        <div class="figure">{{ row.detail.budget_text }}{% if row.detail.budget_basis %} <span class="basis">{{ row.detail.budget_basis }}</span>{% endif %}</div>
+      </td>
+      <td><div class="figure">{{ row.detail.context_text }}{% if row.detail.context_basis %} <span class="basis">{{ row.detail.context_basis }}</span>{% endif %}</div></td>
+      <td><div class="figure">{{ row.detail.turns_text }}{% if row.detail.turns_basis %} <span class="basis">{{ row.detail.turns_basis }}</span>{% endif %}</div></td>
+      <td><div class="figure">{{ row.detail.cache_text }}{% if row.detail.cache_basis %} <span class="basis">{{ row.detail.cache_basis }}</span>{% endif %}</div></td>
+      <td>{{ row.detail.errors_text }}{% if row.detail.errors_stale %} <span class="stale-tag">stale</span>{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>

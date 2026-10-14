@@ -1,6 +1,9 @@
 import asyncio
+import copy
+import json
 import re
 import time
+from pathlib import Path
 
 import pytest
 from fake_gateway import FakeGateway
@@ -11,6 +14,43 @@ from agent_dashboard.collector import run_cycle
 from agent_dashboard.config import Settings
 from agent_dashboard.fleet import FleetState
 from agent_dashboard.gateway import ManagedInstance
+
+FIXTURES = Path(__file__).parent / "fixtures" / "contract" / "v1"
+
+
+def load_snapshot(name: str) -> dict:
+    return json.loads((FIXTURES / name).read_bytes())
+
+
+def fresh_snapshot(snap: dict, now: float) -> dict:
+    """Stamp a fixture's clocks at `now`: control staleness is wall-clock, so
+    the September fixtures would otherwise read as stale against today."""
+    snap = copy.deepcopy(snap)
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+    snap["generated_at"] = stamp
+    control = snap.get("control")
+    if isinstance(control, dict):
+        control["control_observed_at"] = stamp
+    return snap
+
+
+def make_fleet_client(snapshots: dict[str, dict]):
+    """A client whose running instances report the given snapshots (one cycle)."""
+    now = time.time()
+    state = FleetState()
+    gateway = FakeGateway(
+        [ManagedInstance(name, f"id-{name}", "running") for name in snapshots]
+    )
+    for name, snap in snapshots.items():
+        gateway.set_snapshot(f"id-{name}", fresh_snapshot(snap, now))
+    asyncio.run(run_cycle(state, gateway, max_concurrent_execs=4, now=now))
+    app = create_app(
+        state=state,
+        settings=Settings(poll_interval=5.0),
+        gateway=gateway,
+        start_poller=False,
+    )
+    return TestClient(app, base_url="http://localhost"), state, gateway
 
 
 def make_client(rows=None, error=None, **kwargs):
@@ -208,3 +248,120 @@ def test_no_cors_headers():
     client, _ = make_client()
     response = client.get("/", headers={"host": "localhost", "Origin": "https://x.test"})
     assert "access-control-allow-origin" not in response.headers
+
+
+def test_fleet_table_shows_every_prototype_column():
+    client, _, _ = make_fleet_client(
+        {"work": load_snapshot("snapshot-attempt-in-progress.json")}
+    )
+    body = client.get("/").text
+    for header in (
+        "Instance",
+        "Status headline",
+        "Reach",
+        "Intake",
+        "Attempt",
+        "Budget",
+        "Main context",
+        "Turns",
+        "Cache hit rate",
+        "Errors",
+    ):
+        assert f"<th>{header}</th>" in body
+    assert "example-owner/example-repo" in body
+    assert "Working on #977 · model_execution" in body
+    assert "running" in body  # intake
+    assert "#977 · model_execution" in body  # attempt cell
+    assert "640,000 / 4,000,000" in body  # budget used / hard ceiling
+    assert "budget-fill" in body and "budget-tick" in body
+    assert "hatched" in body  # partly estimated budget
+    assert "148,000 (+2)" in body  # main context + running subagents
+    assert ">18 <span" in body  # turns, with its basis marker
+    assert "86%" in body  # cache hit rate
+    assert "0 / 3" in body  # consecutive errors count / max
+    assert "unavailable" not in body  # every figure is known here
+
+
+def test_rows_are_ordered_by_attention_rank():
+    now = time.time()
+    state = FleetState()
+    gateway = FakeGateway(
+        [
+            ManagedInstance("down", "id-down", "exited"),
+            ManagedInstance("unreach", "id-unreach", "running"),
+            ManagedInstance("rechold", "id-rechold", "running"),
+            ManagedInstance("errs", "id-errs", "running"),
+            ManagedInstance("hand", "id-hand", "running"),
+            ManagedInstance("work", "id-work", "running"),
+            ManagedInstance("idle", "id-idle", "running"),
+        ]
+    )
+    gateway.set_snapshot(
+        "id-rechold", fresh_snapshot(load_snapshot("snapshot-recovery-hold.json"), now)
+    )
+    gateway.set_snapshot(
+        "id-errs", fresh_snapshot(load_snapshot("snapshot-truncated.json"), now)
+    )
+    gateway.set_snapshot(
+        "id-hand", fresh_snapshot(load_snapshot("snapshot-soft-threshold-handoff.json"), now)
+    )
+    gateway.set_snapshot(
+        "id-work", fresh_snapshot(load_snapshot("snapshot-attempt-in-progress.json"), now)
+    )
+    gateway.set_snapshot(
+        "id-idle", fresh_snapshot(load_snapshot("snapshot-idle-with-last-finished.json"), now)
+    )
+    gateway.set_error_code("id-unreach", "agent_unreachable", "no socket")
+    asyncio.run(run_cycle(state, gateway, max_concurrent_execs=4, now=now))
+    app = create_app(
+        state=state,
+        settings=Settings(poll_interval=5.0),
+        gateway=gateway,
+        start_poller=False,
+    )
+    body = TestClient(app, base_url="http://localhost").get("/").text
+    names = ("unreach", "rechold", "errs", "hand", "work", "idle", "down")
+    positions = [body.index(name) for name in names]
+    assert positions == sorted(positions)
+    assert "Recovery hold on #981" in body
+    assert "1/3 consecutive infrastructure errors" in body
+    assert "Soft threshold crossed, handoff delivering on #981" in body
+
+
+def test_stale_control_cells_are_marked():
+    now = time.time()
+    snap = fresh_snapshot(load_snapshot("snapshot-attempt-in-progress.json"), now)
+    snap["control"]["control_observed_at"] = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 60.0)
+    )
+    state = FleetState()
+    gateway = FakeGateway([ManagedInstance("work", "id-work", "running")])
+    gateway.set_snapshot("id-work", snap)
+    asyncio.run(run_cycle(state, gateway, max_concurrent_execs=4, now=now))
+    app = create_app(
+        state=state,
+        settings=Settings(poll_interval=5.0),
+        gateway=gateway,
+        start_poller=False,
+    )
+    body = TestClient(app, base_url="http://localhost").get("/").text
+    # Intake, attempt and consecutive-error cells carry the stale tag.
+    assert body.count("stale-tag") == 3
+
+
+def test_unsupported_schema_row_uses_stable_fields_only():
+    snap = load_snapshot("snapshot-attempt-in-progress.json")
+    snap["schema_version"] = 2
+    client, _, _ = make_fleet_client({"work": snap})
+    body = client.get("/").text
+    assert "unsupported schema v2" in body
+    assert "unsupported" in body
+    assert "example-owner/example-repo" in body
+    assert "640,000" not in body  # figures beyond the stable fields stay hidden
+
+
+def test_no_public_json_api():
+    client, _ = make_client()
+    paths = {route.path for route in client.app.routes if hasattr(route, "path")}
+    assert not any(path.startswith("/api") for path in paths)
+    assert {"/", "/fleet", "/stream"} <= paths

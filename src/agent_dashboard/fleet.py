@@ -13,11 +13,22 @@ from typing import Any
 
 from .collector import GOOD, InstancePoll, run_cycle
 from .gateway import ManagedInstance
-from .presentation import build_headline, derive_reach, format_age
+from .presentation import (
+    attention_rank,
+    build_row_headline,
+    format_age,
+    reach_for_snapshot,
+)
+from .snapshot import SnapshotDetail, read_snapshot
 
 
 @dataclass(frozen=True)
 class FleetRow:
+    """One rendered fleet row: reach plus the snapshot view model.
+
+    Templates consume only these view models; there is no public JSON API.
+    """
+
     name: str
     state: str  # "running" or "not running"
     container_id: str
@@ -26,6 +37,8 @@ class FleetRow:
     snapshot_age: float | None
     age_text: str | None
     has_snapshot: bool
+    rank: int = 6
+    detail: SnapshotDetail | None = None
 
 
 @dataclass
@@ -48,6 +61,7 @@ class FleetState:
 
     _entries: dict[str, _InstanceEntry] = field(default_factory=dict)
     last_error: str | None = None
+    poll_interval: float = 5.0
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     _subscribers: set[asyncio.Queue[int]] = field(default_factory=set, repr=False)
     _version: int = 0
@@ -112,26 +126,38 @@ class FleetState:
             self.last_error = None
             self._publish()
 
-    async def snapshot(self, now: float | None = None) -> tuple[list[FleetRow], str | None]:
+    async def snapshot(
+        self, now: float | None = None, *, poll_interval: float | None = None
+    ) -> tuple[list[FleetRow], str | None]:
         at = time.time() if now is None else now
+        interval = self.poll_interval if poll_interval is None else poll_interval
         async with self._lock:
-            rows = [self._render(entry, at) for entry in self._entries.values()]
-            return sorted(rows, key=lambda r: r.name), self.last_error
+            rows = [self._render(entry, at, interval) for entry in self._entries.values()]
+            return sorted(rows, key=lambda r: (r.rank, r.name)), self.last_error
 
     @staticmethod
-    def _render(entry: _InstanceEntry, now: float) -> FleetRow:
-        reach = derive_reach(entry.container_state, entry.outcome_kind)
+    def _render(entry: _InstanceEntry, now: float, poll_interval: float) -> FleetRow:
+        reach = reach_for_snapshot(entry.container_state, entry.outcome_kind, entry.snapshot)
+        has_snapshot = entry.snapshot is not None
+        detail = read_snapshot(
+            entry.snapshot,
+            snapshot_at=entry.snapshot_at,
+            now=now,
+            poll_interval=poll_interval,
+        )
         age: float | None = None
         age_text: str | None = None
-        if entry.snapshot is not None and entry.snapshot_at is not None:
+        if has_snapshot and entry.snapshot_at is not None:
             age = max(0.0, now - entry.snapshot_at)
             age_text = format_age(age)
-        headline = build_headline(
+        headline = build_row_headline(
             reach,
             reason=entry.outcome_reason,
             age_text=age_text,
-            has_snapshot=entry.snapshot is not None,
+            has_snapshot=has_snapshot,
+            detail=detail,
         )
+        rank = attention_rank(reach, detail, has_snapshot=has_snapshot)
         return FleetRow(
             name=entry.name,
             state=entry.container_state,
@@ -140,7 +166,9 @@ class FleetState:
             headline=headline,
             snapshot_age=age,
             age_text=age_text,
-            has_snapshot=entry.snapshot is not None,
+            has_snapshot=has_snapshot,
+            rank=rank,
+            detail=detail,
         )
 
 

@@ -36,7 +36,9 @@ def format_sse_event(event: str, data: str) -> str:
     return out + "\n"
 
 
-async def fleet_event_stream(fleet, render_fleet, is_disconnected) -> AsyncIterator[str]:
+async def fleet_event_stream(
+    fleet, render_fleet, is_disconnected, poll_interval: float | None = None
+) -> AsyncIterator[str]:
     """Yield SSE chunks: `retry`, the current table, then one `fleet` event per cycle.
 
     Ages are rendered at send time from the wall clock. `is_disconnected` is
@@ -47,7 +49,7 @@ async def fleet_event_stream(fleet, render_fleet, is_disconnected) -> AsyncItera
     queue = fleet.subscribe()
     try:
         yield f"retry: {SSE_RETRY_MS}\n\n"
-        rows, error = await fleet.snapshot()
+        rows, error = await fleet.snapshot(poll_interval=poll_interval)
         yield format_sse_event("fleet", render_fleet(rows, error))
         while True:
             try:
@@ -59,7 +61,7 @@ async def fleet_event_stream(fleet, render_fleet, is_disconnected) -> AsyncItera
                 continue
             if await is_disconnected():
                 break
-            rows, error = await fleet.snapshot()
+            rows, error = await fleet.snapshot(poll_interval=poll_interval)
             yield format_sse_event("fleet", render_fleet(rows, error))
     finally:
         fleet.unsubscribe(queue)
@@ -137,14 +139,14 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> Response:
-        rows, error = await fleet.snapshot()
+        rows, error = await fleet.snapshot(poll_interval=cfg.poll_interval)
         return templates.TemplateResponse(
             request, "index.html", {**context(request), "rows": rows, "error": error}
         )
 
     @app.get("/fleet", response_class=HTMLResponse)
     async def fleet_partial(request: Request) -> Response:
-        rows, error = await fleet.snapshot()
+        rows, error = await fleet.snapshot(poll_interval=cfg.poll_interval)
         return templates.TemplateResponse(
             request, "_fleet_table.html", {**context(request), "rows": rows, "error": error}
         )
@@ -165,7 +167,9 @@ def create_app(
         """
 
         async def event_generator() -> AsyncIterator[str]:
-            async for chunk in fleet_event_stream(fleet, render_fleet, request.is_disconnected):
+            async for chunk in fleet_event_stream(
+                fleet, render_fleet, request.is_disconnected, cfg.poll_interval
+            ):
                 yield chunk
 
         return StreamingResponse(
