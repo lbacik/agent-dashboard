@@ -44,7 +44,7 @@ body {
 }
 
 .container {
-  max-width: 720px;
+  max-width: 1280px;
   margin: 1.5rem auto;
   padding: 0 1rem;
 }
@@ -101,3 +101,52 @@ table.fleet thead th {
 .age { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
 
 .empty, .hint { color: var(--muted); }
+
+table.fleet td { vertical-align: top; font-size: 0.9rem; }
+
+.inst-name { font-weight: 600; }
+.inst-repo { color: var(--muted); font-size: 0.8rem; }
+
+.figure { white-space: nowrap; }
+.basis { color: var(--muted); font-size: 0.78rem; }
+
+.stale-tag {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  white-space: nowrap;
+}
+
+.budget-bar {
+  position: relative;
+  height: 0.6rem;
+  min-width: 8rem;
+  background: #eef1f4;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 0.25rem;
+}
+
+.budget-fill { height: 100%; background: var(--accent); }
+
+.budget-bar.hatched .budget-fill {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--accent),
+    var(--accent) 4px,
+    #7aa5f0 4px,
+    #7aa5f0 8px
+  );
+}
+
+.budget-tick {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  background: var(--danger-ink);
+}
