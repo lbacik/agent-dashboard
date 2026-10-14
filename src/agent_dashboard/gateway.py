@@ -145,6 +145,7 @@ class DockerGateway:
                 proc.kill()
             except ProcessLookupError:
                 pass
+            await proc.wait()
             raise DiscoveryTimeoutError(
                 f"docker ps timed out after {self.timeout:g} s"
             ) from exc
@@ -161,7 +162,8 @@ class DockerGateway:
 
         The exit code is reported, not raised: the collector classifies each
         exec into a poll outcome. Only a dashboard-side timeout raises
-        (:class:`TelemetryTimeoutError`), after killing the client process.
+        (:class:`TelemetryTimeoutError`), after killing and reaping the
+        client process.
         """
         proc = await self._run(argv_telemetry(container_id))
         try:
@@ -171,6 +173,7 @@ class DockerGateway:
                 proc.kill()
             except ProcessLookupError:
                 pass
+            await proc.wait()
             raise TelemetryTimeoutError(
                 f"docker exec timed out after {self.timeout:g} s"
             ) from exc

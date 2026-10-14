@@ -111,6 +111,9 @@ class _FakeProcess:
     def kill(self):
         pass
 
+    async def wait(self):
+        return self.returncode
+
 
 def _patch_create_subprocess(monkeypatch, process=None, *, exc=None):
     seen = {}
@@ -216,6 +219,7 @@ def test_telemetry_returns_stdout_and_exit_without_raising(monkeypatch):
 
 def test_telemetry_timeout_kills_client_process(monkeypatch):
     killed = []
+    reaped = []
 
     class SlowProcess(_FakeProcess):
         async def communicate(self):
@@ -225,6 +229,10 @@ def test_telemetry_timeout_kills_client_process(monkeypatch):
         def kill(self):
             killed.append(True)
 
+        async def wait(self):
+            reaped.append(True)
+            return -9
+
     async def fake_create(*argv, **kwargs):
         return SlowProcess()
 
@@ -232,6 +240,7 @@ def test_telemetry_timeout_kills_client_process(monkeypatch):
     with pytest.raises(TelemetryTimeoutError, match="timed out"):
         asyncio.run(DockerGateway(timeout=0.05).telemetry("abc123"))
     assert killed == [True]
+    assert reaped == [True]
 
 
 def test_telemetry_missing_cli(monkeypatch):
