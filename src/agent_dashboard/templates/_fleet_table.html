@@ -1,0 +1,20 @@
+{% if error %}
+<div class="banner" role="alert">Discovery failed: {{ error }}</div>
+{% endif %}
+{% if rows %}
+<table class="fleet">
+  <thead>
+    <tr><th>Instance</th><th>Container state</th></tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.name }}</td>
+      <td><span class="pill pill-{{ row.state }}">{{ row.state }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No managed instances found.</p>
+{% endif %}

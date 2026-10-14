@@ -1,0 +1,166 @@
+"""The gateway is the only code that builds Docker argv; pin every argv."""
+
+import asyncio
+
+import pytest
+
+from agent_dashboard import gateway
+from agent_dashboard.gateway import (
+    AGENT_ROLE_LABEL,
+    DiscoveryTimeoutError,
+    DockerGateway,
+    DockerNotAvailableError,
+    GatewayError,
+    ManagedInstance,
+    argv_list_instances,
+    parse_ps_output,
+)
+
+EXPECTED_ARGV = [
+    "docker",
+    "ps",
+    "-a",
+    "--filter",
+    f"label={AGENT_ROLE_LABEL}",
+    "--format",
+    gateway.PS_FORMAT,
+]
+
+
+def test_agent_role_label():
+    assert AGENT_ROLE_LABEL == "io.github.lbacik.simple-coding-agent.role=agent"
+
+
+def test_list_instances_argv_pinned():
+    assert argv_list_instances() == EXPECTED_ARGV
+
+
+def test_gateway_argv_matches_module_function():
+    assert DockerGateway(timeout=5.0).argv() == argv_list_instances() == EXPECTED_ARGV
+
+
+def test_every_argv_producer_is_pinned():
+    """Every public argv builder on the gateway must be enumerated here."""
+    producers = {"argv_list_instances": argv_list_instances()}
+    assert set(producers) == {"argv_list_instances"}
+    for argv in producers.values():
+        assert isinstance(argv, list)
+        assert all(isinstance(part, str) for part in argv)
+        assert argv[0] == "docker"
+
+
+def test_no_shell_in_gateway_source():
+    import pathlib
+
+    source = pathlib.Path(gateway.__file__).read_text()
+    assert "shell=True" not in source
+    assert "os.system" not in source
+    assert "subprocess.run" not in source or "shell" not in source
+
+
+def test_parse_ps_output_states_and_fields():
+    output = "abc123\tworker-1\trunning\t\ndef456\tworker-2\texited\t\n"
+    rows = parse_ps_output(output)
+    assert [(r.name, r.state, r.container_id) for r in rows] == [
+        ("worker-1", "running", "abc123"),
+        ("worker-2", "not running", "def456"),
+    ]
+
+
+def test_parse_ps_output_drops_oneoff_and_blank_or_malformed():
+    output = "\n".join(
+        [
+            "aaa\toneoff-run\trunning\tTrue",
+            "bbb\tworker-3\trunning\tFalse",
+            "ccc\t/worker-4\texited\t",
+            "malformed-line",
+            "",
+        ]
+    )
+    rows = parse_ps_output(output)
+    assert [r.name for r in rows] == ["worker-3", "worker-4"]
+    assert all(r.state in ("running", "not running") for r in rows)
+
+
+def test_state_mapping():
+    assert ManagedInstance("a", "id", "running").state == "running"
+    assert ManagedInstance("a", "id", "Running").state == "running"
+    for raw in ("exited", "created", "paused", "dead", "removing", ""):
+        assert ManagedInstance("a", "id", raw).state == "not running"
+
+
+def test_gateway_rejects_bad_timeout():
+    with pytest.raises(ValueError):
+        DockerGateway(timeout=0)
+
+
+class _FakeProcess:
+    def __init__(self, returncode=0, stdout=b"", stderr=b""):
+        self.returncode = returncode
+        self._stdout = stdout
+        self._stderr = stderr
+
+    async def communicate(self):
+        return self._stdout, self._stderr
+
+    def kill(self):
+        pass
+
+
+def _patch_create_subprocess(monkeypatch, process=None, *, exc=None):
+    seen = {}
+
+    async def fake_create(*argv, **kwargs):
+        seen["argv"] = list(argv)
+        seen["kwargs"] = kwargs
+        if exc is not None:
+            raise exc
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    return seen
+
+
+def test_list_instances_uses_pinned_argv(monkeypatch):
+    proc = _FakeProcess(stdout=b"abc\tworker-1\trunning\t\n")
+    seen = _patch_create_subprocess(monkeypatch, proc)
+    rows = asyncio.run(DockerGateway(timeout=5.0).list_instances())
+    assert seen["argv"] == EXPECTED_ARGV
+    assert "shell" not in seen["kwargs"]
+    assert [r.name for r in rows] == ["worker-1"]
+
+
+def test_list_instances_missing_cli(monkeypatch):
+    _patch_create_subprocess(monkeypatch, exc=FileNotFoundError("no docker"))
+    with pytest.raises(DockerNotAvailableError):
+        asyncio.run(DockerGateway(timeout=5.0).list_instances())
+
+
+def test_list_instances_timeout(monkeypatch):
+    class SlowProcess(_FakeProcess):
+        async def communicate(self):
+            await asyncio.sleep(10)
+            return b"", b""
+
+    async def fake_create(*argv, **kwargs):
+        return SlowProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    with pytest.raises(DiscoveryTimeoutError):
+        asyncio.run(DockerGateway(timeout=0.05).list_instances())
+
+
+def test_list_instances_nonzero_exit(monkeypatch):
+    proc = _FakeProcess(returncode=1, stderr=b"boom")
+    _patch_create_subprocess(monkeypatch, proc)
+    with pytest.raises(GatewayError, match="boom"):
+        asyncio.run(DockerGateway(timeout=5.0).list_instances())
+
+
+def test_list_instances_permission_denied(monkeypatch):
+    proc = _FakeProcess(
+        returncode=1, stderr=b"permission denied while trying to connect"
+    )
+    _patch_create_subprocess(monkeypatch, proc)
+    with pytest.raises(GatewayError, match="permission denied"):
+        asyncio.run(DockerGateway(timeout=5.0).list_instances())
