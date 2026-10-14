@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -145,7 +146,11 @@ def create_app(
     app.state.fleet = fleet
     app.state.settings = cfg
     extra_hosts = getattr(cfg, "allowed_hosts", frozenset()) or frozenset()
-    app.add_middleware(HostGuardMiddleware, allowed_hosts=set(ALLOWED_HOSTS) | set(extra_hosts))
+    # TEMPORARY escape hatch: AGENT_DASHBOARD_DISABLE_HOST_GUARD=1 skips the Host check.
+    if os.environ.get("AGENT_DASHBOARD_DISABLE_HOST_GUARD") != "1":
+        app.add_middleware(
+            HostGuardMiddleware, allowed_hosts=set(ALLOWED_HOSTS) | set(extra_hosts)
+        )
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
