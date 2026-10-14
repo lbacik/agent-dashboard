@@ -1,0 +1,145 @@
+{# Instance drawer fragment: also rendered inside index.html when
+   ?instance=<name> is present, so the open drawer survives a reload.
+   `row` is the FleetRow (None when the instance is unknown or removed);
+   `name` is the requested instance name. #}
+{% macro fig(f) -%}
+<div class="figure">{{ f.text }}{% if f.basis %} <span class="basis">{{ f.basis }}</span>{% endif %}</div>
+{%- endmacro %}
+{% if row is none %}
+<aside id="drawer" class="drawer"
+       hx-get="/instances/{{ name | urlencode }}"
+       hx-trigger="sse:fleet"
+       hx-target="#drawer-holder"
+       hx-swap="innerHTML">
+  <div class="drawer-head">
+    <div>
+      <h2 class="drawer-title">{{ name }}</h2>
+      <p class="drawer-subtitle">This instance is gone: it is unknown or was removed.</p>
+    </div>
+    <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
+  </div>
+</aside>
+{% else %}
+{% set d = row.drawer %}
+<aside id="drawer" class="drawer"
+       hx-get="/instances/{{ row.name | urlencode }}"
+       hx-trigger="sse:fleet"
+       hx-target="#drawer-holder"
+       hx-swap="innerHTML">
+  <div class="drawer-head">
+    <div>
+      <h2 class="drawer-title">{{ row.name }}</h2>
+      <p class="drawer-subtitle">{{ row.headline }} · <span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span></p>
+    </div>
+    <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
+  </div>
+  {% if d.unsupported_schema is not none %}
+  <section class="drawer-section">
+    <h3>Current attempt</h3>
+    <p class="hint">unsupported schema v{{ d.unsupported_schema }}: showing only the
+    stable fields (repository, agent version).</p>
+  </section>
+  <section class="drawer-section">
+    <h3>Control</h3>
+    <dl class="facts">
+      <div><dt>Repository</dt><dd>{{ d.repository }}</dd></div>
+      <div><dt>Agent version</dt><dd>{{ d.agent_version }}</dd></div>
+    </dl>
+  </section>
+  <section class="drawer-section">
+    <h3>Recent events</h3>
+    <p class="hint">unavailable</p>
+  </section>
+  {% else %}
+  <section class="drawer-section">
+    <h3>Current attempt</h3>
+    {% if d.current_state != "active" %}
+    <p class="hint">{% if d.current_state == "na" %}No current attempt (n/a){% else %}Current attempt unavailable{% endif %}</p>
+    {% else %}
+    <p class="attempt-head">{% if d.issue_number is not none %}#{{ d.issue_number }} · {% endif %}{{ d.issue_title }}</p>
+    {% if d.budget_has_bar %}
+    <div class="budget-bar{% if d.budget_hatched %} hatched{% endif %}" role="img" aria-label="budget {{ d.budget_used.text }} of {{ d.hard_ceiling.text }}">
+      <div class="budget-fill" style="width: {{ d.budget_used_pct }}%"></div>
+      {% if d.budget_has_tick %}<div class="budget-tick" style="left: {{ d.budget_soft_pct }}%"></div>{% endif %}
+    </div>
+    {% endif %}
+    <dl class="facts">
+      <div><dt>Budget used</dt><dd>{{ fig(d.budget_used) }}</dd></div>
+      <div><dt>Measured</dt><dd>{{ fig(d.budget_measured) }}</dd></div>
+      <div><dt>Estimated remainder</dt><dd>{{ fig(d.budget_estimated) }}</dd></div>
+      <div><dt>Hard ceiling</dt><dd>{{ fig(d.hard_ceiling) }}</dd></div>
+      <div><dt>Soft threshold</dt><dd>{{ fig(d.soft_threshold) }}</dd></div>
+      <div><dt>Soft rule</dt><dd>{{ d.soft_rule }}</dd></div>
+      <div><dt>Soft crossed</dt><dd>{% if d.soft_crossed %}yes, at {{ d.crossed_at }} ({{ fig(d.crossed_at_tokens) }}){% else %}no{% endif %}</dd></div>
+      <div><dt>Turns</dt><dd>{{ fig(d.turns) }} (max {{ fig(d.turns_max) }}, continuation {{ fig(d.continuation_index) }} of {{ fig(d.continuation_max) }})</dd></div>
+      <div><dt>Cache hit rate</dt><dd>{{ fig(d.cache_hit) }}{% if d.cache_counted is not none %} ({{ d.cache_counted }} responses){% endif %}</dd></div>
+      <div><dt>Main context</dt><dd>{{ fig(d.ctx_main) }} of window {{ fig(d.ctx_window) }}, peak {{ fig(d.ctx_peak) }}</dd></div>
+      <div><dt>Auto-compact threshold</dt><dd>{{ fig(d.ctx_auto_compact) }}</dd></div>
+      <div><dt>Compactions</dt><dd>{{ d.compactions_count }}{% if d.compactions_last_at %} (last {{ d.compactions_last_at }}{% if d.compactions_last_trigger %}, {{ d.compactions_last_trigger }}{% endif %}: {{ d.compactions_last_pre.text }} → {{ d.compactions_last_post.text }}){% endif %}</dd></div>
+      <div><dt>Rate limit headroom</dt><dd>{{ fig(d.rate_limit) }}{% if d.rate_limit_reason %} ({{ d.rate_limit_reason }}){% endif %}</dd></div>
+    </dl>
+    {% if d.tokens %}
+    <h4>Tokens by category</h4>
+    <dl class="facts">
+      {% for cat in d.tokens %}
+      <div><dt>{{ cat.name }}</dt><dd>{{ fig(cat.figure) }}</dd></div>
+      {% endfor %}
+    </dl>
+    {% endif %}
+    {% if d.subagents %}
+    <h4>Subagent contexts</h4>
+    <dl class="facts">
+      {% for sub in d.subagents %}
+      <div><dt>{{ sub.slot }} ({{ sub.kind }}){% if sub.running %} · running{% endif %}</dt><dd>{{ fig(sub.figure) }}</dd></div>
+      {% endfor %}
+    </dl>
+    {% endif %}
+    {% endif %}
+  </section>
+  <section class="drawer-section">
+    <h3>Control</h3>
+    {% if d.control_state == "missing" %}
+    <p class="hint">Control unavailable</p>
+    {% elif d.control_state == "na" %}
+    <p class="hint">Control n/a</p>
+    {% else %}
+    <dl class="facts">
+      <div><dt>Repository</dt><dd>{{ d.repository }}</dd></div>
+      <div><dt>Agent version</dt><dd>{{ d.agent_version }}</dd></div>
+      <div><dt>Intake</dt><dd>{{ d.intake }}{% if d.intake_stale %} <span class="stale-tag">stale</span>{% endif %}</dd></div>
+      <div><dt>Active attempt</dt><dd>{{ d.active_text }}</dd></div>
+      <div><dt>Stop plan</dt><dd>{{ d.stop_plan }}</dd></div>
+      <div><dt>Handoff</dt><dd>{{ d.handoff_text }}</dd></div>
+      <div><dt>Recovery hold</dt><dd>{% if d.recovery_present %}{% if d.recovery_issue is not none %}#{{ d.recovery_issue }} · {% endif %}{% if d.recovery_reason %}{{ d.recovery_reason }}{% else %}held{% endif %}{% if d.recovery_next_action %} <code id="recovery-next-action">{{ d.recovery_next_action }}</code> <button type="button" onclick="copyNextAction()">Copy</button>{% endif %}{% else %}none{% endif %}</dd></div>
+      <div><dt>Consecutive errors</dt><dd>{{ d.errors_text }}</dd></div>
+    </dl>
+    {% endif %}
+    <h4>Last finished attempt</h4>
+    {% if d.last_present %}
+    <dl class="facts">
+      <div><dt>Issue</dt><dd>{% if d.last_issue is not none %}#{{ d.last_issue }}{% endif %}{% if d.last_title %} · {{ d.last_title }}{% endif %}</dd></div>
+      <div><dt>Outcome</dt><dd>{{ d.last_outcome }}</dd></div>
+      <div><dt>Tokens</dt><dd>{{ fig(d.last_tokens) }} (turns {{ fig(d.last_turns) }})</dd></div>
+      <div><dt>Finished at</dt><dd>{{ d.last_finished_at }}</dd></div>
+      <div><dt>Pull request</dt><dd>{% if d.last_pr_number is not none %}#{{ d.last_pr_number }}{% if d.last_pr_url %} (<a href="{{ d.last_pr_url }}">{{ d.last_pr_url }}</a>){% endif %}{% else %}none{% endif %}</dd></div>
+    </dl>
+    {% else %}
+    <p class="hint">none</p>
+    {% endif %}
+  </section>
+  <section class="drawer-section">
+    <h3>Recent events</h3>
+    {% if d.events %}
+    <ul class="events">
+      {% for ev in d.events %}
+      <li><span class="ev-time">{{ ev.timestamp }}</span> <span class="ev-level">{{ ev.level }}</span> <span class="ev-name">{{ ev.name }}</span> <span class="ev-text">{{ ev.text }}</span></li>
+      {% endfor %}
+    </ul>
+    {% if d.truncated %}<p class="hint">Older events were trimmed (truncated snapshot).</p>{% endif %}
+    {% else %}
+    <p class="hint">No recent events.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</aside>
+{% endif %}

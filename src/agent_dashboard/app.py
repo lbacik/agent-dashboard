@@ -137,11 +137,41 @@ def create_app(
     def context(request: Request) -> dict:
         return {"request": request, "poll_interval": int(cfg.poll_interval)}
 
+    def find_row(rows, name: str):
+        """The fleet row for one instance name, or None when unknown/removed."""
+        return next((r for r in rows if r.name == name), None)
+
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> Response:
         rows, error = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        wanted = request.query_params.get("instance") or ""
+        row = find_row(rows, wanted) if wanted else None
         return templates.TemplateResponse(
-            request, "index.html", {**context(request), "rows": rows, "error": error}
+            request,
+            "index.html",
+            {
+                **context(request),
+                "rows": rows,
+                "error": error,
+                "drawer_open": bool(wanted),
+                "row": row,
+                "name": wanted,
+            },
+        )
+
+    @app.get("/instances/{name}", response_class=HTMLResponse)
+    async def instance_drawer(request: Request, name: str) -> Response:
+        """Instance drawer fragment, refreshed on every `fleet` SSE event.
+
+        A click on a table row fetches this into `#drawer-holder`; the
+        drawer's own `hx-trigger="sse:fleet"` re-fetches it after every poll
+        cycle. An unknown or removed instance renders the gone fragment
+        (status 200) so a refresh can also bring the drawer back.
+        """
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        row = find_row(rows, name)
+        return templates.TemplateResponse(
+            request, "_drawer.html", {**context(request), "row": row, "name": name}
         )
 
     @app.get("/fleet", response_class=HTMLResponse)
