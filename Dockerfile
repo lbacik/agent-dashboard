@@ -32,9 +32,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 RUN uv sync --locked --no-dev \
-    && uv pip list | grep -Ei 'fastapi|uvicorn' || true
-
-COPY --chown=appuser:appuser src ./src
+    && chown -R appuser:appuser /app
 
 ENV PATH="/app/.venv/bin:${PATH}"
 EXPOSE 8000
