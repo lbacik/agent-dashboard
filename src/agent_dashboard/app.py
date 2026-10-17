@@ -19,6 +19,11 @@ from .charts import (
     OUTCOME_LABELS,
     OUTCOME_ORDER,
     SHAPE_GLYPHS,
+    cost_per_attempt,
+    cost_soft_threshold,
+    cost_totals,
+    cumulative_cost_per_day,
+    duration_vs_cost,
     outcome_legend,
     outcomes_per_day,
     timeline_points,
@@ -27,7 +32,13 @@ from .charts import (
 from .config import Settings
 from .fleet import FleetState, poll_forever
 from .gateway import DockerGateway, GatewayError
-from .history import DEFAULT_WINDOW, VALID_WINDOWS, read_history
+from .history import (
+    DEFAULT_WINDOW,
+    VALID_WINDOWS,
+    format_cost,
+    format_duration,
+    read_history,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -293,6 +304,59 @@ def create_app(
             y_ticks = []
         # X labels stay readable: show at most ~14 day ticks.
         label_every = max(1, -(-len(buckets) // 14))
+        cost_points = cost_per_attempt(result.summaries)
+        cumulative = cumulative_cost_per_day(
+            result.summaries, now=now_ts, window=result.window
+        )
+        scatter = duration_vs_cost(result.summaries)
+        totals = cost_totals(result.summaries)
+        threshold = cost_soft_threshold(result.summaries)
+        cost_peak = (
+            max(
+                [p.cost_value for p in cost_points]
+                + ([threshold] if threshold is not None else [])
+            )
+            if cost_points
+            else 0.0
+        )
+        if cost_peak > 0:
+            cost_ticks = [
+                (0.0, format_cost(0)),
+                (0.5, format_cost(cost_peak / 2)),
+                (1.0, format_cost(cost_peak)),
+            ]
+        else:
+            cost_ticks = []
+        cum_peak = max((d.cumulative for d in cumulative), default=0.0)
+        if cum_peak > 0:
+            cum_ticks = [
+                (0.0, format_cost(0)),
+                (0.5, format_cost(cum_peak / 2)),
+                (1.0, format_cost(cum_peak)),
+            ]
+        else:
+            cum_ticks = []
+        scatter_cost_peak = max((p.cost_value for p in scatter), default=0.0)
+        scatter_cost_ticks = (
+            [
+                (0.0, format_cost(0)),
+                (0.5, format_cost(scatter_cost_peak / 2)),
+                (1.0, format_cost(scatter_cost_peak)),
+            ]
+            if scatter_cost_peak > 0
+            else []
+        )
+        scatter_dur_peak = max((p.duration_value for p in scatter), default=0.0)
+        scatter_dur_ticks = (
+            [
+                (0.0, format_duration(0)),
+                (0.5, format_duration(scatter_dur_peak / 2)),
+                (1.0, format_duration(scatter_dur_peak)),
+            ]
+            if scatter_dur_peak > 0
+            else []
+        )
+        cum_label_every = max(1, -(-len(cumulative) // 14))
         return templates.TemplateResponse(
             request,
             "history.html",
@@ -313,6 +377,23 @@ def create_app(
                 "chart_labels": dict(OUTCOME_LABELS),
                 "shape_glyphs": dict(SHAPE_GLYPHS),
                 "y_ticks": y_ticks,
+                "cost_points": cost_points,
+                "cost_peak": cost_peak,
+                "cost_ticks": cost_ticks,
+                "cost_threshold": threshold,
+                "cost_threshold_text": format_cost(threshold)
+                if threshold is not None
+                else None,
+                "cumulative": cumulative,
+                "cum_peak": cum_peak,
+                "cum_ticks": cum_ticks,
+                "cum_label_every": cum_label_every,
+                "scatter": scatter,
+                "scatter_cost_ticks": scatter_cost_ticks,
+                "scatter_dur_ticks": scatter_dur_ticks,
+                "cost_total_text": format_cost(totals.total),
+                "cost_with_count": totals.with_cost,
+                "cost_missing": totals.missing,
             },
         )
 
