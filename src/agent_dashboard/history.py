@@ -143,6 +143,10 @@ class AttemptSummary:
     scatter; ``duration_text`` stays the display. ``cost_threshold_value``
     is the attempt's reported USD soft threshold (``None`` when the agent
     did not report one) for the cost chart's reference line.
+    ``input_value``, ``cache_read_value``, ``cache_creation_value`` and
+    ``output_value`` are the numeric token counters (``None`` when the
+    category was not reported) for the token charts; the ``*_text``
+    fields stay the display.
     """
 
     issue: int
@@ -162,6 +166,10 @@ class AttemptSummary:
     cache_creation_text: str = NOT_APPLICABLE
     output_text: str = NOT_APPLICABLE
     has_usage: bool = False
+    input_value: float | None = None
+    cache_read_value: float | None = None
+    cache_creation_value: float | None = None
+    output_value: float | None = None
 
 
 @dataclass(frozen=True)
@@ -183,6 +191,8 @@ def _read_usage(attempt: dict[str, Any]) -> dict[str, Any]:
     counts as usage, so a missing map never renders as zero.
     """
     out: dict[str, Any] = {name: NOT_APPLICABLE for name, _ in TOKEN_KEYS}
+    for name, _ in TOKEN_KEYS:
+        out[name.replace("_text", "_value")] = None
     out["cost"] = NOT_APPLICABLE
     out["cost_value"] = None
     out["has_usage"] = False
@@ -208,6 +218,7 @@ def _read_usage(attempt: dict[str, Any]) -> dict[str, Any]:
     for name, key in TOKEN_KEYS:
         if key in totals:
             out[name] = _format_tokens(totals[key])
+            out[name.replace("_text", "_value")] = float(totals[key])
     if cost is not None:
         out["cost"] = format_cost(cost)
         out["cost_value"] = float(cost)
@@ -291,6 +302,10 @@ def _read_entry(entry: Any, active_started_at: str | None, now: float) -> Attemp
         cache_creation_text=usage["cache_creation_text"],
         output_text=usage["output_text"],
         has_usage=usage["has_usage"],
+        input_value=usage["input_value"],
+        cache_read_value=usage["cache_read_value"],
+        cache_creation_value=usage["cache_creation_value"],
+        output_value=usage["output_value"],
     )
 
 

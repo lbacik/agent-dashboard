@@ -16,17 +16,23 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .charts import (
+    CACHE_READ_SHARE_DEFINITION,
     OUTCOME_LABELS,
     OUTCOME_ORDER,
     SHAPE_GLYPHS,
+    TOKEN_CATEGORIES,
+    cache_share_per_attempt,
     cost_per_attempt,
     cost_soft_threshold,
     cost_totals,
     cumulative_cost_per_day,
     duration_vs_cost,
+    format_tokens,
+    missing_token_count,
     outcome_legend,
     outcomes_per_day,
     timeline_points,
+    tokens_per_attempt,
     undated_count,
 )
 from .config import Settings
@@ -357,6 +363,21 @@ def create_app(
             else []
         )
         cum_label_every = max(1, -(-len(cumulative) // 14))
+        token_points = tokens_per_attempt(result.summaries)
+        share_points = cache_share_per_attempt(result.summaries)
+        token_missing = missing_token_count(result.summaries)
+        token_peak = max((p.total for p in token_points), default=0.0)
+        if token_peak > 0:
+            token_ticks = [
+                (0.0, format_tokens(0)),
+                (0.5, format_tokens(token_peak / 2)),
+                (1.0, format_tokens(token_peak)),
+            ]
+        else:
+            token_ticks = []
+        share_ticks = (
+            [(0.0, "0%"), (0.5, "50%"), (1.0, "100%")] if share_points else []
+        )
         return templates.TemplateResponse(
             request,
             "history.html",
@@ -394,6 +415,14 @@ def create_app(
                 "cost_total_text": format_cost(totals.total),
                 "cost_with_count": totals.with_cost,
                 "cost_missing": totals.missing,
+                "token_points": token_points,
+                "token_peak": token_peak,
+                "token_ticks": token_ticks,
+                "token_missing": token_missing,
+                "token_categories": list(TOKEN_CATEGORIES),
+                "share_points": share_points,
+                "share_ticks": share_ticks,
+                "share_definition": CACHE_READ_SHARE_DEFINITION,
             },
         )
 

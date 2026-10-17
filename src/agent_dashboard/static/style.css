@@ -304,6 +304,25 @@ tr.active-row td { background: #f2f6fb; }
 /* Cost charts: single-series bars use the accent; the soft threshold is a
    dashed line with a text label, never colour alone (the label names it). */
 .bars .bar.cost { fill: var(--accent); }
+/* Token charts: one fill per token category; the legend names each
+   category and every mark's tooltip carries the full token breakdown, so
+   nothing relies on colour alone. */
+.bars .bar.tok-input { fill: #1f6feb; }
+.bars .bar.tok-cache-read { fill: #1a7f37; }
+.bars .bar.tok-cache-creation { fill: #9a6700; }
+.bars .bar.tok-output { fill: #8250df; }
+.bars .bar.tok-zero { fill: var(--muted); }
+.token-legend .swatch {
+  display: inline-block;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 2px;
+  vertical-align: baseline;
+}
+.token-legend .swatch.tok-input { background: #1f6feb; }
+.token-legend .swatch.tok-cache-read { background: #1a7f37; }
+.token-legend .swatch.tok-cache-creation { background: #9a6700; }
+.token-legend .swatch.tok-output { background: #8250df; }
 .timeline .threshold {
   stroke: var(--danger-ink);
   stroke-width: 1.5;
@@ -381,6 +400,14 @@ tr.active-row td { background: #f2f6fb; }
   .bars .bar.outcome-infrastructure_error { fill: var(--oc-infra); }
   .bars .bar.outcome-no_changes { fill: var(--oc-nochanges); }
   .bars .bar.outcome-other { fill: var(--oc-other); }
+  .bars .bar.tok-input { fill: var(--oc-handoff); }
+  .bars .bar.tok-cache-read { fill: var(--oc-complete); }
+  .bars .bar.tok-cache-creation { fill: var(--oc-incomplete); }
+  .bars .bar.tok-output { fill: var(--oc-other); }
+  .token-legend .swatch.tok-input { background: var(--oc-handoff); }
+  .token-legend .swatch.tok-cache-read { background: var(--oc-complete); }
+  .token-legend .swatch.tok-cache-creation { background: var(--oc-incomplete); }
+  .token-legend .swatch.tok-output { background: var(--oc-other); }
   .bars .seg-label { fill: #0d1117; }
   .timeline .mark.outcome-complete :is(circle, rect, polygon) { fill: var(--oc-complete); }
   .timeline .mark.outcome-incomplete :is(circle, rect, polygon) { fill: var(--oc-incomplete); }
