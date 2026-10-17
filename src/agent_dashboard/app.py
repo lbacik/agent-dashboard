@@ -13,6 +13,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
@@ -20,7 +21,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .attempt_log import format_file_mb, paginate, read_attempt_log
+from .attempt_log import (
+    event_names,
+    filter_events,
+    format_file_mb,
+    level_options,
+    paginate,
+    read_attempt_log,
+)
 from .charts import (
     CACHE_READ_SHARE_DEFINITION,
     OUTCOME_LABELS,
@@ -629,6 +637,18 @@ def create_app(
             page_num: int = 1,
             pages: int = 1,
             file_mb_text: str | None = None,
+            level_value: str = "",
+            event_value: str = "",
+            q_value: str = "",
+            event_name_options: tuple = (),
+            level_option_values: tuple = (),
+            filtered_total: int = 0,
+            has_filters: bool = False,
+            attempt_url: str = "",
+            reset_url: str = "",
+            refresh_url: str = "",
+            prev_url: str | None = None,
+            next_url: str | None = None,
         ) -> Response:
             return templates.TemplateResponse(
                 request,
@@ -646,29 +666,74 @@ def create_app(
                     "page_num": page_num,
                     "pages": pages,
                     "file_mb_text": file_mb_text,
+                    "level_value": level_value,
+                    "event_value": event_value,
+                    "q_value": q_value,
+                    "event_name_options": event_name_options,
+                    "level_option_values": level_option_values,
+                    "filtered_total": filtered_total,
+                    "has_filters": has_filters,
+                    "attempt_url": attempt_url,
+                    "reset_url": reset_url,
+                    "refresh_url": refresh_url,
+                    "prev_url": prev_url,
+                    "next_url": next_url,
                 },
             )
+
+        def attempt_base_url(dash: str) -> str:
+            """The filter-free Attempt log URL: filters live in the query."""
+            base = (
+                f"/instances/{quote(name, safe='')}"
+                f"/attempts/{quote(issue, safe='')}"
+            )
+            if dash:
+                base += f"/{quote(dash, safe='')}"
+            return base
 
         rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
         row = find_row(rows, name)
         if row is None:
+            base_url = attempt_base_url("")
             return log_page(
                 None,
                 f"Unknown Managed instance {name!r}: it is unknown or was removed.",
+                attempt_url=base_url,
+                reset_url=base_url,
+                refresh_url=base_url,
             )
         if row.state != "running":
+            base_url = attempt_base_url("")
             return log_page(
                 row,
                 "Attempt logs are available for running managed instances only.",
+                attempt_url=base_url,
+                reset_url=base_url,
+                refresh_url=base_url,
             )
         try:
             number, dash = validate_attempt_ref(issue, started)
         except ValueError as exc:
-            return log_page(row, f"Invalid attempt reference: {exc}")
+            base_url = attempt_base_url("")
+            return log_page(
+                row,
+                f"Invalid attempt reference: {exc}",
+                attempt_url=base_url,
+                reset_url=base_url,
+                refresh_url=base_url,
+            )
+        base_url = attempt_base_url(dash)
         try:
             exec_result = await gw.attempt_log(row.container_id, number, dash)
         except (GatewayError, ValueError) as exc:
-            return log_page(row, f"Could not read the Attempt log: {exc}")
+            return log_page(
+                row,
+                f"Could not read the Attempt log: {exc}",
+                dash_started=dash,
+                attempt_url=base_url,
+                reset_url=base_url,
+                refresh_url=base_url,
+            )
         result = read_attempt_log(
             exec_result.stdout,
             exec_result.returncode,
@@ -682,10 +747,46 @@ def create_app(
                 result=result,
                 dash_started=dash,
                 file_mb_text=format_file_mb(result.file_size),
+                attempt_url=base_url,
+                reset_url=base_url,
+                refresh_url=base_url,
             )
-        page_events, page_num, pages = paginate(
-            result.events, request.query_params.get("page", "1")
+        params = request.query_params
+        raw_level = params.get("level", "")
+        raw_event = params.get("event", "")
+        raw_q = params.get("q", "")
+        # A stripped ``all`` reads as no filtering, so the selects' "All"
+        # option and a hand-typed ``?level=all`` agree.
+        level_value = raw_level.strip()
+        event_value = raw_event.strip()
+        q_value = raw_q.strip()
+        if level_value.lower() == "all":
+            level_value = ""
+        if event_value.lower() == "all":
+            event_value = ""
+        names = event_names(result.events)
+        levels = level_options(result.events)
+        filtered = filter_events(
+            result.events, level=level_value, event=event_value, q=q_value
         )
+        page_events, page_num, pages = paginate(
+            filtered, params.get("page", "1")
+        )
+
+        def page_url(number: int | None) -> str:
+            """One paging/refresh link: the active filters plus one page."""
+            query: dict[str, str] = {}
+            if level_value:
+                query["level"] = level_value
+            if event_value:
+                query["event"] = event_value
+            if q_value:
+                query["q"] = q_value
+            if number is not None:
+                query["page"] = str(number)
+            text = urlencode(query)
+            return base_url if not text else f"{base_url}?{text}"
+
         return log_page(
             row,
             None,
@@ -695,6 +796,18 @@ def create_app(
             page_num=page_num,
             pages=pages,
             file_mb_text=format_file_mb(result.file_size),
+            level_value=level_value,
+            event_value=event_value,
+            q_value=q_value,
+            event_name_options=names,
+            level_option_values=levels,
+            filtered_total=len(filtered),
+            has_filters=bool(level_value or event_value or q_value),
+            attempt_url=base_url,
+            reset_url=base_url,
+            refresh_url=page_url(page_num if page_num > 1 else None),
+            prev_url=page_url(page_num - 1) if page_num > 1 else None,
+            next_url=page_url(page_num + 1) if page_num < pages else None,
         )
 
     @app.get("/fleet", response_class=HTMLResponse)

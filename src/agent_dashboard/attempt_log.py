@@ -317,6 +317,66 @@ def read_attempt_log(
     )
 
 
+def _text(value: Any) -> str:
+    """Filter input as text; garbage (None, numbers, lists) reads as blank."""
+    return value if isinstance(value, str) else ""
+
+
+def _active(value: Any) -> str:
+    """One stripped filter value; blank or ``all`` means no filtering."""
+    text = _text(value).strip()
+    return "" if text.lower() == "all" else text
+
+
+def event_names(events: tuple[LogEvent, ...]) -> tuple[str, ...]:
+    """Event names observed in this stream, sorted for a stable select."""
+    return tuple(sorted({ev.event for ev in events if ev.event}))
+
+
+def level_options(events: tuple[LogEvent, ...]) -> tuple[str, ...]:
+    """Level select options: blank (All) first, then known levels, then extras.
+
+    Known levels stay selectable even when the stream has no such row (the
+    result is then simply empty); levels the agent wrote outside
+    :data:`KNOWN_LEVELS` (e.g. ``DEBUG``) are appended sorted so they can
+    still be picked.
+    """
+    extras = sorted(
+        {ev.level for ev in events if ev.level and ev.level not in KNOWN_LEVELS}
+    )
+    return ("", *KNOWN_LEVELS, *extras)
+
+
+def filter_events(
+    events: tuple[LogEvent, ...],
+    level: Any = "",
+    event: Any = "",
+    q: Any = "",
+) -> tuple[LogEvent, ...]:
+    """Narrow the full stream before paging; never raises on garbage input.
+
+    ``level`` matches exactly (case-insensitively), ``event`` matches
+    exactly, ``q`` is a case-insensitive substring of the detail. Blank
+    (or ``all`` for the two selects) means no filtering for that field;
+    unknown values simply match nothing, so the page renders an empty
+    result. ``q`` keeps a literal ``all``: only a blank query matches
+    everything. Rows keep their file line numbers (``seq``), never
+    positions in the filtered list.
+    """
+    wanted_level = _active(level)
+    wanted_event = _active(event)
+    needle = _text(q).strip().lower()
+
+    def _keep(ev: LogEvent) -> bool:
+        if wanted_level and ev.level.upper() != wanted_level.upper():
+            return False
+        if wanted_event and ev.event != wanted_event:
+            return False
+        return not needle or needle in ev.detail.lower()
+
+    return tuple(ev for ev in events if _keep(ev))
+
+
 def parse_page(raw: Any, pages: int) -> int:
     """Clamp a ``?page=`` value into ``1..pages``; garbage means page 1."""
     try:
