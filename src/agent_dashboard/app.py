@@ -255,7 +255,6 @@ def create_app(
                 "overview": overview,
                 "legend": overview_legend(overview),
                 "chart_keys": list(OUTCOME_ORDER),
-                "chart_labels": dict(OUTCOME_LABELS),
                 "shape_glyphs": dict(SHAPE_GLYPHS),
                 "outcome_peak": outcome_peak,
                 "outcome_ticks": outcome_ticks,
