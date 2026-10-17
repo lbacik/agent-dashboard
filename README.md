@@ -37,9 +37,23 @@ Environment variables (`.env`):
 | --- | --- | --- |
 | `DASHBOARD_BIND` | `127.0.0.1` | Publish address of the dashboard port. Set the Pi's LAN IP (or `0.0.0.0`) to expose the UI; the safe default stays loopback. |
 | `DASHBOARD_PORT` | `8000` | Host port mapped to the container's `8000`. |
-| `DOCKER_GID` | `999` | GID of the host's `docker` group (`getent group docker`). Passed as `group_add` so the non-root container user can reach `/var/run/docker.sock`, whose GID differs per host. |
+| `DOCKER_GID` | `999` | GID owning `/var/run/docker.sock` on the daemon host (see below). Passed as `group_add` so the non-root container user can reach the socket, whose GID differs per host. |
 | `AGENT_DASHBOARD_ALLOWED_HOSTS` | _(empty)_ | Host header allow-list for LAN access: the Pi's hostname and/or LAN IP, comma-separated. `localhost` / `127.0.0.1` always stay allowed; `*` is never accepted. |
 | `AGENT_DASHBOARD_POLL_INTERVAL` / `AGENT_DASHBOARD_EXEC_TIMEOUT` / `AGENT_DASHBOARD_MAX_CONCURRENT_EXECS` | _(built-in defaults)_ | Optional gateway tuning, passed through to the dashboard. |
+
+`DOCKER_GID` must match the socket on the host that runs the daemon. Compose
+reads `.env` on the machine you invoke it from, so when deploying through a
+remote Docker context (e.g. from a laptop to the Pi), `getent group docker` on
+the laptop gives the wrong number. Read the GID through the same context
+instead:
+
+```sh
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock alpine stat -c %g /var/run/docker.sock
+```
+
+A mismatch surfaces in the UI as `Discovery failed: permission denied running
+docker ps ... /var/run/docker.sock: connect: permission denied`; fix the value
+and run `docker compose up -d` to recreate the container.
 
 Inside the container the process listens on `0.0.0.0` with
 `AGENT_DASHBOARD_ALLOW_NON_LOOPBACK=1` (compose sets both); without that
