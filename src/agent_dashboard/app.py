@@ -15,6 +15,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from .charts import (
+    OUTCOME_LABELS,
+    OUTCOME_ORDER,
+    outcome_legend,
+    outcomes_per_day,
+    timeline_points,
+    undated_count,
+)
 from .config import Settings
 from .fleet import FleetState, poll_forever
 from .gateway import DockerGateway, GatewayError
@@ -256,8 +264,9 @@ def create_app(
                     "error": f"Could not read the Attempt log: {exc}",
                 },
             )
+        now_ts = time.time()
         result = read_history(
-            exec_result.stdout, exec_result.returncode, now=time.time(), window=window
+            exec_result.stdout, exec_result.returncode, now=now_ts, window=window
         )
         if not result.ok:
             return templates.TemplateResponse(
@@ -272,6 +281,11 @@ def create_app(
                     "error": result.error,
                 },
             )
+        buckets = outcomes_per_day(result.summaries, now=now_ts, window=result.window)
+        points = timeline_points(result.summaries)
+        peak = max((b.total for b in buckets), default=0)
+        # X labels stay readable: show at most ~14 day ticks.
+        label_every = max(1, -(-len(buckets) // 14))
         return templates.TemplateResponse(
             request,
             "history.html",
@@ -282,6 +296,22 @@ def create_app(
                 "window": window,
                 "result": result,
                 "error": None,
+                "buckets": buckets,
+                "bucket_peak": peak,
+                "label_every": label_every,
+                "points": points,
+                "legend": outcome_legend(result.summaries),
+                "undated": undated_count(result.summaries),
+                "chart_keys": [k for k in OUTCOME_ORDER],
+                "chart_labels": dict(OUTCOME_LABELS),
+                "shape_glyphs": {
+                    "circle": "●",
+                    "square": "■",
+                    "triangle": "▲",
+                    "diamond": "◆",
+                    "ring": "○",
+                    "cross": "✕",
+                },
             },
         )
 

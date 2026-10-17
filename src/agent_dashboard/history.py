@@ -121,7 +121,11 @@ def _restore_started(raw: Any) -> str | None:
 
 @dataclass(frozen=True)
 class AttemptSummary:
-    """One Attempt log row: final display text, so templates add no formatting."""
+    """One Attempt log row: final display text, so templates add no formatting.
+
+    ``cost_value`` is the numeric USD cost (``None`` when unknown) used only
+    to scale the attempts timeline marks; ``cost_text`` stays the display.
+    """
 
     issue: int
     issue_title: str | None = None
@@ -132,6 +136,7 @@ class AttemptSummary:
     active: bool = False
     stop_reason_text: str = NOT_APPLICABLE
     cost_text: str = NOT_APPLICABLE
+    cost_value: float | None = None
     input_text: str = NOT_APPLICABLE
     cache_read_text: str = NOT_APPLICABLE
     cache_creation_text: str = NOT_APPLICABLE
@@ -159,6 +164,7 @@ def _read_usage(attempt: dict[str, Any]) -> dict[str, Any]:
     """
     out: dict[str, Any] = {name: NOT_APPLICABLE for name, _ in TOKEN_KEYS}
     out["cost"] = NOT_APPLICABLE
+    out["cost_value"] = None
     out["has_usage"] = False
     usage = attempt.get("model_usage")
     if not isinstance(usage, dict):
@@ -184,6 +190,7 @@ def _read_usage(attempt: dict[str, Any]) -> dict[str, Any]:
             out[name] = _format_tokens(totals[key])
     if cost is not None:
         out["cost"] = format_cost(cost)
+        out["cost_value"] = float(cost)
     return out
 
 
@@ -239,6 +246,7 @@ def _read_entry(entry: Any, active_started_at: str | None, now: float) -> Attemp
         active=active,
         stop_reason_text=_read_stop_reason(attempt, usage["has_usage"]),
         cost_text=usage["cost"],
+        cost_value=usage["cost_value"],
         input_text=usage["input_text"],
         cache_read_text=usage["cache_read_text"],
         cache_creation_text=usage["cache_creation_text"],
