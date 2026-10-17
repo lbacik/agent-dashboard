@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,7 +17,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import Settings
 from .fleet import FleetState, poll_forever
-from .gateway import DockerGateway
+from .gateway import DockerGateway, GatewayError
+from .history import DEFAULT_WINDOW, VALID_WINDOWS, read_history
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -116,14 +118,15 @@ def create_app(
 ) -> FastAPI:
     fleet = state if state is not None else FleetState()
     cfg = settings if settings is not None else Settings()
+    gw = gateway if gateway is not None else DockerGateway(timeout=cfg.exec_timeout)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.fleet = fleet
         app.state.settings = cfg
+        app.state.gateway = gw
         task: asyncio.Task | None = None
         if start_poller:
-            gw = gateway if gateway is not None else DockerGateway(timeout=cfg.exec_timeout)
             task = asyncio.create_task(
                 poll_forever(
                     fleet,
@@ -145,6 +148,7 @@ def create_app(
     app = FastAPI(title="agent-dashboard", lifespan=lifespan)
     app.state.fleet = fleet
     app.state.settings = cfg
+    app.state.gateway = gw
     extra_hosts = getattr(cfg, "allowed_hosts", frozenset()) or frozenset()
     # TEMPORARY escape hatch: AGENT_DASHBOARD_DISABLE_HOST_GUARD=1 skips the Host check.
     if os.environ.get("AGENT_DASHBOARD_DISABLE_HOST_GUARD") != "1":
@@ -192,6 +196,93 @@ def create_app(
         row = find_row(rows, name)
         return templates.TemplateResponse(
             request, "_drawer.html", {**context(request), "row": row, "name": name}
+        )
+
+    @app.get("/instances/{name}/history", response_class=HTMLResponse)
+    async def instance_history(request: Request, name: str) -> Response:
+        """Attempt history page: one row per implementation attempt, newest first.
+
+        Static with manual refresh (no stream subscription): the summaries
+        for all attempts are read on demand with a single gateway exec,
+        running managed instances only. An unknown instance, a stopped
+        instance, an unreadable log and an unrecognised layout each render a
+        clear message with status 200, never an error.
+        """
+        window = request.query_params.get("window", DEFAULT_WINDOW)
+        if window not in VALID_WINDOWS:
+            window = "all"
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        row = find_row(rows, name)
+        if row is None:
+            return templates.TemplateResponse(
+                request,
+                "history.html",
+                {
+                    **context(request),
+                    "row": None,
+                    "name": name,
+                    "window": window,
+                    "result": None,
+                    "error": f"Unknown Managed instance {name!r}: "
+                    "it is unknown or was removed.",
+                },
+            )
+        if row.state != "running":
+            return templates.TemplateResponse(
+                request,
+                "history.html",
+                {
+                    **context(request),
+                    "row": row,
+                    "name": name,
+                    "window": window,
+                    "result": None,
+                    "error": "Attempt history is available for running "
+                    "managed instances only.",
+                },
+            )
+        try:
+            exec_result = await gw.attempt_history(row.container_id)
+        except (GatewayError, ValueError) as exc:
+            return templates.TemplateResponse(
+                request,
+                "history.html",
+                {
+                    **context(request),
+                    "row": row,
+                    "name": name,
+                    "window": window,
+                    "result": None,
+                    "error": f"Could not read the Attempt log: {exc}",
+                },
+            )
+        result = read_history(
+            exec_result.stdout, exec_result.returncode, now=time.time(), window=window
+        )
+        if not result.ok:
+            return templates.TemplateResponse(
+                request,
+                "history.html",
+                {
+                    **context(request),
+                    "row": row,
+                    "name": name,
+                    "window": window,
+                    "result": None,
+                    "error": result.error,
+                },
+            )
+        return templates.TemplateResponse(
+            request,
+            "history.html",
+            {
+                **context(request),
+                "row": row,
+                "name": name,
+                "window": window,
+                "result": result,
+                "error": None,
+            },
         )
 
     @app.get("/fleet", response_class=HTMLResponse)

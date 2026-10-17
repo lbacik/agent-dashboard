@@ -13,6 +13,7 @@ from agent_dashboard.gateway import (
     GatewayError,
     ManagedInstance,
     TelemetryTimeoutError,
+    argv_attempt_history,
     argv_list_instances,
     argv_telemetry,
     parse_ps_output,
@@ -46,8 +47,13 @@ def test_every_argv_producer_is_pinned():
     producers = {
         "argv_list_instances": argv_list_instances(),
         "argv_telemetry": argv_telemetry("abc123"),
+        "argv_attempt_history": argv_attempt_history("abc123"),
     }
-    assert set(producers) == {"argv_list_instances", "argv_telemetry"}
+    assert set(producers) == {
+        "argv_list_instances",
+        "argv_telemetry",
+        "argv_attempt_history",
+    }
     for argv in producers.values():
         assert isinstance(argv, list)
         assert all(isinstance(part, str) for part in argv)

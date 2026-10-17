@@ -3,7 +3,8 @@
 Builds a minimal image carrying the agent discovery label whose
 ``/usr/local/bin/agentctl`` is a stub script, then runs one container
 printing a good snapshot fixture and one behaving like an old agent
-without the ``telemetry`` subcommand.
+without the ``telemetry`` subcommand. A second image carries canned
+Attempt log files so the history exec is covered against a real daemon.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import pytest
 
 from agent_dashboard.collector import GOOD, NOT_SUPPORTED, classify_telemetry
 from agent_dashboard.gateway import AGENT_ROLE_LABEL, DockerGateway
+from agent_dashboard.history import read_history
 
 FIXTURE = (
     Path(__file__).parent
@@ -139,4 +141,99 @@ def test_telemetry_against_real_docker(tmp_path):
     finally:
         for name in containers:
             _run("docker", "rm", "-f", name)
+        _run("docker", "rmi", "-f", tag)
+
+
+HISTORY_DOCKERFILE = """\
+FROM python:3.13-slim
+LABEL io.github.lbacik.simple-coding-agent.role="agent"
+COPY logs /data/logs
+COPY state /data/state
+RUN useradd -m agent
+CMD ["sleep", "infinity"]
+"""
+
+HISTORY_ATTEMPT_DONE = {
+    "outcome": "complete",
+    "started_at": "2026-09-27T16:33:43.385090Z",
+    "completed_at": "2026-09-27T17:02:11.000000Z",
+    "duration_seconds": 1712,
+    "model_usage": {
+        "claude-x": {
+            "input_tokens": 120000,
+            "cache_read_input_tokens": 350000,
+            "cache_creation_input_tokens": 12000,
+            "output_tokens": 42000,
+            "cost_usd": 1.23,
+        }
+    },
+    "model_stop_reason": "end_turn",
+}
+
+HISTORY_ACTIVE_STARTED = "2026-10-16T10:00:00.000000Z"
+
+
+@docker
+def test_attempt_history_against_real_docker(tmp_path):
+    tag = f"agent-dashboard-history:{uuid.uuid4().hex[:12]}"
+    name = f"e2e-history-{uuid.uuid4().hex[:8]}"
+    try:
+        logs = tmp_path / "logs"
+        done_dir = logs / "98" / "2026-09-27T16-33-43.385090Z"
+        active_dir = logs / "98" / "2026-10-16T10-00-00.000000Z"
+        done_dir.mkdir(parents=True)
+        active_dir.mkdir(parents=True)
+        (done_dir / "attempt.json").write_text(json.dumps(HISTORY_ATTEMPT_DONE))
+        (active_dir / "attempt.json").write_text(
+            json.dumps({"started_at": HISTORY_ACTIVE_STARTED})
+        )
+        state = tmp_path / "state"
+        state.mkdir()
+        (state / "attempt.json").write_text(
+            json.dumps(
+                {
+                    "issue_number": 98,
+                    "branch": "agent/issue-98",
+                    "phase": "model_running",
+                    "started_at": HISTORY_ACTIVE_STARTED,
+                    "updated_at": HISTORY_ACTIVE_STARTED,
+                }
+            )
+        )
+        (tmp_path / "Dockerfile").write_text(HISTORY_DOCKERFILE)
+        build = _run("docker", "build", "-q", "-t", tag, str(tmp_path))
+        assert build.returncode == 0, build.stderr
+
+        started = _run("docker", "run", "-d", "--name", name, tag)
+        assert started.returncode == 0, started.stderr
+
+        import time
+
+        deadline = time.time() + 30
+        container_id = None
+        while time.time() < deadline:
+            found = asyncio.run(DockerGateway(timeout=10.0).list_instances())
+            ids = {inst.name: inst.container_id for inst in found}
+            if name in ids:
+                container_id = ids[name]
+                break
+            time.sleep(1)
+        assert container_id is not None
+
+        exec_result = asyncio.run(DockerGateway(timeout=10.0).attempt_history(container_id))
+        assert exec_result.returncode == 0
+        result = read_history(exec_result.stdout, exec_result.returncode, now=NOW)
+        assert result.ok
+        assert result.total == 2
+        assert result.unreadable == 0
+        active, done = result.summaries
+        assert active.issue == 98
+        assert active.outcome_text == "active"
+        assert active.cost_text == "n/a"
+        assert done.outcome_text == "complete"
+        assert done.cost_text == "$1.23"
+        assert done.input_text == "120,000"
+        assert done.duration_text == "28m 32s"
+    finally:
+        _run("docker", "rm", "-f", name)
         _run("docker", "rmi", "-f", tag)
