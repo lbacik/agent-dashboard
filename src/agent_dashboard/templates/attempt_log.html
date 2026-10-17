@@ -6,7 +6,7 @@
 </div>
 <div class="history-filters">
   <a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}/progress">Progress chart</a>
-  <a class="refresh" href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}{% if page_num > 1 %}?page={{ page_num }}{% endif %}">Refresh</a>
+  <a class="refresh" href="{{ refresh_url }}">Refresh</a>
 </div>
 {% if error and result is none %}
 <div class="banner" role="alert">{{ error }}</div>
@@ -35,7 +35,32 @@
 {% if result.unreadable %}
 <p class="hint">{{ result.unreadable }} log line(s) could not be read.</p>
 {% endif %}
-<div class="paging"><span>page {{ page_num }}/{{ pages }}, {{ result.events|length }} events</span>{% if page_num > 1 %} <a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}?page={{ page_num - 1 }}">&larr; prev</a>{% endif %}{% if page_num < pages %} <a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}?page={{ page_num + 1 }}">next &rarr;</a>{% endif %}</div>
+<form method="get" action="{{ attempt_url }}" class="history-filters log-filters">
+  <label>Level
+    <select name="level">
+      <option value=""{% if not level_value %} selected{% endif %}>All</option>
+      {% for lv in level_option_values %}{% if lv %}
+      <option value="{{ lv }}"{% if lv == level_value %} selected{% endif %}>{{ lv }}</option>
+      {% endif %}{% endfor %}
+    </select>
+  </label>
+  <label>Event
+    <select name="event">
+      <option value=""{% if not event_value %} selected{% endif %}>All</option>
+      {% for nm in event_name_options %}
+      <option value="{{ nm }}"{% if nm == event_value %} selected{% endif %}>{{ nm }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Detail contains <input type="text" name="q" value="{{ q_value }}"></label>
+  <button type="submit">Filter</button>
+  <a href="{{ reset_url }}">Reset</a>
+</form>
+{% if has_filters %}
+<p class="hint">Showing {{ filtered_total }} of {{ result.events|length }} events matching the current filters.</p>
+{% endif %}
+<div class="paging"><span>page {{ page_num }}/{{ pages }}, {{ filtered_total }} events</span>{% if prev_url %} <a href="{{ prev_url }}">&larr; prev</a>{% endif %}{% if next_url %} <a href="{{ next_url }}">next &rarr;</a>{% endif %}</div>
+{% if page_events %}
 <table class="fleet history">
   <thead>
     <tr><th>#</th><th>Time</th><th>Level</th><th>Event</th><th>Detail</th></tr>
@@ -52,7 +77,10 @@
     {% endfor %}
   </tbody>
 </table>
-<div class="paging"><span>page {{ page_num }}/{{ pages }}, {{ result.events|length }} events</span>{% if page_num > 1 %} <a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}?page={{ page_num - 1 }}">&larr; prev</a>{% endif %}{% if page_num < pages %} <a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}?page={{ page_num + 1 }}">next &rarr;</a>{% endif %}</div>
+{% else %}
+<p class="empty">No events match the current filters. <a href="{{ reset_url }}">Reset</a> to show the full stream.</p>
+{% endif %}
+<div class="paging"><span>page {{ page_num }}/{{ pages }}, {{ filtered_total }} events</span>{% if prev_url %} <a href="{{ prev_url }}">&larr; prev</a>{% endif %}{% if next_url %} <a href="{{ next_url }}">next &rarr;</a>{% endif %}</div>
 {% endif %}
 <p class="hint"><a href="/instances/{{ name | urlencode }}/history">Back to attempt history</a> · <a href="/">Back to the fleet</a> · data is read on demand; use Refresh for the latest.</p>
 {% endblock %}
