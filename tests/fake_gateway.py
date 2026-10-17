@@ -29,6 +29,7 @@ class FakeGateway:
         self._scripts: dict[str, TelemetryExec | Exception] = {}
         self._histories: dict[str, TelemetryExec | Exception] = {}
         self._events: dict[str, TelemetryExec | Exception] = {}
+        self._logs: dict[str, TelemetryExec | Exception] = {}
         self.delay = 0.0
         self.history_delay = 0.0
         self.history_delays: dict[str, float] = {}
@@ -36,6 +37,7 @@ class FakeGateway:
         self.telemetry_calls: list[str] = []
         self.history_calls: list[str] = []
         self.events_calls: list[tuple[str, str, str]] = []
+        self.log_calls: list[tuple[str, str, str]] = []
         self.in_flight = 0
         self.peak_in_flight = 0
         self.per_id_in_flight: dict[str, int] = {}
@@ -81,6 +83,16 @@ class FakeGateway:
 
     def set_events_error(self, container_id: str, error: Exception) -> None:
         self._events[container_id] = error
+
+    def set_log(
+        self, container_id: str, payload: dict, returncode: int = 0
+    ) -> None:
+        self._logs[container_id] = TelemetryExec(
+            stdout=json.dumps(payload).encode(), returncode=returncode
+        )
+
+    def set_log_error(self, container_id: str, error: Exception) -> None:
+        self._logs[container_id] = error
 
     async def list_instances(self) -> list[ManagedInstance]:
         self.list_calls += 1
@@ -148,6 +160,34 @@ class FakeGateway:
                         "total_events": 0,
                         "unreadable": 0,
                         "truncated": False,
+                    }
+                ).encode(),
+                returncode=0,
+            ),
+        )
+        if isinstance(scripted, Exception):
+            raise scripted
+        return scripted
+
+    async def attempt_log(
+        self, container_id: str, issue: int | str, started: str
+    ) -> TelemetryExec:
+        """One scripted full-log read; unscripted IDs report an empty stream."""
+        self.log_calls.append((container_id, str(issue), started))
+        scripted = self._logs.get(
+            container_id,
+            TelemetryExec(
+                stdout=json.dumps(
+                    {
+                        "layout": "attempt-log/v1",
+                        "issue": 98,
+                        "started": "2026-09-27T16-33-43.385090Z",
+                        "attempt": {"outcome": "complete"},
+                        "events": [],
+                        "total_events": 0,
+                        "unreadable": 0,
+                        "truncated": False,
+                        "file_size": 0,
                     }
                 ).encode(),
                 returncode=0,

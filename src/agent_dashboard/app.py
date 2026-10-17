@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from .attempt_log import format_file_mb, paginate, read_attempt_log
 from .charts import (
     CACHE_READ_SHARE_DEFINITION,
     OUTCOME_LABELS,
@@ -151,7 +152,12 @@ def create_app(
 ) -> FastAPI:
     fleet = state if state is not None else FleetState()
     cfg = settings if settings is not None else Settings()
-    gw = gateway if gateway is not None else DockerGateway(timeout=cfg.exec_timeout)
+    if gateway is not None:
+        gw = gateway
+    else:
+        gw = DockerGateway(
+            timeout=cfg.exec_timeout, log_timeout=cfg.log_exec_timeout
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -591,6 +597,100 @@ def create_app(
                 if result.limits.soft_threshold_tokens
                 else None
             ),
+        )
+
+    @app.get(
+        "/instances/{name}/attempts/{issue}/{started}",
+        response_class=HTMLResponse,
+    )
+    async def attempt_log_page(
+        request: Request, name: str, issue: str, started: str
+    ) -> Response:
+        """Attempt log page: header plus the full ordered event stream.
+
+        Static with manual refresh (no stream subscription): one attempt's
+        summary and events are read on demand with a single gateway exec,
+        running managed instances only. An unknown instance, a stopped
+        instance, an invalid reference, an unreadable log and an unrecognised
+        layout each render a clear message with status 200, never an error.
+        The stream is server-paged at 200 rows.
+        """
+
+        def log_page(
+            row,
+            error: str | None,
+            result=None,
+            dash_started: str = "",
+            page_events=(),
+            page_num: int = 1,
+            pages: int = 1,
+            file_mb_text: str | None = None,
+        ) -> Response:
+            return templates.TemplateResponse(
+                request,
+                "attempt_log.html",
+                {
+                    **context(request),
+                    "row": row,
+                    "name": name,
+                    "issue": issue,
+                    "started": started,
+                    "dash_started": dash_started,
+                    "result": result,
+                    "error": error,
+                    "page_events": page_events,
+                    "page_num": page_num,
+                    "pages": pages,
+                    "file_mb_text": file_mb_text,
+                },
+            )
+
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        row = find_row(rows, name)
+        if row is None:
+            return log_page(
+                None,
+                f"Unknown Managed instance {name!r}: it is unknown or was removed.",
+            )
+        if row.state != "running":
+            return log_page(
+                row,
+                "Attempt logs are available for running managed instances only.",
+            )
+        try:
+            number, dash = validate_attempt_ref(issue, started)
+        except ValueError as exc:
+            return log_page(row, f"Invalid attempt reference: {exc}")
+        try:
+            exec_result = await gw.attempt_log(row.container_id, number, dash)
+        except (GatewayError, ValueError) as exc:
+            return log_page(row, f"Could not read the Attempt log: {exc}")
+        result = read_attempt_log(
+            exec_result.stdout,
+            exec_result.returncode,
+            issue=number,
+            started=dash,
+        )
+        if not result.ok:
+            return log_page(
+                row,
+                result.error,
+                result=result,
+                dash_started=dash,
+                file_mb_text=format_file_mb(result.file_size),
+            )
+        page_events, page_num, pages = paginate(
+            result.events, request.query_params.get("page", "1")
+        )
+        return log_page(
+            row,
+            None,
+            result=result,
+            dash_started=dash,
+            page_events=page_events,
+            page_num=page_num,
+            pages=pages,
+            file_mb_text=format_file_mb(result.file_size),
         )
 
     @app.get("/fleet", response_class=HTMLResponse)

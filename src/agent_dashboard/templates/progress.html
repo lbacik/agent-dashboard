@@ -104,7 +104,7 @@
 </ul>
 {% endif %}
 {% endif %}
-<p class="hint"><a href="/instances/{{ name | urlencode }}/history">Back to attempt history</a> · <a href="/">Back to the fleet</a> · data is read on demand; use Refresh for the latest. <a class="refresh" href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ started | urlencode }}/progress">Refresh</a></p>
+<p class="hint"><a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ started | urlencode }}">Attempt log</a> · <a href="/instances/{{ name | urlencode }}/history">Back to attempt history</a> · <a href="/">Back to the fleet</a> · data is read on demand; use Refresh for the latest. <a class="refresh" href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ started | urlencode }}/progress">Refresh</a></p>
 <div class="chart-tip" id="chart-tip" hidden></div>
 <script src="/static/charts.js" defer></script>
 {% endblock %}

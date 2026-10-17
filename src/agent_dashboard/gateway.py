@@ -97,6 +97,155 @@ print(json.dumps(out))
 #: Layout marker the per-attempt events collector stamps on its output.
 ATTEMPT_EVENTS_LAYOUT = "attempt-events/v1"
 
+#: Layout marker the per-attempt full-log collector stamps on its output.
+ATTEMPT_LOG_LAYOUT = "attempt-log/v1"
+
+#: Cap on the ``agent_output.json`` bytes the full-log collector reads: the
+#: page shows the first events with a truncation notice past this size.
+LOG_STREAM_CAP = 4 * 1024 * 1024
+
+#: Default bound for one Attempt log read (bigger payloads than telemetry).
+LOG_EXEC_TIMEOUT = 15.0
+
+#: At most this many Attempt log operations run at once; the semaphore lives
+#: on the gateway, separate from the poll cycle's ``max_concurrent_execs``.
+LOG_MAX_CONCURRENT = 4
+
+#: Collector run inside the managed instance by ``argv_attempt_log``.
+#: A fixed script (never interpolated with operator input): the attempt
+#: reference travels as two argv arguments that the script re-validates
+#: with the verified name shapes before joining any path, so the daemon's
+#: ``..`` resolution cannot escape ``/data/logs``. It reads the attempt's
+#: ``attempt.json`` summary (``None`` when missing: in progress or crashed)
+#: and the full ordered ``agent_output.json`` event stream up to
+#: :data:`LOG_STREAM_CAP` bytes. Lines that do not parse become synthetic
+#: ``unparsable_line`` WARNING rows inline, so row numbers keep matching the
+#: file; past the cap the head is kept with ``truncated`` set and the true
+#: ``file_size`` reported for the notice.
+ATTEMPT_LOG_SCRIPT = """\
+import json
+import os
+import re
+import sys
+
+BASE = "/data/logs"
+ISSUE_RE = re.compile(r"[0-9]+\\Z")
+STARTED_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}\\.[0-9]+Z\\Z")
+MAX_ATTEMPT_BYTES = 1000000
+MAX_EVENTS_BYTES = 4194304
+
+
+def read_capped(path, limit):
+    with open(path, "rb") as handle:
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("file too large")
+    return data
+
+
+def unknown(reason):
+    print(json.dumps({"layout": "unknown", "reason": reason}))
+    raise SystemExit(0)
+
+
+args = sys.argv[1:]
+if len(args) != 2:
+    unknown("expected issue and started arguments")
+issue, started = args
+if not ISSUE_RE.match(issue) or not STARTED_RE.match(started):
+    unknown("invalid attempt reference")
+if not os.path.isdir(BASE):
+    unknown("missing /data/logs")
+attempt_dir = os.path.join(BASE, issue, started)
+attempt = None
+unreadable = 0
+try:
+    record = json.loads(
+        read_capped(os.path.join(attempt_dir, "attempt.json"), MAX_ATTEMPT_BYTES).decode(
+            "utf-8"
+        )
+    )
+except OSError:
+    pass
+except ValueError:
+    unreadable += 1
+else:
+    if isinstance(record, dict):
+        attempt = record
+    else:
+        unreadable += 1
+events = []
+total_events = 0
+truncated = False
+file_size = 0
+events_path = os.path.join(attempt_dir, "agent_output.json")
+try:
+    file_size = os.path.getsize(events_path)
+except OSError:
+    pass
+else:
+    try:
+        raw = read_capped(events_path, MAX_EVENTS_BYTES).decode("utf-8")
+    except ValueError:
+        truncated = True
+        with open(events_path, "rb") as handle:
+            raw = handle.read(MAX_EVENTS_BYTES).decode("utf-8", errors="replace")
+    except OSError:
+        unreadable += 1
+        raw = None
+    if raw is not None:
+        for line in raw.splitlines():
+            if not line.strip():
+                continue
+            total_events += 1
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                events.append(
+                    {
+                        "timestamp": None,
+                        "level": "WARNING",
+                        "event": "unparsable_line",
+                        "detail": line[:200],
+                    }
+                )
+                continue
+            if not isinstance(entry, dict):
+                events.append(
+                    {
+                        "timestamp": None,
+                        "level": "WARNING",
+                        "event": "unparsable_line",
+                        "detail": line[:200],
+                    }
+                )
+                continue
+            events.append(
+                {
+                    "timestamp": entry.get("timestamp"),
+                    "level": entry.get("level"),
+                    "event": entry.get("event"),
+                    "detail": entry.get("detail"),
+                }
+            )
+print(
+    json.dumps(
+        {
+            "layout": "attempt-log/v1",
+            "issue": int(issue),
+            "started": started,
+            "attempt": attempt,
+            "events": events,
+            "total_events": total_events,
+            "unreadable": unreadable,
+            "truncated": truncated,
+            "file_size": file_size,
+        }
+    )
+)
+"""
+
+
 #: Collector run inside the managed instance by ``argv_attempt_events``.
 #: A fixed script (never interpolated with operator input): the attempt
 #: reference travels as two argv arguments that the script re-validates
@@ -239,6 +388,10 @@ class DiscoveryTimeoutError(GatewayError):
 
 
 class TelemetryTimeoutError(GatewayError):
+    pass
+
+
+class AttemptLogTimeoutError(GatewayError):
     pass
 
 
@@ -396,16 +549,50 @@ def parse_ps_output(output: str) -> list[ManagedInstance]:
     return instances
 
 
+def argv_attempt_log(container_id: str, issue: int | str, started: str) -> list[str]:
+    """Argv for one Attempt log read: a single attempt's full event stream.
+
+    A single ``docker exec`` runs the fixed :data:`ATTEMPT_LOG_SCRIPT`
+    with the instance's Python; besides the validated container ID the only
+    variable parts are the validated attempt reference (issue digits plus
+    the dash-form start), passed as plain argv arguments, never a path.
+    """
+    validate_container_id(container_id)
+    number, dash_started = validate_attempt_ref(issue, started)
+    return [
+        "docker",
+        "exec",
+        "--user",
+        AGENT_USER,
+        container_id,
+        "python",
+        "-c",
+        ATTEMPT_LOG_SCRIPT,
+        str(number),
+        dash_started,
+    ]
+
+
 class DockerGateway:
     """Runs discovery and telemetry execs through the Docker CLI.
 
-    ``timeout`` bounds every Docker call: discovery and each telemetry exec.
+    ``timeout`` bounds discovery, telemetry, history and events execs;
+    ``log_timeout`` bounds the Attempt log full-stream read, which moves
+    more data. At most :data:`LOG_MAX_CONCURRENT` Attempt log reads run at
+    once on ``_log_semaphore``, separate from the poll cycle's
+    ``max_concurrent_execs``.
     """
 
-    def __init__(self, timeout: float = 5.0) -> None:
+    def __init__(
+        self, timeout: float = 5.0, log_timeout: float = LOG_EXEC_TIMEOUT
+    ) -> None:
         if timeout <= 0:
             raise ValueError(f"timeout must be positive: {timeout}")
+        if log_timeout <= 0:
+            raise ValueError(f"log timeout must be positive: {log_timeout}")
         self.timeout = timeout
+        self.log_timeout = log_timeout
+        self._log_semaphore = asyncio.Semaphore(LOG_MAX_CONCURRENT)
 
     def argv(self) -> list[str]:
         return argv_list_instances()
@@ -516,3 +703,34 @@ class DockerGateway:
                 f"docker exec timed out after {self.timeout:g} s"
             ) from exc
         return TelemetryExec(stdout=stdout, returncode=proc.returncode)
+
+    async def attempt_log(
+        self, container_id: str, issue: int | str, started: str
+    ) -> TelemetryExec:
+        """Run one Attempt log read for a single attempt's full event stream.
+
+        Like :meth:`telemetry` the exit code is reported, not raised: the
+        Attempt log reader maps the stdout into the header and the ordered
+        event rows. The read is bounded by ``log_timeout`` (not ``timeout``)
+        and at most :data:`LOG_MAX_CONCURRENT` such reads run at once on the
+        log semaphore, separate from the poll cycle's ``max_concurrent_execs``.
+        An invalid container ID or attempt reference raises
+        :class:`ValueError` before anything is spawned.
+        """
+        argv = argv_attempt_log(container_id, issue, started)
+        async with self._log_semaphore:
+            proc = await self._run(argv)
+            try:
+                stdout, _stderr = await asyncio.wait_for(
+                    proc.communicate(), self.log_timeout
+                )
+            except TimeoutError as exc:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
+                raise AttemptLogTimeoutError(
+                    f"docker exec timed out after {self.log_timeout:g} s"
+                ) from exc
+            return TelemetryExec(stdout=stdout, returncode=proc.returncode)
