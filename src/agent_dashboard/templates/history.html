@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="history-head">
+  <h2>Attempt history</h2>
+  <p class="subtitle">Managed instance {{ name }}{% if row is not none %} · {{ row.state }}{% endif %}</p>
+</div>
+<div class="history-filters">
+  <span>Window:</span>
+  <a href="/instances/{{ name | urlencode }}/history?window=7"{% if window == "7" %} class="current"{% endif %}>Last 7 days</a>
+  <a href="/instances/{{ name | urlencode }}/history?window=30"{% if window == "30" %} class="current"{% endif %}>Last 30 days</a>
+  <a href="/instances/{{ name | urlencode }}/history?window=all"{% if window == "all" %} class="current"{% endif %}>All</a>
+  <a class="refresh" href="/instances/{{ name | urlencode }}/history?window={{ window }}">Refresh</a>
+</div>
+{% if error %}
+<div class="banner" role="alert">{{ error }}</div>
+{% elif result is not none and result.total == 0 %}
+<p class="empty">No attempts recorded yet for this Managed instance.</p>
+{% elif result is not none %}
+<p class="hint">Showing {{ result.summaries|length }} of {{ result.total }} attempts{% if result.unreadable %} · {{ result.unreadable }} attempt file(s) could not be read{% endif %}.</p>
+<table class="fleet history">
+  <thead>
+    <tr><th>Issue</th><th>Started</th><th>Duration</th><th>Outcome</th><th>Model stop reason</th><th>Cost</th><th>Input</th><th>Cache read</th><th>Cache creation</th><th>Output</th></tr>
+  </thead>
+  <tbody>
+    {% for attempt in result.summaries %}
+    <tr{% if attempt.active %} class="active-row"{% endif %}>
+      <td><div class="inst-name">#{{ attempt.issue }}</div>{% if attempt.issue_title %}<div class="inst-repo">{{ attempt.issue_title }}</div>{% endif %}</td>
+      <td>{{ attempt.started_at }}</td>
+      <td>{{ attempt.duration_text }}</td>
+      <td>{{ attempt.outcome_text }}</td>
+      <td>{{ attempt.stop_reason_text }}</td>
+      <td>{{ attempt.cost_text }}</td>
+      <td>{{ attempt.input_text }}</td>
+      <td>{{ attempt.cache_read_text }}</td>
+      <td>{{ attempt.cache_creation_text }}</td>
+      <td>{{ attempt.output_text }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+<p class="hint"><a href="/">Back to the fleet</a> · data is read on demand; use Refresh for the latest.</p>
+{% endblock %}

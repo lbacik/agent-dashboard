@@ -19,3 +19,11 @@ _Avoid_: Summary, status message, state
 **Attention rank**:
 The order in which the dashboard lists managed instances: those needing the operator first (unreachable, recovery hold, consecutive errors, handoff in progress), then those approaching the soft threshold, then working, idle, and offline ones.
 _Avoid_: Priority, severity, sort order
+
+**Attempt log**:
+One implementation attempt's event history on the managed instance's `/data` volume (`/data/logs/<issue>/<started_at>/`): the `attempt.json` summary, the `agent_output.json` event stream, and the numbered evidence files.
+_Avoid_: Session, run log
+
+**Evidence file**:
+One numbered file an Attempt log event points at (`NNNN_tool_call.json`, `NNNN_tool_result.json`, `NNNN_model_response.txt`); the tool name comes only from the event's detail, never from the file.
+_Avoid_: Attachment, artifact

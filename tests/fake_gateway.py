@@ -27,9 +27,11 @@ class FakeGateway:
         self._rows = list(rows or [])
         self._error = error
         self._scripts: dict[str, TelemetryExec | Exception] = {}
+        self._histories: dict[str, TelemetryExec | Exception] = {}
         self.delay = 0.0
         self.list_calls = 0
         self.telemetry_calls: list[str] = []
+        self.history_calls: list[str] = []
         self.in_flight = 0
         self.peak_in_flight = 0
         self.per_id_in_flight: dict[str, int] = {}
@@ -56,6 +58,16 @@ class FakeGateway:
     ) -> None:
         self._scripts[container_id] = TelemetryTimeoutError(message)
 
+    def set_history(
+        self, container_id: str, payload: dict, returncode: int = 0
+    ) -> None:
+        self._histories[container_id] = TelemetryExec(
+            stdout=json.dumps(payload).encode(), returncode=returncode
+        )
+
+    def set_history_error(self, container_id: str, error: Exception) -> None:
+        self._histories[container_id] = error
+
     async def list_instances(self) -> list[ManagedInstance]:
         self.list_calls += 1
         if self._error is not None:
@@ -79,3 +91,24 @@ class FakeGateway:
         finally:
             self.in_flight -= 1
             self.per_id_in_flight[container_id] -= 1
+
+    async def attempt_history(self, container_id: str) -> TelemetryExec:
+        """One scripted history exec; unscripted IDs report an empty log."""
+        self.history_calls.append(container_id)
+        scripted = self._histories.get(
+            container_id,
+            TelemetryExec(
+                stdout=json.dumps(
+                    {
+                        "layout": "attempt-logs/v1",
+                        "attempts": [],
+                        "active_started_at": None,
+                        "unreadable": 0,
+                    }
+                ).encode(),
+                returncode=0,
+            ),
+        )
+        if isinstance(scripted, Exception):
+            raise scripted
+        return scripted

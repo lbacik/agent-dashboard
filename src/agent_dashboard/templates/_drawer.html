@@ -33,6 +33,7 @@
     </div>
     <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
   </div>
+  <p class="drawer-history-link"><a href="/instances/{{ row.name | urlencode }}/history">Attempt history</a></p>
   {% if d.unsupported_schema is not none %}
   <section class="drawer-section">
     <h3>Current attempt</h3>
