@@ -317,7 +317,7 @@
   <tbody>
     {% for attempt in result.summaries %}
     <tr{% if attempt.active %} class="active-row"{% endif %}>
-      <td><div class="inst-name">#{{ attempt.issue }}</div>{% if attempt.issue_title %}<div class="inst-repo">{{ attempt.issue_title }}</div>{% endif %}</td>
+      <td><div class="inst-name"><a href="/instances/{{ name | urlencode }}/attempts/{{ attempt.issue }}/{{ attempt.started_at | replace(":", "-") | urlencode }}">#{{ attempt.issue }}</a></div>{% if attempt.issue_title %}<div class="inst-repo">{{ attempt.issue_title }}</div>{% endif %}</td>
       <td>{{ attempt.started_at }}</td>
       <td>{{ attempt.duration_text }}</td>
       <td>{{ attempt.outcome_text }}</td>

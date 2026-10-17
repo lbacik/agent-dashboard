@@ -11,6 +11,7 @@ DEFAULT_PORT = 8000
 DEFAULT_POLL_INTERVAL = 5.0
 MIN_POLL_INTERVAL = 2.0
 DEFAULT_EXEC_TIMEOUT = 5.0
+DEFAULT_LOG_EXEC_TIMEOUT = 15.0
 DEFAULT_MAX_CONCURRENT_EXECS = 4
 
 ENV_PREFIX = "AGENT_DASHBOARD_"
@@ -25,6 +26,7 @@ class Settings:
     port: int = DEFAULT_PORT
     poll_interval: float = DEFAULT_POLL_INTERVAL
     exec_timeout: float = DEFAULT_EXEC_TIMEOUT
+    log_exec_timeout: float = DEFAULT_LOG_EXEC_TIMEOUT
     max_concurrent_execs: int = DEFAULT_MAX_CONCURRENT_EXECS
     allow_non_loopback: bool = False
     allowed_hosts: frozenset[str] = field(default_factory=frozenset)
@@ -90,6 +92,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--exec-timeout", type=float, default=None, help="Docker exec timeout in seconds."
     )
     parser.add_argument(
+        "--log-exec-timeout",
+        type=float,
+        default=None,
+        help="Attempt log read timeout in seconds.",
+    )
+    parser.add_argument(
         "--max-concurrent-execs", type=int, default=None, help="Max concurrent execs."
     )
     parser.add_argument(
@@ -122,6 +130,11 @@ def load_settings(argv: list[str] | None = None) -> Settings:
         if args.exec_timeout is not None
         else float(_env("EXEC_TIMEOUT") or DEFAULT_EXEC_TIMEOUT)
     )
+    log_exec_timeout = (
+        args.log_exec_timeout
+        if args.log_exec_timeout is not None
+        else float(_env("LOG_EXEC_TIMEOUT") or DEFAULT_LOG_EXEC_TIMEOUT)
+    )
     max_execs = (
         args.max_concurrent_execs
         if args.max_concurrent_execs is not None
@@ -133,6 +146,8 @@ def load_settings(argv: list[str] | None = None) -> Settings:
         raise ValueError(f"port out of range: {port}")
     if exec_timeout <= 0:
         raise ValueError(f"exec timeout must be positive: {exec_timeout}")
+    if log_exec_timeout <= 0:
+        raise ValueError(f"log exec timeout must be positive: {log_exec_timeout}")
     if max_execs < 1:
         raise ValueError(f"max concurrent execs must be >= 1: {max_execs}")
 
@@ -149,6 +164,7 @@ def load_settings(argv: list[str] | None = None) -> Settings:
         port=port,
         poll_interval=poll_interval,
         exec_timeout=exec_timeout,
+        log_exec_timeout=log_exec_timeout,
         max_concurrent_execs=max_execs,
         allow_non_loopback=allow_non_loopback,
         allowed_hosts=allowed_hosts,

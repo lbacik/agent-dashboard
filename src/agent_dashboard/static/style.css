@@ -228,6 +228,14 @@ ul.events li { padding: 0.3rem 0; border-bottom: 1px dotted var(--line); }
 .ev-level { font-weight: 600; }
 .ev-name { font-family: ui-monospace, monospace; }
 
+/* Attempt log levels: known levels carry a colour, unknown levels are plain. */
+.lvl-INFO { color: var(--info-ink); }
+.lvl-WARNING { color: var(--warn-ink); }
+.lvl-ERROR { color: var(--danger-ink); }
+
+.attempt-title { margin: 0 0 0.5rem; font-size: 1.1rem; }
+.paging { display: flex; gap: 0.75rem; align-items: baseline; margin: 1rem 0; color: var(--muted); font-size: 0.9rem; }
+
 .history-head h2 { margin: 0 0 0.25rem; font-size: 1.35rem; }
 .history-filters {
   display: flex;

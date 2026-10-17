@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="history-head">
+  <h2>Attempt log</h2>
+  <p class="subtitle">instances / <a href="/instances/{{ name | urlencode }}/history">{{ name }}</a> / logs / #{{ result.issue if result is not none else issue }} / {{ result.started_at if result is not none else started }}</p>
+</div>
+<div class="history-filters">
+  <a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}/progress">Progress chart</a>
+  <a class="refresh" href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}{% if page_num > 1 %}?page={{ page_num }}{% endif %}">Refresh</a>
+</div>
+{% if error and result is none %}
+<div class="banner" role="alert">{{ error }}</div>
+{% elif error %}
+<div class="banner" role="alert">{{ error }}</div>
+{% if result.attempt_missing %}
+<p class="hint">no attempt.json: in progress or crashed</p>
+{% elif result.issue_title %}
+<p class="hint">{{ result.issue_title }} · outcome {{ result.outcome_text }} · started {{ result.started_at }}</p>
+{% endif %}
+{% else %}
+<h3 class="attempt-title">{{ result.issue_title if result.issue_title else "Issue #%d" % result.issue }}</h3>
+<dl class="facts">
+  <div><dt>Outcome</dt><dd>{{ result.outcome_text }}{% if result.active %} (still running){% endif %}</dd></div>
+  <div><dt>Started</dt><dd>{{ result.started_at }}</dd></div>
+  <div><dt>Duration</dt><dd>{{ result.duration_text }}</dd></div>
+  <div><dt>Cost</dt><dd>{{ result.cost_text }}</dd></div>
+  <div><dt>Agent version</dt><dd>{{ result.agent_version if result.agent_version else "n/a" }}</dd></div>
+  <div><dt>Pull request</dt><dd>{% if result.pr_number is not none %}#{{ result.pr_number }}{% if result.pr_url %} (<a href="{{ result.pr_url }}">{{ result.pr_url }}</a>){% endif %}{% else %}n/a{% endif %}</dd></div>
+  <div><dt>Events</dt><dd>{{ result.total_events }}</dd></div>
+</dl>
+{% if result.attempt_missing %}
+<p class="hint">no attempt.json: in progress or crashed</p>
+{% endif %}
+{% if result.truncated %}
+<p class="hint" role="note">event stream truncated: showing the first {{ result.total_events }} events of a {{ file_mb_text }} file</p>
+{% endif %}
+{% if result.unreadable %}
+<p class="hint">{{ result.unreadable }} log line(s) could not be read.</p>
+{% endif %}
+<div class="paging"><span>page {{ page_num }}/{{ pages }}, {{ result.events|length }} events</span>{% if page_num > 1 %} <a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}?page={{ page_num - 1 }}">&larr; prev</a>{% endif %}{% if page_num < pages %} <a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}?page={{ page_num + 1 }}">next &rarr;</a>{% endif %}</div>
+<table class="fleet history">
+  <thead>
+    <tr><th>#</th><th>Time</th><th>Level</th><th>Event</th><th>Detail</th></tr>
+  </thead>
+  <tbody>
+    {% for ev in page_events %}
+    <tr>
+      <td>{{ ev.seq }}</td>
+      <td>{{ ev.time_text }}</td>
+      <td>{% if ev.level_known %}<span class="ev-level lvl-{{ ev.level }}">{{ ev.level }}</span>{% else %}{{ ev.level }}{% endif %}</td>
+      <td>{{ ev.event }}</td>
+      <td>{{ ev.detail }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<div class="paging"><span>page {{ page_num }}/{{ pages }}, {{ result.events|length }} events</span>{% if page_num > 1 %} <a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}?page={{ page_num - 1 }}">&larr; prev</a>{% endif %}{% if page_num < pages %} <a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}?page={{ page_num + 1 }}">next &rarr;</a>{% endif %}</div>
+{% endif %}
+<p class="hint"><a href="/instances/{{ name | urlencode }}/history">Back to attempt history</a> · <a href="/">Back to the fleet</a> · data is read on demand; use Refresh for the latest.</p>
+{% endblock %}
