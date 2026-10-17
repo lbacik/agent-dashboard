@@ -53,6 +53,7 @@ from .charts import (
 from .config import Settings
 from .fleet import FleetState, poll_forever
 from .gateway import (
+    EVIDENCE_PREVIEW_CAP,
     DockerGateway,
     GatewayError,
     validate_attempt_ref,
@@ -897,6 +898,7 @@ def create_app(
             None,
             filename=file,
             size_text=f"{len(result.content)} B",
+            cap_text=f"{EVIDENCE_PREVIEW_CAP // 1024} KB",
             total_size=result.total_size,
             truncated=result.truncated,
             raw=raw,

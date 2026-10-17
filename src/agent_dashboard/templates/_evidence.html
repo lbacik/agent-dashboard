@@ -11,7 +11,7 @@
     {% endif %}
   </div>
   {% if truncated %}
-  <p class="evidence-truncated" role="note"><strong>truncated at 256 KB, {{ total_size }} B total</strong></p>
+  <p class="evidence-truncated" role="note"><strong>truncated at {{ cap_text }}, {{ total_size }} B total</strong></p>
   {% endif %}
   <pre class="evidence-content">{{ text }}</pre>
 </div>

@@ -686,7 +686,7 @@ def test_fragment_renders_formatted_json_with_size_bar():
     assert "?raw=1" in body
     # Formatted: pretty-printed JSON.
     assert "&#34;tool&#34;: &#34;Bash&#34;" in body
-    assert "truncated at 256 KB" not in body
+    assert f"truncated at {EVIDENCE_PREVIEW_CAP // 1024} KB" not in body
     assert gateway.file_calls == [("id-work", "98", STARTED_DASH, FILE_JSON)]
 
 
@@ -714,7 +714,7 @@ def test_fragment_over_cap_shows_truncation_marker_with_true_total():
         },
     )
     body = client.get(f"/instances/work/attempts/98/{STARTED_DASH}/files/{FILE_JSON}").text
-    assert f"truncated at 256 KB, {total} B total" in body
+    assert f"truncated at {EVIDENCE_PREVIEW_CAP // 1024} KB, {total} B total" in body
     assert f"{EVIDENCE_PREVIEW_CAP} B" in body
 
 
@@ -835,3 +835,27 @@ def test_attempt_page_renders_plain_rows_without_references():
     assert body.count('id="evidence-slot-') == 1
     assert '<span class="ev-file">0001_model_response.txt</span>' in body
     assert ">reply<" in body
+
+
+def test_attempt_page_open_link_carries_slot_wiring_for_toggle():
+    events = [
+        _ev("tool_call", "Bash [main] -> 0003_tool_call.json"),
+        _ev("model_response", "-> 0001_model_response.txt (chars=85)"),
+    ]
+    client, _, _ = make_file_client([("work", "running")], {"id-work": _log_with(*events)})
+    body = client.get(f"/instances/work/attempts/98/{STARTED_DASH}").text
+    # Each evidence row's open action points at the fragment route and at
+    # the slot div directly under its row; the toggle script loads the
+    # fragment on first activation and clears the slot on the second.
+    assert (
+        'href="/instances/work/attempts/98/'
+        f'{STARTED_DASH}/files/{FILE_JSON}"' in body
+    )
+    assert 'data-slot="evidence-slot-1"' in body
+    assert 'data-label="open"' in body
+    assert 'data-label="reply"' in body
+    assert 'id="evidence-slot-1"' in body
+    assert 'id="evidence-slot-2"' in body
+    assert "toggleEvidence" in body
+    assert 'slot.innerHTML = ""' in body
+    assert 'data-open' in body

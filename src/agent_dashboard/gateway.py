@@ -1031,6 +1031,10 @@ class DockerGateway:
             # The preview stops at the cap, so a trailing second member
             # cannot be checked; the buffered head always holds the full
             # header blocks, which tarfile confirms as one regular file.
+            # This is deliberate: the spec's kill-after-cap rule takes
+            # precedence over its exactly-one-member rule on the truncated
+            # path, because confirming a trailer would mean reading past
+            # the cap. Full (unkilled) reads still enforce exactly one.
             first = _tar_first_member(data)
             if first is None or not first.isfile():
                 raise GatewayError(
