@@ -25,6 +25,7 @@ from .attempt_log import (
     event_names,
     filter_events,
     format_file_mb,
+    format_preview,
     level_options,
     paginate,
     read_attempt_log,
@@ -51,7 +52,13 @@ from .charts import (
 )
 from .config import Settings
 from .fleet import FleetState, poll_forever
-from .gateway import DockerGateway, GatewayError, validate_attempt_ref
+from .gateway import (
+    EVIDENCE_PREVIEW_CAP,
+    DockerGateway,
+    GatewayError,
+    validate_attempt_ref,
+    validate_log_file,
+)
 from .history import (
     DEFAULT_WINDOW,
     VALID_WINDOWS,
@@ -808,6 +815,96 @@ def create_app(
             refresh_url=page_url(page_num if page_num > 1 else None),
             prev_url=page_url(page_num - 1) if page_num > 1 else None,
             next_url=page_url(page_num + 1) if page_num < pages else None,
+        )
+
+    @app.get(
+        "/instances/{name}/attempts/{issue}/{started}/files/{file}",
+        response_class=HTMLResponse,
+    )
+    async def attempt_file_fragment(
+        request: Request, name: str, issue: str, started: str, file: str
+    ) -> Response:
+        """One Evidence file preview fragment, loaded under its event row.
+
+        The ``open`` (``reply`` for model responses) action on an event row
+        fetches this into the slot directly under the row; activating it
+        again closes the slot. The file name passes the read allow-list here
+        and again inside the gateway: a failure returns 404 without any
+        Docker call. Every other problem (unknown instance, stopped
+        instance, invalid reference, gateway error, missing file,
+        unrecognised tar shape) renders a clear message with status 200,
+        never an error. ``?raw=1`` shows the text as read; the default view
+        pretty-prints JSON and falls back to raw text past the 256 KiB cap
+        or for non-JSON content. All file text is untrusted agent output and
+        renders through autoescape only.
+        """
+
+        def fragment(error: str | None, status: int = 200, **extra) -> Response:
+            return templates.TemplateResponse(
+                request,
+                "_evidence.html",
+                {
+                    "request": request,
+                    "name": name,
+                    "issue": issue,
+                    "started": started,
+                    "error": error,
+                    **extra,
+                },
+                status_code=status,
+            )
+
+        def file_url(dash: str, filename: str, *, raw: bool = False) -> str:
+            base = (
+                f"/instances/{quote(name, safe='')}"
+                f"/attempts/{quote(issue, safe='')}"
+                f"/{quote(dash, safe='')}"
+                f"/files/{quote(filename, safe='')}"
+            )
+            return base + ("?raw=1" if raw else "")
+
+        try:
+            validate_log_file(file)
+        except ValueError:
+            return fragment(f"Unknown Evidence file {file!r}.", status=404)
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        row = find_row(rows, name)
+        if row is None:
+            return fragment(
+                f"Unknown Managed instance {name!r}: it is unknown or was removed."
+            )
+        if row.state != "running":
+            return fragment(
+                "Attempt logs are available for running managed instances only."
+            )
+        try:
+            number, dash = validate_attempt_ref(issue, started)
+        except ValueError as exc:
+            return fragment(f"Invalid attempt reference: {exc}")
+        raw = request.query_params.get("raw") == "1"
+        try:
+            result = await gw.read_file(row.container_id, number, dash, file)
+        except FileNotFoundError:
+            return fragment(
+                f"Evidence file {file} was not found in this attempt."
+            )
+        except (GatewayError, ValueError) as exc:
+            return fragment(f"Could not show the Evidence file: {exc}")
+        if raw:
+            text = result.content.decode("utf-8", errors="replace")
+        else:
+            text = format_preview(file, result.content, result.truncated)
+        return fragment(
+            None,
+            filename=file,
+            size_text=f"{len(result.content)} B",
+            cap_text=f"{EVIDENCE_PREVIEW_CAP // 1024} KB",
+            total_size=result.total_size,
+            truncated=result.truncated,
+            raw=raw,
+            text=text,
+            raw_url=file_url(dash, file, raw=True),
+            formatted_url=file_url(dash, file),
         )
 
     @app.get("/fleet", response_class=HTMLResponse)

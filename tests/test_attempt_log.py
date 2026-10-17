@@ -699,7 +699,17 @@ def test_log_page_renders_header_and_paged_table():
     assert "https://example.test/pr/12" in body
     assert "page 1/1, 3 events" in body
     assert "tool_call" in body
-    assert "Bash [main] -&gt; 0003_tool_call.json" in body or "Bash [main]" in body
+    # Evidence rows show the tool name, the thread tag, the file name and
+    # the open action, with a slot for the inline preview under the row.
+    assert '<span class="ev-tool">Bash</span>' in body
+    assert '<span class="ev-thread">[main]</span>' in body
+    assert '<span class="ev-file">0003_tool_call.json</span>' in body
+    assert ">open<" in body
+    assert '<span class="ev-thread">[subagent:abc123]</span>' in body
+    assert '<span class="ev-file">0001_model_response.txt</span>' in body
+    assert ">reply<" in body
+    assert 'id="evidence-slot-1"' in body
+    assert "toggleEvidence" in body
     assert "<th>#</th>" in body
     assert "Progress chart" in body
     assert f"/instances/work/attempts/98/{STARTED_DASH}/progress" in body
