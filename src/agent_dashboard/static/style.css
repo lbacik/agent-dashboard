@@ -356,6 +356,38 @@ tr.active-row td { background: #f2f6fb; }
 .timeline .mark.no-cost { opacity: 0.45; }
 .timeline .mark.no-cost:focus, .timeline .mark.no-cost:hover { opacity: 1; }
 
+/* Attempt progress chart: two normalized lines over elapsed time. Turns
+   are circles joined by a solid line; budget marks are squares joined by
+   a second line. Limit reference lines are dashed with text labels and
+   handoffs are vertical markers with a flag, so nothing relies on colour
+   alone (every mark also carries a tooltip). */
+.prog-line { stroke-width: 2; }
+.prog-line.prog-turns { stroke: var(--oc-handoff); }
+.prog-line.prog-budget { stroke: var(--oc-other); stroke-dasharray: 7 3; }
+.timeline .mark.prog-turn-mark circle { fill: var(--oc-handoff); }
+.timeline .mark.prog-budget-mark rect { fill: var(--oc-other); }
+.timeline .threshold-v {
+  stroke: var(--danger-ink);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
+.timeline .threshold.budget { stroke: var(--oc-other); }
+.timeline .threshold.soft { stroke: var(--oc-incomplete); }
+.timeline .handoff { stroke: var(--oc-handoff); stroke-width: 2; stroke-dasharray: 3 3; }
+.timeline .handoff-flag { fill: var(--oc-handoff); }
+.prog-legend .line-swatch {
+  display: inline-block;
+  width: 1.4rem;
+  height: 0;
+  border-top: 3px solid;
+  vertical-align: middle;
+}
+.prog-legend .line-swatch.prog-turns { border-color: var(--oc-handoff); }
+.prog-legend .line-swatch.prog-budget { border-color: var(--oc-other); }
+.prog-legend .line-swatch.prog-timeout { border-color: var(--danger-ink); }
+.prog-legend .line-swatch.prog-handoff { border-color: var(--oc-handoff); }
+ul.events.handoffs { margin-top: 1rem; }
+
 .chart-tip {
   position: fixed;
   z-index: 40;

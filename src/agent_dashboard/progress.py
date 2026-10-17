@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from .charts import format_tokens
 from .gateway import ATTEMPT_EVENTS_LAYOUT
 from .history import LAYOUT_NOT_RECOGNISED, format_duration
 
@@ -284,7 +283,11 @@ def read_progress(
     readings.sort(
         key=lambda r: (r.timestamp is None, r.timestamp or 0.0, r.elapsed or 0.0)
     )
-    stamps = [(r.timestamp, r.elapsed) for r in readings if r.timestamp is not None and r.elapsed is not None]
+    stamps = [
+        (r.timestamp, r.elapsed)
+        for r in readings
+        if r.timestamp is not None and r.elapsed is not None
+    ]
     stamps.sort(key=lambda pair: pair[0])
     handoffs: list[HandoffMark] = []
     for name, raw_timestamp in handoff_events:
@@ -329,4 +332,148 @@ def read_progress(
         total_events=total,
         unreadable=unreadable,
         truncated=payload.get("truncated") is True,
+    )
+
+
+@dataclass(frozen=True)
+class ProgressPoint:
+    """One chart mark: fractional time against a fractional value."""
+
+    x_frac: float
+    value_frac: float
+    elapsed: float
+    value: float
+
+
+@dataclass(frozen=True)
+class ProgressSeries:
+    """Turns and budget over elapsed time, scaled for inline SVG.
+
+    ``turns``/``budgets`` hold only readings with both coordinates known;
+    ``skipped`` counts the readings left out. ``x_max`` stretches to the
+    timeout when known so a finished attempt never fills the plot. Peaks
+    include the configured limits for the same reason. ``handoff_fracs``
+    holds the placed handoffs on the time axis; ``unplaced_handoffs``
+    counts the handoff events without a timestamp.
+    """
+
+    x_max: float
+    turns: tuple[ProgressPoint, ...] = ()
+    budgets: tuple[ProgressPoint, ...] = ()
+    turns_peak: float = 0.0
+    budget_peak: float = 0.0
+    timeout_frac: float | None = None
+    max_turns_frac: float | None = None
+    max_budget_frac: float | None = None
+    soft_threshold_frac: float | None = None
+    x_ticks: list[tuple[float, str]] = field(default_factory=list)
+    handoff_fracs: list[float] = field(default_factory=list)
+    unplaced_handoffs: int = 0
+    skipped: int = 0
+
+
+def _positive(raw: Any) -> float | None:
+    """A usable limit value: a real number greater than zero, else None."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = float(raw)
+    return value if value > 0 else None
+
+
+def progress_series(result: ProgressResult) -> ProgressSeries | None:
+    """Build the turns/budget-over-elapsed series, or None with no data."""
+    if not result.ok:
+        return None
+    placeable = [
+        r
+        for r in result.readings
+        if r.elapsed is not None and (r.turns is not None or r.budget_tokens is not None)
+    ]
+    if not placeable:
+        return None
+    skipped = len(result.readings) - len(placeable)
+    timeout = _positive(result.limits.timeout_seconds)
+    elapsed_values = [r.elapsed for r in placeable if r.elapsed is not None]
+    assert elapsed_values
+    x_max = max(elapsed_values)
+    if timeout is not None:
+        x_max = max(x_max, timeout)
+    if x_max <= 0:
+        return None
+    max_turns = _positive(result.limits.max_turns)
+    max_budget = _positive(result.limits.max_budget_tokens)
+    soft = _positive(result.limits.soft_threshold_tokens)
+    turn_values = [float(r.turns) for r in placeable if r.turns is not None]
+    budget_values = [float(r.budget_tokens) for r in placeable if r.budget_tokens is not None]
+    turns_peak = max(turn_values + ([max_turns] if max_turns is not None else []), default=0.0)
+    budget_peak = max(
+        budget_values
+        + ([max_budget] if max_budget is not None else [])
+        + ([soft] if soft is not None else []),
+        default=0.0,
+    )
+    turns: list[ProgressPoint] = []
+    for reading in placeable:
+        if reading.turns is None or reading.elapsed is None:
+            continue
+        assert turns_peak >= 0
+        value_frac = (float(reading.turns) / turns_peak) if turns_peak > 0 else 0.5
+        turns.append(
+            ProgressPoint(
+                x_frac=reading.elapsed / x_max,
+                value_frac=value_frac,
+                elapsed=reading.elapsed,
+                value=float(reading.turns),
+            )
+        )
+    budgets: list[ProgressPoint] = []
+    for reading in placeable:
+        if reading.budget_tokens is None or reading.elapsed is None:
+            continue
+        value_frac = (
+            (float(reading.budget_tokens) / budget_peak) if budget_peak > 0 else 0.5
+        )
+        budgets.append(
+            ProgressPoint(
+                x_frac=reading.elapsed / x_max,
+                value_frac=value_frac,
+                elapsed=reading.elapsed,
+                value=float(reading.budget_tokens),
+            )
+        )
+    handoff_fracs: list[float] = []
+    unplaced = 0
+    for mark in result.handoffs:
+        if mark.elapsed is None:
+            unplaced += 1
+        else:
+            handoff_fracs.append(mark.elapsed / x_max)
+    return ProgressSeries(
+        x_max=x_max,
+        turns=tuple(turns),
+        budgets=tuple(budgets),
+        turns_peak=turns_peak,
+        budget_peak=budget_peak,
+        timeout_frac=(timeout / x_max) if timeout is not None else None,
+        max_turns_frac=(
+            (max_turns / turns_peak)
+            if max_turns is not None and turns_peak > 0
+            else None
+        ),
+        max_budget_frac=(
+            (max_budget / budget_peak)
+            if max_budget is not None and budget_peak > 0
+            else None
+        ),
+        soft_threshold_frac=(
+            (soft / budget_peak) if soft is not None and budget_peak > 0 else None
+        ),
+        x_ticks=[
+            (0.0, format_duration(0)),
+            (0.5, format_duration(x_max / 2)),
+            (1.0, format_duration(x_max)),
+        ],
+        handoff_fracs=handoff_fracs,
+        unplaced_handoffs=unplaced,
+        skipped=skipped,
     )

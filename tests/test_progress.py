@@ -518,3 +518,178 @@ def test_series_counts_unplaced_handoffs_and_skipped_readings():
     assert series.unplaced_handoffs == 1
     assert series.skipped == 1
     assert len(series.turns) == 1
+
+
+# --- progress page -----------------------------------------------------------
+
+
+def _progress_payload(events, attempt=None):
+    return _payload(events, attempt=attempt)
+
+
+def make_progress_client(rows, events=None, events_error=None):
+    import asyncio as _asyncio
+
+    from fake_gateway import FakeGateway
+    from fastapi.testclient import TestClient
+
+    from agent_dashboard.app import create_app
+    from agent_dashboard.config import Settings
+    from agent_dashboard.fleet import FleetState
+    from agent_dashboard.gateway import ManagedInstance
+
+    state = FleetState()
+    instances = []
+    for name, container_state in rows:
+        raw = "running" if container_state == "running" else "exited"
+        instances.append(ManagedInstance(name, f"id-{name}", raw))
+    _asyncio.run(state.apply_cycle(instances, {}, now=1000.0))
+    gateway = FakeGateway()
+    for container_id, payload in (events or {}).items():
+        gateway.set_events(container_id, payload)
+    if events_error is not None:
+        for container_id, error in events_error.items():
+            gateway.set_events_error(container_id, error)
+    app = create_app(
+        state=state, settings=Settings(poll_interval=5.0), gateway=gateway, start_poller=False
+    )
+    return TestClient(app, base_url="http://localhost"), state, gateway
+
+
+STARTED_DASH = "2026-09-27T16-33-43.385090Z"
+
+
+def test_progress_page_renders_chart_with_limits_and_handoff():
+    client, _, _ = make_progress_client(
+        [("work", "running")],
+        {
+            "id-work": _progress_payload(
+                [
+                    _reading_event(15, 100, "2026-09-27T16:35:23Z"),
+                    {
+                        "timestamp": "2026-09-27T16:36:00Z",
+                        "level": "INFO",
+                        "event": "token_soft_threshold_handoff_context_injected",
+                        "detail": "",
+                    },
+                    _reading_event(30, 200, "2026-09-27T16:37:03Z"),
+                ]
+            )
+        },
+    )
+    response = client.get(f"/instances/work/attempts/98/{STARTED_DASH}/progress")
+    assert response.status_code == 200
+    body = response.text
+    assert "Attempt progress" in body
+    assert "Managed instance" in body
+    # Inline SVG reusing the outcome-chart approach: lines, tips, no 500.
+    assert "<svg" in body
+    assert "prog-turns" in body
+    assert "prog-budget" in body
+    assert "data-tip" in body
+    # Reference lines and the handoff mark render with labels.
+    assert "max turns" in body
+    assert "max budget 4,000,000" in body
+    assert "soft threshold 3,200,000" in body
+    assert "Handoff" in body
+    assert "token_soft_threshold_handoff_context_injected" in body
+    assert "chart-tip" in body
+    assert "/static/charts.js" in body
+
+
+def test_progress_page_without_readings_is_a_message_not_an_error():
+    client, _, _ = make_progress_client(
+        [("work", "running")],
+        {"id-work": _progress_payload([], attempt={"outcome": "infrastructure_error"})},
+    )
+    response = client.get(f"/instances/work/attempts/98/{STARTED_DASH}/progress")
+    assert response.status_code == 200
+    assert "No progress data" in response.text
+    assert "infrastructure_error" in response.text
+
+
+def test_progress_page_active_attempt_shows_partial_chart():
+    client, _, _ = make_progress_client(
+        [("work", "running")],
+        {
+            "id-work": _progress_payload(
+                [_reading_event(1, 8, "2026-09-27T16:33:51Z")], attempt={}
+            )
+        },
+    )
+    body = client.get(f"/instances/work/attempts/98/{STARTED_DASH}/progress").text
+    assert "<svg" in body
+    assert "still running" in body
+    assert "partial data" in body
+
+
+def test_progress_page_unknown_layout_is_a_message_not_500():
+    client, _, _ = make_progress_client(
+        [("work", "running")], {"id-work": {"layout": "unknown", "reason": "x"}}
+    )
+    response = client.get(f"/instances/work/attempts/98/{STARTED_DASH}/progress")
+    assert response.status_code == 200
+    assert "layout not recognised" in response.text
+
+
+def test_progress_page_unknown_and_stopped_instances():
+    client, _, _ = make_progress_client([("work", "running")])
+    unknown = client.get(f"/instances/nope/attempts/98/{STARTED_DASH}/progress")
+    assert unknown.status_code == 200
+    assert "unknown" in unknown.text.lower()
+    stopped, _, _ = make_progress_client([("down", "not running")])
+    body = stopped.get(f"/instances/down/attempts/98/{STARTED_DASH}/progress").text
+    assert "running managed instances only" in body
+
+
+def test_progress_page_invalid_reference_and_gateway_error():
+    client, _, _ = make_progress_client([("work", "running")])
+    bad = client.get("/instances/work/attempts/98/not-a-timestamp/progress")
+    assert bad.status_code == 200
+    assert "Invalid attempt reference" in bad.text
+    from agent_dashboard.gateway import GatewayError
+
+    err_client, _, _ = make_progress_client(
+        [("work", "running")],
+        events_error={"id-work": GatewayError("docker exec timed out after 5 s")},
+    )
+    response = err_client.get(f"/instances/work/attempts/98/{STARTED_DASH}/progress")
+    assert response.status_code == 200
+    assert "Could not read" in response.text
+
+
+def test_progress_page_accepts_colon_form_started():
+    client, _, gateway = make_progress_client(
+        [("work", "running")],
+        {"id-work": _progress_payload([_reading_event(1, 8, "2026-09-27T16:33:51Z")])},
+    )
+    colon = "2026-09-27T16:33:43.385090Z"
+    response = client.get(f"/instances/work/attempts/98/{colon}/progress")
+    assert response.status_code == 200
+    assert "<svg" in response.text
+    assert gateway.events_calls == [("id-work", "98", STARTED_DASH)]
+
+
+def test_history_rows_link_to_progress():
+    from test_history import make_history_client
+
+    payload = {
+        "layout": "attempt-logs/v1",
+        "attempts": [
+            {
+                "issue": 98,
+                "started": STARTED_DASH,
+                "attempt": {
+                    "outcome": "complete",
+                    "started_at": "2026-09-27T16:33:43.385090Z",
+                    "duration_seconds": 60,
+                },
+            }
+        ],
+        "active_started_at": None,
+        "unreadable": 0,
+    }
+    client, _, _ = make_history_client([("work", "running")], {"id-work": payload})
+    body = client.get("/instances/work/history?window=all").text
+    assert f"/instances/work/attempts/98/{STARTED_DASH}/progress" in body
+    assert ">Progress</a>" in body
