@@ -17,6 +17,94 @@
 <p class="empty">No attempts recorded yet for this Managed instance.</p>
 {% elif result is not none %}
 <p class="hint">Showing {{ result.summaries|length }} of {{ result.total }} attempts{% if result.unreadable %} · {{ result.unreadable }} attempt file(s) could not be read{% endif %}.</p>
+{% if legend %}
+<ul class="chart-legend" aria-label="Attempt outcome legend">
+  {% for entry in legend %}
+  <li><span class="glyph outcome-{{ entry.key }}" aria-hidden="true">{{ shape_glyphs[entry.shape] }}</span> {{ entry.label }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+<figure class="chart">
+  <figcaption>Outcomes <span class="fig-sub">attempts per day, stacked by outcome</span></figcaption>
+  {% if buckets %}
+  {% set W = 720 %}{% set H = 210 %}{% set LEFT = 36 %}{% set TOP = 12 %}{% set BOTTOM = 30 %}
+  {% set plot_w = W - LEFT - 12 %}{% set plot_h = H - TOP - BOTTOM %}
+  {% set slot = plot_w / (buckets|length) %}{% set bar_w = [40, slot * 0.6] | min %}
+  <svg class="bars" viewBox="0 0 {{ W }} {{ H }}" role="img" aria-label="Stacked bar chart of attempt outcomes per day">
+    {% for tick in y_ticks %}
+    {% set ty = TOP + plot_h - (tick / bucket_peak) * plot_h %}
+    <line x1="{{ LEFT }}" y1="{{ ty }}" x2="{{ W - 12 }}" y2="{{ ty }}" class="grid" />
+    <text x="{{ LEFT - 6 }}" y="{{ ty + 4 }}" text-anchor="end" class="axis">{{ tick }}</text>
+    {% endfor %}
+    {% for bucket in buckets %}
+    {% set x = LEFT + loop.index0 * slot + (slot - bar_w) / 2 %}
+    {% set ns = namespace(base=TOP + plot_h) %}
+    {% for key in chart_keys %}
+    {% set count = bucket.counts.get(key, 0) %}
+    {% if count and bucket_peak %}
+    {% set h = (count / bucket_peak) * plot_h %}
+    {% set y = ns.base - h %}
+    <g class="seg" tabindex="0" role="img" aria-label="{{ bucket.day }}: {{ chart_labels[key] }}, {{ count }}" data-tip="{{ bucket.day }} · {{ chart_labels[key] }}: {{ count }}">
+      <title>{{ bucket.day }} · {{ chart_labels[key] }}: {{ count }}</title>
+      <rect x="{{ x }}" y="{{ y }}" width="{{ bar_w }}" height="{{ h }}" class="bar outcome-{{ key }}" />
+      {% if h >= 16 %}
+      <text x="{{ x + bar_w / 2 }}" y="{{ y + h / 2 + 4 }}" text-anchor="middle" class="seg-label">{{ count }}</text>
+      {% endif %}
+    </g>
+    {% set ns.base = y %}
+    {% endif %}
+    {% endfor %}
+    {% if loop.index0 % label_every == 0 %}
+    <text x="{{ x + bar_w / 2 }}" y="{{ H - 10 }}" text-anchor="middle" class="axis">{{ bucket.day[5:] }}</text>
+    {% endif %}
+    {% endfor %}
+  </svg>
+  {% else %}
+  <p class="empty">No dated attempts in this window.</p>
+  {% endif %}
+</figure>
+<figure class="chart">
+  <figcaption>Attempts timeline <span class="fig-sub">one mark per attempt; size is cost, faded marks have no usage data</span></figcaption>
+  {% if points %}
+  {% set W = 720 %}{% set H = 132 %}{% set PAD = 44 %}{% set AXIS_Y = 96 %}
+  <svg class="timeline" viewBox="0 0 {{ W }} {{ H }}" role="img" aria-label="Timeline of attempts coloured and shaped by outcome, sized by cost">
+    <line x1="{{ PAD }}" y1="{{ AXIS_Y }}" x2="{{ W - PAD }}" y2="{{ AXIS_Y }}" class="axis-line" />
+    <text x="{{ PAD }}" y="{{ H - 8 }}" text-anchor="middle" class="axis">{{ points[0].started_at[:10] }}</text>
+    <text x="{{ W - PAD }}" y="{{ H - 8 }}" text-anchor="middle" class="axis">{{ points[-1].started_at[:10] }}</text>
+    {% if points|length > 2 %}
+    <text x="{{ W / 2 }}" y="{{ H - 8 }}" text-anchor="middle" class="axis">{{ points[(points|length - 1) // 2].started_at[:10] }}</text>
+    {% endif %}
+    {% for point in points %}
+    {% set cx = PAD + point.x_frac * (W - 2 * PAD) %}
+    {% set cy = 30 + point.lane * 20 %}
+    {% set r = point.radius %}
+    <g class="mark outcome-{{ point.outcome_key }}{% if not point.has_cost %} no-cost{% endif %}" tabindex="0" role="img" aria-label="{{ point.tooltip }}" data-tip="{{ point.tooltip }}">
+      <title>{{ point.tooltip }}</title>
+      {% if point.shape == "circle" %}
+      <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r }}" />
+      {% elif point.shape == "ring" %}
+      <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r }}" class="hollow" />
+      {% elif point.shape == "square" %}
+      <rect x="{{ cx - r }}" y="{{ cy - r }}" width="{{ 2 * r }}" height="{{ 2 * r }}" />
+      {% elif point.shape == "triangle" %}
+      <polygon points="{{ cx }},{{ cy - r }} {{ cx - r }},{{ cy + r }} {{ cx + r }},{{ cy + r }}" />
+      {% elif point.shape == "diamond" %}
+      <polygon points="{{ cx }},{{ cy - r }} {{ cx + r }},{{ cy }} {{ cx }},{{ cy + r }} {{ cx - r }},{{ cy }}" />
+      {% else %}
+      <path d="M {{ cx - r }} {{ cy - r }} L {{ cx + r }} {{ cy + r }} M {{ cx - r }} {{ cy + r }} L {{ cx + r }} {{ cy - r }}" class="cross" />
+      {% endif %}
+    </g>
+    {% endfor %}
+  </svg>
+  {% else %}
+  <p class="empty">No dated attempts in this window.</p>
+  {% endif %}
+</figure>
+{% if undated %}
+<p class="hint">{{ undated }} attempt(s) without a start time are not charted.</p>
+{% endif %}
+<div class="chart-tip" id="chart-tip" hidden></div>
+<script src="/static/charts.js" defer></script>
 <table class="fleet history">
   <thead>
     <tr><th>Issue</th><th>Started</th><th>Duration</th><th>Outcome</th><th>Model stop reason</th><th>Cost</th><th>Input</th><th>Cache read</th><th>Cache creation</th><th>Output</th></tr>

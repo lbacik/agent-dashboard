@@ -527,7 +527,9 @@ def test_history_page_lists_every_attempt_newest_first():
         "Output",
     ):
         assert header in body
-    assert body.index("#98") < body.index("#41")
+    # The table stays newest-first (the timeline above it runs oldest-first).
+    tbody = body.split("<tbody>", 1)[1]
+    assert tbody.index("#98") < tbody.index("#41")
     assert "complete" in body
     assert "infrastructure_error" in body
     # No-usage attempt renders n/a, never zero.
