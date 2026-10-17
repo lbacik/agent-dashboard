@@ -247,8 +247,14 @@ Combined corpus of 73 attempts (bytes; p50 / p90 / p99 / max), plus the live
 
 Against the decided 256 KiB (262,144 B) preview cap:
 
-- No numbered Evidence file exceeded 256 KiB in either set (largest 217,289 B, a
-  tool result). 139 tool results exceeded 64 KiB in the corpus, none exceeded 1 MiB.
+- **Correction (full population).** The corpus above undercounts the tail. Listing
+  every `/data/logs` tree through `docker cp ... - | tar -tvf -` across all 10 agent
+  containers (313 attempts, 21,686 tool results) gives: `tool_result` p50 3,382,
+  p99 183,147, max 279,566 B, and **36 tool results exceed 256 KiB**. `tool_call`
+  max 44,254 B and `model_response` max 104,832 B stay under the cap. `agent_output.json`
+  p50 59,696 / p99 137,914 / max 928,703 B (1 over the cap); `transcripts/*` p50
+  250,927 B with 300 of 633 files over the cap. So the cap must also cover numbered
+  `tool_result` files, and the truncation marker is part of the normal flow for them.
 - Files that do exceed it: `baseline_check_stdout.log` once (12.8 MB), `agent_output.json`
   once (929 KB; 738 repeated `workspace_hold` events), and all large transcripts.
   The cap must therefore also apply to `agent_output.json` and command `*.log`.
@@ -370,6 +376,11 @@ So for stopped containers the only listing is `docker cp <c>:/data/logs - | tar
 transcripts it grows to tens of MB). Out of scope for v1 (running only), but this
 is the cheapest path if v1.1 adds stopped instances without `docker run`.
 
+A cheaper index exists: `docker cp <c>:/data/state/completed_attempts.json - | tar -xOf -`
+lists completed attempts without streaming the tree, but it is incomplete (a
+separate check found one container with 24 of 30 attempts listed, because older
+attempts predate that store). Treat it as a hint, not the source of truth.
+
 ### 6.4 Safety findings for the gateway
 
 - `docker cp` resolves `..` inside the container. This succeeded and returned a
@@ -404,8 +415,9 @@ is the cheapest path if v1.1 adds stopped instances without `docker run`.
 5. `attempt.json` is a merged, incrementally written record and can gain
    `pull_request` after `outcome` is present (D7). Same file name as the
    active-attempt checkpoint in `/data/state/` with a different schema.
-6. The cap matters for `agent_output.json` and command logs, not for numbered
-   Evidence files (largest 217 KB); one baseline log was 12.8 MB.
+6. The cap matters for numbered `tool_result` files too (36 of 21,686 exceed 256 KiB,
+   max 280 KB across all 313 attempts; see the correction in section 5), plus
+   `agent_output.json` and command logs; one baseline log was 12.8 MB.
 7. Non-evidence `transcripts/` is the biggest content in every attempt log
    (up to 2.65 MB) and is absent from the doc.
 8. One instance wrote 738 `workspace_hold` + 738 `attempt_finalization_held`
