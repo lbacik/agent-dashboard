@@ -12,7 +12,8 @@ blocks. Settled in
 - Fits the existing Jinja templates and `static/` assets: no new build
   step, no dependency to install.
 - Works offline on an SSH-tunnelled host: no CDN or other network fetch.
-- Readable in light and dark themes; outcomes distinguishable without
+- Readable in the dashboard theme (originally light and dark; dark was
+  dropped for now, see DESIGN.md); outcomes distinguishable without
   relying on colour alone.
 - Attempts without usage data still appear (outcome known, cost unknown).
 
@@ -29,8 +30,8 @@ blocks. Settled in
   and `OUTCOME_SHAPES` map each canonical outcome (plus `other`, which
   covers active/interrupted and any future agent value) to a label, a CSS
   class and a timeline shape (circle, square, triangle, diamond, ring,
-  cross). Colours live in `style.css` with a `prefers-color-scheme: dark`
-  override; the non-colour cues are the legend's shape glyph plus label,
+  cross). Colours live in `style.css` as tokens (light theme only, see
+  [DESIGN.md](../../DESIGN.md)); the non-colour cues are the legend's shape glyph plus label,
   count labels on bar segments, distinct mark shapes, and tooltips.
 - **Tooltips for hover and focus.** Every mark carries its text
   (`Issue #… · Started … · Duration … · Outcome … · Cost …`) in both a
@@ -57,10 +58,9 @@ blocks. Settled in
 ## Consequences
 
 - Later chart tickets reuse `charts.py` (`OUTCOME_ORDER`, labels,
-  shapes, tooltip text), the `outcome-*` CSS classes in both colour
-  schemes, and the `data-tip` + `#chart-tip` tooltip pattern.
+  shapes, tooltip text), the `outcome-*` CSS classes, and the `data-tip` + `#chart-tip` tooltip pattern.
 - A new agent outcome only needs an entry in the three `charts.py`
-  maps plus two CSS rules (light and dark).
+  maps plus its CSS rules (light theme only, see DESIGN.md).
 - `window=all` over a very long history renders one bar per day; if
   that ever grows unwieldy, switch the `all` span to weekly buckets
   in `outcomes_per_day` (tests pin the per-day behaviour until then).
