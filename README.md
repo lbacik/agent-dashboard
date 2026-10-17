@@ -9,6 +9,39 @@ Status: specified, not yet built.
 - Vocabulary: [CONTEXT.md](CONTEXT.md); contract terms (Dashboard, Managed instance, Telemetry snapshot, Figure basis) are defined in the [agent's CONTEXT.md](https://github.com/lbacik/simple-coding-agent/blob/main/CONTEXT.md).
 - Decisions: [docs/adr/](docs/adr/)
 
+## Attempt log view
+
+Each Managed instance's drawer links to its **Attempt history**
+(`/instances/{name}/history`), the list of its Implementation attempts,
+newest first. Every row links to that attempt's page
+(`/instances/{name}/attempts/{issue}/{started}`), which shows the attempt
+header beside the progress chart and the full ordered event stream of the
+Attempt log, server-paged at 200 rows with level/event/text filters. Events
+that point at an Evidence file offer an inline preview under the row
+(`open`, or `reply` for model responses; call/result pairs are matched by
+order and say so), with a formatted/raw toggle and a download link for the
+whole file.
+
+Running instances only: `docker exec` fails on stopped containers, so a
+stopped instance renders "Attempt logs are available for running managed
+instances only" instead of its log.
+
+Read paths (all on `/data/logs`, all built by the gateway, the only module
+that assembles Docker argv): `docker exec` runs fixed collectors — one exec
+for the whole attempts list, one for a single attempt's event stream, and
+`ls -1` for a run's file names — while single files arrive via `docker cp`
+(a tar stream the reader untars, expecting exactly one regular file).
+Previews show the first 256 KiB with a visible truncation marker and the
+true total; downloads stream the whole file. File names pass a read
+allow-list in the route layer and again inside the gateway, so traversal
+names are rejected before any Docker call.
+
+Caveat: the log layout is not a contract ([ADR
+0003](docs/adr/0003-read-attempt-logs-outside-the-agentctl-contract.md)). An
+agent release can move or rename these files and break the view until the
+dashboard follows; an unrecognised layout renders "layout not recognised",
+never an error.
+
 ## Running in Docker (test deployments)
 
 > Test environments only ([ADR 0002](docs/adr/0002-docker-test-deployment-exception.md)).

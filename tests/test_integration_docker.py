@@ -5,6 +5,10 @@ Builds a minimal image carrying the agent discovery label whose
 printing a good snapshot fixture and one behaving like an old agent
 without the ``telemetry`` subcommand. A second image carries canned
 Attempt log files so the history exec is covered against a real daemon.
+A third image carries one attempt with a small and an over-cap Evidence
+file so the Attempt log view's read paths (``docker exec`` listing plus
+``docker cp`` capped preview, full download, and allow-list rejection)
+are proven against a real daemon.
 """
 
 from __future__ import annotations
@@ -19,7 +23,11 @@ from pathlib import Path
 import pytest
 
 from agent_dashboard.collector import GOOD, NOT_SUPPORTED, classify_telemetry
-from agent_dashboard.gateway import AGENT_ROLE_LABEL, DockerGateway
+from agent_dashboard.gateway import (
+    AGENT_ROLE_LABEL,
+    EVIDENCE_PREVIEW_CAP,
+    DockerGateway,
+)
 from agent_dashboard.history import read_history
 
 FIXTURE = (
@@ -234,6 +242,142 @@ def test_attempt_history_against_real_docker(tmp_path):
         assert done.cost_text == "$1.23"
         assert done.input_text == "120,000"
         assert done.duration_text == "28m 32s"
+    finally:
+        _run("docker", "rm", "-f", name)
+        _run("docker", "rmi", "-f", tag)
+
+
+LOG_DOCKERFILE = """\
+FROM python:3.13-slim
+LABEL io.github.lbacik.simple-coding-agent.role="agent"
+COPY logs /data/logs
+RUN useradd -m agent
+CMD ["sleep", "infinity"]
+"""
+
+LOG_ISSUE = 41
+LOG_STARTED_COLON = "2026-10-10T10:00:00.000000Z"
+LOG_STARTED_DASH = "2026-10-10T10-00-00.000000Z"
+LOG_SMALL_FILE = "0001_tool_call.json"
+LOG_BIG_FILE = "0002_tool_result.json"
+LOG_SMALL_CONTENT = b'{"tool": "read", "ok": true}\n'
+LOG_BIG_CONTENT = b"0123456789ABCDEF" * 18750  # 300,000 B, over the 256 KiB cap
+
+
+@docker
+def test_attempt_log_against_real_docker(tmp_path):
+    """Prove the Attempt log view's read paths against a real container.
+
+    One throwaway container holds a single Implementation attempt with a
+    small Evidence file and one file over the preview cap. The test lists
+    attempts (``docker exec`` history collector), lists the run's files
+    (``docker exec ls``), reads the small file in full, reads the big file
+    over the cap (truncated preview with the true total), downloads the big
+    file in full (``docker cp`` with no cap), and rejects traversal names
+    before any Docker call.
+    """
+    assert len(LOG_BIG_CONTENT) > EVIDENCE_PREVIEW_CAP
+    tag = f"agent-dashboard-logs:{uuid.uuid4().hex[:12]}"
+    name = f"e2e-logs-{uuid.uuid4().hex[:8]}"
+    try:
+        run_dir = tmp_path / "logs" / str(LOG_ISSUE) / LOG_STARTED_DASH
+        run_dir.mkdir(parents=True)
+        (run_dir / "attempt.json").write_text(
+            json.dumps(
+                {
+                    "outcome": "complete",
+                    "started_at": LOG_STARTED_COLON,
+                    "completed_at": "2026-10-10T10:31:00.000000Z",
+                    "duration_seconds": 1860,
+                }
+            )
+        )
+        (run_dir / "agent_output.json").write_text(
+            json.dumps(
+                {
+                    "timestamp": LOG_STARTED_COLON,
+                    "level": "INFO",
+                    "event": "tool_call",
+                    "detail": f"read -> {LOG_SMALL_FILE}",
+                }
+            )
+            + "\n"
+        )
+        (run_dir / LOG_SMALL_FILE).write_bytes(LOG_SMALL_CONTENT)
+        (run_dir / LOG_BIG_FILE).write_bytes(LOG_BIG_CONTENT)
+        (tmp_path / "Dockerfile").write_text(LOG_DOCKERFILE)
+        build = _run("docker", "build", "-q", "-t", tag, str(tmp_path))
+        assert build.returncode == 0, build.stderr
+
+        started = _run("docker", "run", "-d", "--name", name, tag)
+        assert started.returncode == 0, started.stderr
+
+        import time
+
+        deadline = time.time() + 30
+        container_id = None
+        while time.time() < deadline:
+            found = asyncio.run(DockerGateway(timeout=10.0).list_instances())
+            ids = {inst.name: inst.container_id for inst in found}
+            if name in ids:
+                container_id = ids[name]
+                break
+            time.sleep(1)
+        assert container_id is not None
+
+        gateway = DockerGateway(timeout=10.0)
+
+        history_exec = asyncio.run(gateway.attempt_history(container_id))
+        assert history_exec.returncode == 0
+        history = read_history(history_exec.stdout, history_exec.returncode, now=NOW)
+        assert history.ok
+        assert history.total == 1
+        (summary,) = history.summaries
+        assert summary.issue == LOG_ISSUE
+        assert summary.outcome_text == "complete"
+
+        run_files = asyncio.run(
+            gateway.list_run_files(container_id, LOG_ISSUE, LOG_STARTED_DASH)
+        )
+        assert LOG_SMALL_FILE in run_files
+        assert LOG_BIG_FILE in run_files
+
+        small = asyncio.run(
+            gateway.read_file(container_id, LOG_ISSUE, LOG_STARTED_DASH, LOG_SMALL_FILE)
+        )
+        assert small.content == LOG_SMALL_CONTENT
+        assert small.total_size == len(LOG_SMALL_CONTENT)
+        assert not small.truncated
+
+        big_preview = asyncio.run(
+            gateway.read_file(container_id, LOG_ISSUE, LOG_STARTED_DASH, LOG_BIG_FILE)
+        )
+        assert big_preview.truncated
+        assert big_preview.total_size == len(LOG_BIG_CONTENT)
+        assert big_preview.content == LOG_BIG_CONTENT[:EVIDENCE_PREVIEW_CAP]
+
+        big_full = asyncio.run(
+            gateway.read_file(
+                container_id, LOG_ISSUE, LOG_STARTED_DASH, LOG_BIG_FILE, cap=None
+            )
+        )
+        assert big_full.content == LOG_BIG_CONTENT
+        assert big_full.total_size == len(LOG_BIG_CONTENT)
+        assert not big_full.truncated
+
+        for traversal in (
+            "..",
+            "../escape.json",
+            "transcripts/0001_tool_call.json",
+            "0001_tool_call.json ",
+            "/data/logs/41/x/0001_tool_call.json",
+        ):
+            with pytest.raises(ValueError):
+                asyncio.run(
+                    gateway.read_file(
+                        container_id, LOG_ISSUE, LOG_STARTED_DASH, traversal
+                    )
+                )
     finally:
         _run("docker", "rm", "-f", name)
         _run("docker", "rmi", "-f", tag)
