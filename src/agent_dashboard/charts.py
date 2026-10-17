@@ -1,18 +1,26 @@
 """Chart aggregation for the attempt history page.
 
-Both charts render from the same :class:`AttemptSummary` rows as the history
+All charts render from the same :class:`AttemptSummary` rows as the history
 table, so they respect the page's time window filter without extra queries:
 
 - outcomes: a stacked bar per UTC day with per-outcome counts;
 - timeline: one mark per attempt along time, shaped by outcome and sized
-  by cost (attempts without usage data share one neutral size).
+  by cost (attempts without usage data share one neutral size);
+- cost per attempt: one mark per attempt with usage data along time,
+  shaped by outcome, with a reference line at the reported cost soft
+  threshold when one is known;
+- cumulative cost: the running USD total per UTC day;
+- duration vs cost: one mark per attempt with usage data and a known
+  duration, shaped and coloured by outcome.
 
 Rendering is server-side inline SVG (see ADR 0004): no build step, no
 network fetch, so the page works offline over an SSH tunnel. Each outcome
 has a stable key, label, CSS class and timeline shape; the legend, tooltips
 and axis labels carry the non-colour cue so nothing relies on colour alone.
-Attempts without a parseable start time are excluded from both charts and
-counted by :func:`undated_count`.
+Attempts without a parseable start time are excluded from every chart and
+counted by :func:`undated_count`. Attempts without cost data are excluded
+from the cost charts and counted by :func:`missing_cost_count`, never
+plotted as zero.
 """
 
 from __future__ import annotations
@@ -21,7 +29,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from .history import WINDOW_DAYS, AttemptSummary
+from .history import WINDOW_DAYS, AttemptSummary, format_cost
 
 #: Canonical outcome keys in stable legend/stack order. ``other`` covers the
 #: dashboard's synthetic states (active, interrupted) and any outcome the
@@ -259,3 +267,289 @@ def outcome_legend(
         for key in OUTCOME_ORDER
         if key in present
     ]
+
+
+# --- cost charts -------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CostPoint:
+    """One cost-per-attempt mark: time position, USD cost and tooltip text."""
+
+    issue: int
+    started_at: str
+    started_ts: float
+    duration_text: str
+    outcome_text: str
+    outcome_key: str
+    label: str
+    shape: str
+    cost_text: str
+    cost_value: float
+    x_frac: float
+    tooltip: str
+
+
+@dataclass(frozen=True)
+class CumulativeDay:
+    """One cumulative-cost bar: the day's spend and the running USD total."""
+
+    day: str
+    daily: float
+    cumulative: float
+    daily_text: str = ""
+    cumulative_text: str = ""
+
+
+@dataclass(frozen=True)
+class CostTotals:
+    """Cost totals over the window-filtered summaries.
+
+    ``total`` sums only attempts with cost data; ``with_cost`` counts them
+    and ``missing`` counts the attempts left out for lack of cost data.
+    """
+
+    total: float
+    with_cost: int
+    missing: int
+
+
+@dataclass(frozen=True)
+class DurationCostPoint:
+    """One duration-vs-cost mark: USD cost against seconds, plus tooltip."""
+
+    issue: int
+    duration_text: str
+    duration_value: float
+    outcome_text: str
+    outcome_key: str
+    label: str
+    shape: str
+    cost_text: str
+    cost_value: float
+    x_frac: float
+    y_frac: float
+    tooltip: str
+
+
+def _with_cost(summaries: tuple[AttemptSummary, ...]) -> list[AttemptSummary]:
+    """Dated attempts with cost data, oldest first."""
+    return sorted(
+        (
+            s
+            for s in summaries
+            if s.started_ts is not None and s.cost_value is not None
+        ),
+        key=lambda s: (s.started_ts, s.issue),
+    )
+
+
+def missing_cost_count(
+    summaries: tuple[AttemptSummary, ...] | list[AttemptSummary],
+) -> int:
+    """Attempts left out of the cost charts for lack of cost data."""
+    return sum(1 for s in summaries if s.cost_value is None)
+
+
+def cost_totals(
+    summaries: tuple[AttemptSummary, ...] | list[AttemptSummary],
+) -> CostTotals:
+    """Sum USD cost over attempts with cost data; count the rest as missing."""
+    rows = tuple(summaries)
+    total = sum(s.cost_value for s in rows if s.cost_value is not None)
+    with_cost = sum(1 for s in rows if s.cost_value is not None)
+    return CostTotals(total=total, with_cost=with_cost, missing=len(rows) - with_cost)
+
+
+def cost_soft_threshold(
+    summaries: tuple[AttemptSummary, ...] | list[AttemptSummary],
+) -> float | None:
+    """The page's cost soft threshold, or None when no attempt reports one.
+
+    The newest dated attempt that reports a threshold wins, so a changed
+    instance configuration shows up on the next attempt; undated attempts
+    only count when nothing dated reports a value.
+    """
+    best: float | None = None
+    best_ts = float("-inf")
+    seen_dated = False
+    for summary in summaries:
+        value = summary.cost_threshold_value
+        if value is None:
+            continue
+        if summary.started_ts is not None:
+            if not seen_dated or summary.started_ts >= best_ts:
+                best, best_ts, seen_dated = value, summary.started_ts, True
+        elif not seen_dated and best is None:
+            best = value
+    return best
+
+
+def cost_per_attempt(
+    summaries: tuple[AttemptSummary, ...] | list[AttemptSummary],
+) -> tuple[CostPoint, ...]:
+    """One mark per dated attempt with cost data, oldest first.
+
+    ``x_frac`` is the fractional time position (a lone attempt sits at 0.5).
+    Vertical scaling is left to the template: it divides by the peak of the
+    costs and the soft threshold (when known) so the reference line always
+    lands inside the plot.
+    """
+    dated = _with_cost(tuple(summaries))
+    if not dated:
+        return ()
+    stamps = [s.started_ts for s in dated if s.started_ts is not None]
+    lo, hi = min(stamps), max(stamps)
+    span = hi - lo
+    points: list[CostPoint] = []
+    for summary in dated:
+        assert summary.started_ts is not None
+        assert summary.cost_value is not None
+        if span <= 0:
+            x_frac = 0.5
+        else:
+            x_frac = (summary.started_ts - lo) / span
+        key = normalize_outcome(summary.outcome_text)
+        points.append(
+            CostPoint(
+                issue=summary.issue,
+                started_at=summary.started_at,
+                started_ts=summary.started_ts,
+                duration_text=summary.duration_text,
+                outcome_text=summary.outcome_text,
+                outcome_key=key,
+                label=OUTCOME_LABELS[key],
+                shape=OUTCOME_SHAPES[key],
+                cost_text=summary.cost_text,
+                cost_value=summary.cost_value,
+                x_frac=x_frac,
+                tooltip=_tooltip(summary),
+            )
+        )
+    return tuple(points)
+
+
+def _cost_day_range(
+    summaries: tuple[AttemptSummary, ...], *, now: float, window: str
+) -> tuple[str, str] | None:
+    """The UTC day span for the cost charts, mirroring :func:`outcomes_per_day`.
+
+    The span covers every dated attempt (not just attempts with cost data)
+    so the cost charts line up with the outcomes chart: the trailing 7/30-day
+    span for those windows, otherwise the earliest-to-latest span.
+    """
+    dated = _dated(summaries)
+    if not dated:
+        return None
+    days = WINDOW_DAYS.get(window)
+    if days is not None:
+        return _day_of(now - days * 86400), _day_of(now)
+    stamps = sorted(s.started_ts for s in dated if s.started_ts is not None)
+    return _day_of(stamps[0]), _day_of(stamps[-1])
+
+
+def _each_day(start_day: str, end_day: str) -> list[str]:
+    days: list[str] = []
+    day = start_day
+    while day <= end_day:
+        days.append(day)
+        stamp = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC).timestamp()
+        day = _day_of(stamp + 86400 + 1)
+    return days
+
+
+def cumulative_cost_per_day(
+    summaries: tuple[AttemptSummary, ...] | list[AttemptSummary],
+    *,
+    now: float,
+    window: str = "all",
+) -> list[CumulativeDay]:
+    """Running USD total per UTC day, oldest day first.
+
+    Daily spend sums only attempts with cost data; gap days carry the running
+    total forward. Empty when no dated attempt has cost data, so the template
+    renders a "no cost data" note instead of a flat zero chart.
+    """
+    rows = tuple(summaries)
+    span = _cost_day_range(rows, now=now, window=window)
+    if span is None:
+        return []
+    daily: dict[str, float] = dict.fromkeys(_each_day(*span), 0.0)
+    seen_cost = False
+    for summary in rows:
+        if summary.started_ts is None or summary.cost_value is None:
+            continue
+        bucket = _day_of(summary.started_ts)
+        if bucket in daily:
+            daily[bucket] += summary.cost_value
+            seen_cost = True
+    if not seen_cost:
+        return []
+    out: list[CumulativeDay] = []
+    running = 0.0
+    for day in daily:
+        running += daily[day]
+        out.append(
+            CumulativeDay(
+                day=day,
+                daily=daily[day],
+                cumulative=running,
+                daily_text=format_cost(daily[day]),
+                cumulative_text=format_cost(running),
+            )
+        )
+    return out
+
+
+def duration_vs_cost(
+    summaries: tuple[AttemptSummary, ...] | list[AttemptSummary],
+) -> tuple[DurationCostPoint, ...]:
+    """One mark per dated attempt with both duration and cost, oldest first.
+
+    ``x_frac`` scales linearly with cost and ``y_frac`` with duration; a lone
+    mark sits at 0.5 on a degenerate axis. Attempts missing either value are
+    excluded: cost-missing attempts are counted by :func:`missing_cost_count`,
+    while an attempt with cost but no duration has no separate count.
+    """
+    rows = sorted(
+        (
+            s
+            for s in tuple(summaries)
+            if s.started_ts is not None
+            and s.cost_value is not None
+            and s.duration_value is not None
+        ),
+        key=lambda s: (s.started_ts, s.issue),
+    )
+    if not rows:
+        return ()
+    costs = [s.cost_value for s in rows if s.cost_value is not None]
+    durations = [s.duration_value for s in rows if s.duration_value is not None]
+    cost_peak = max(costs)
+    duration_peak = max(durations)
+    points: list[DurationCostPoint] = []
+    for summary in rows:
+        assert summary.cost_value is not None
+        assert summary.duration_value is not None
+        key = normalize_outcome(summary.outcome_text)
+        points.append(
+            DurationCostPoint(
+                issue=summary.issue,
+                duration_text=summary.duration_text,
+                duration_value=summary.duration_value,
+                outcome_text=summary.outcome_text,
+                outcome_key=key,
+                label=OUTCOME_LABELS[key],
+                shape=OUTCOME_SHAPES[key],
+                cost_text=summary.cost_text,
+                cost_value=summary.cost_value,
+                x_frac=(summary.cost_value / cost_peak) if cost_peak > 0 else 0.5,
+                y_frac=(
+                    (summary.duration_value / duration_peak)
+                    if duration_peak > 0
+                    else 0.5
+                ),
+                tooltip=_tooltip(summary),
+            )
+        )
+    return tuple(points)

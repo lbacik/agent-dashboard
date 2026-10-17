@@ -50,6 +50,19 @@ TOKEN_KEYS = (
 #: Cost keys accepted inside one model's usage counters, in preference order.
 COST_KEYS = ("cost_usd", "total_cost_usd", "cost", "total_cost")
 
+#: Cost soft-threshold keys accepted at the top level of one attempt record,
+#: in preference order. The agent reports the threshold only when it knows
+#: it, so a missing (or non-numeric, or non-positive) value means unknown and
+#: the cost chart omits its reference line instead of guessing.
+COST_THRESHOLD_KEYS = (
+    "cost_soft_threshold_usd",
+    "cost_soft_threshold",
+    "soft_threshold_cost_usd",
+    "soft_threshold_usd",
+    "cost_threshold_usd",
+    "cost_threshold",
+)
+
 
 def format_duration(seconds: float) -> str:
     """Format a duration in seconds as ``45s``, ``28m 32s``, ``2h 02m`` or ``1d 1h``."""
@@ -124,7 +137,12 @@ class AttemptSummary:
     """One Attempt log row: final display text, so templates add no formatting.
 
     ``cost_value`` is the numeric USD cost (``None`` when unknown) used only
-    to scale the attempts timeline marks; ``cost_text`` stays the display.
+    for the cost charts and to scale the attempts timeline marks;
+    ``cost_text`` stays the display. ``duration_value`` is the numeric
+    duration in seconds (``None`` when unknown) for the duration-vs-cost
+    scatter; ``duration_text`` stays the display. ``cost_threshold_value``
+    is the attempt's reported USD soft threshold (``None`` when the agent
+    did not report one) for the cost chart's reference line.
     """
 
     issue: int
@@ -132,11 +150,13 @@ class AttemptSummary:
     started_at: str = NOT_APPLICABLE
     started_ts: float | None = None
     duration_text: str = NOT_APPLICABLE
+    duration_value: float | None = None
     outcome_text: str = "interrupted"
     active: bool = False
     stop_reason_text: str = NOT_APPLICABLE
     cost_text: str = NOT_APPLICABLE
     cost_value: float | None = None
+    cost_threshold_value: float | None = None
     input_text: str = NOT_APPLICABLE
     cache_read_text: str = NOT_APPLICABLE
     cache_creation_text: str = NOT_APPLICABLE
@@ -194,6 +214,20 @@ def _read_usage(attempt: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _read_cost_threshold(attempt: dict[str, Any]) -> float | None:
+    """The attempt's reported USD soft threshold, or None when unknown.
+
+    Only a real positive number counts: a missing key, a non-numeric value
+    and zero/negative readings all mean the instance did not report a usable
+    threshold, so the cost chart omits its reference line.
+    """
+    for key in COST_THRESHOLD_KEYS:
+        value = _num(attempt.get(key))
+        if value is not None and value > 0:
+            return float(value)
+    return None
+
+
 def _read_stop_reason(attempt: dict[str, Any], has_usage: bool) -> str:
     if not has_usage:
         return NOT_APPLICABLE
@@ -230,10 +264,13 @@ def _read_entry(entry: Any, active_started_at: str | None, now: float) -> Attemp
         active = False
     duration = _num(attempt.get("duration_seconds"))
     if duration is not None:
+        duration_value: float | None = float(duration)
         duration_text = format_duration(duration)
     elif active and started_ts is not None:
-        duration_text = format_duration(max(0.0, now - started_ts))
+        duration_value = max(0.0, now - started_ts)
+        duration_text = format_duration(duration_value)
     else:
+        duration_value = None
         duration_text = NOT_APPLICABLE
     usage = _read_usage(attempt)
     return AttemptSummary(
@@ -242,11 +279,13 @@ def _read_entry(entry: Any, active_started_at: str | None, now: float) -> Attemp
         started_at=started_at or NOT_APPLICABLE,
         started_ts=started_ts,
         duration_text=duration_text,
+        duration_value=duration_value,
         outcome_text=outcome_text,
         active=active,
         stop_reason_text=_read_stop_reason(attempt, usage["has_usage"]),
         cost_text=usage["cost"],
         cost_value=usage["cost_value"],
+        cost_threshold_value=_read_cost_threshold(attempt),
         input_text=usage["input_text"],
         cache_read_text=usage["cache_read_text"],
         cache_creation_text=usage["cache_creation_text"],

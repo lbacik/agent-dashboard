@@ -248,6 +248,75 @@ def test_bad_entries_are_skipped_and_counted():
     assert result.unreadable == 2 + 3
 
 
+def test_duration_value_parsed_for_scatter():
+    stdout, code = _stdout(_payload([_entry(98, "2026-09-27T16-33-43.385090Z", COMPLETE)]))
+    (summary,) = read_history(stdout, code, now=NOW).summaries
+    assert summary.duration_value == 1712.5
+
+
+def test_active_duration_value_is_elapsed():
+    started = "2026-10-16T10:00:00.000000Z"
+    attempt = {"started_at": started}
+    payload = _payload(
+        [_entry(7, "2026-10-16T10-00-00.000000Z", attempt)],
+        active_started_at=started,
+    )
+    stdout, code = _stdout(payload)
+    (summary,) = read_history(stdout, code, now=NOW).summaries
+    assert summary.duration_value is not None and summary.duration_value >= 0
+
+
+def test_missing_duration_value_is_none():
+    attempt = {"outcome": "interrupted", "started_at": "2026-10-16T10:00:00.000000Z"}
+    stdout, code = _stdout(_payload([_entry(7, "2026-10-16T10-00-00.000000Z", attempt)]))
+    (summary,) = read_history(stdout, code, now=NOW).summaries
+    assert summary.duration_value is None
+    assert summary.duration_text == "n/a"
+
+
+def test_cost_threshold_parsed_when_reported():
+    attempt = dict(
+        COMPLETE,
+        cost_soft_threshold_usd=2.5,
+        started_at="2026-09-27T16:33:43.385090Z",
+    )
+    stdout, code = _stdout(_payload([_entry(98, "2026-09-27T16-33-43.385090Z", attempt)]))
+    (summary,) = read_history(stdout, code, now=NOW).summaries
+    assert summary.cost_threshold_value == 2.5
+
+
+def test_cost_threshold_accepts_known_key_variants():
+    for key in ("cost_soft_threshold", "soft_threshold_usd", "cost_threshold_usd"):
+        attempt = dict(
+            COMPLETE, started_at="2026-09-27T16:33:43.385090Z", **{key: 3.0}
+        )
+        stdout, code = _stdout(
+            _payload([_entry(98, "2026-09-27T16-33-43.385090Z", attempt)])
+        )
+        (summary,) = read_history(stdout, code, now=NOW).summaries
+        assert summary.cost_threshold_value == 3.0, key
+
+
+def test_cost_threshold_missing_is_none():
+    stdout, code = _stdout(_payload([_entry(98, "2026-09-27T16-33-43.385090Z", COMPLETE)]))
+    (summary,) = read_history(stdout, code, now=NOW).summaries
+    assert summary.cost_threshold_value is None
+
+
+def test_cost_threshold_ignores_unusable_values():
+    for bad in (0, -1.5, "2.50", True, None):
+        attempt = dict(
+            COMPLETE,
+            started_at="2026-09-27T16:33:43.385090Z",
+            cost_soft_threshold_usd=bad,
+        )
+        stdout, code = _stdout(
+            _payload([_entry(98, "2026-09-27T16-33-43.385090Z", attempt)])
+        )
+        (summary,) = read_history(stdout, code, now=NOW).summaries
+        assert summary.cost_threshold_value is None, bad
+
+
 def test_stop_reason_dict_is_joined():
     attempt = {
         "outcome": "complete",
@@ -532,9 +601,10 @@ def test_history_page_lists_every_attempt_newest_first():
     assert tbody.index("#98") < tbody.index("#41")
     assert "complete" in body
     assert "infrastructure_error" in body
-    # No-usage attempt renders n/a, never zero.
+    # No-usage attempt renders n/a, never zero (cost chart axes may label $0.00).
     assert "n/a" in body
-    assert "$0.00" not in body
+    tbody_costs = [line for line in tbody.splitlines() if "<td>" in line]
+    assert not any("$0.00" in line for line in tbody_costs)
     assert "120,000" in body
 
 

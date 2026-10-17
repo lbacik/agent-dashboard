@@ -10,6 +10,12 @@ from __future__ import annotations
 import time
 
 from agent_dashboard.charts import (
+    cost_per_attempt,
+    cost_soft_threshold,
+    cost_totals,
+    cumulative_cost_per_day,
+    duration_vs_cost,
+    missing_cost_count,
     normalize_outcome,
     outcome_legend,
     outcomes_per_day,
@@ -18,7 +24,9 @@ from agent_dashboard.charts import (
 from agent_dashboard.history import AttemptSummary
 
 
-def _summary(issue=1, started_ts=None, outcome="complete", cost=None):
+def _summary(
+    issue=1, started_ts=None, outcome="complete", cost=None, duration=60.0, threshold=None
+):
     started_at = "n/a"
     if started_ts is not None:
         started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started_ts))
@@ -27,9 +35,11 @@ def _summary(issue=1, started_ts=None, outcome="complete", cost=None):
         started_at=started_at,
         started_ts=started_ts,
         duration_text="60s",
+        duration_value=duration,
         outcome_text=outcome,
         cost_text="n/a" if cost is None else f"${cost:.2f}",
         cost_value=cost,
+        cost_threshold_value=threshold,
         has_usage=cost is not None,
     )
 
@@ -324,6 +334,214 @@ def test_history_page_single_attempt_renders_both_charts():
     assert "<svg" in body
 
 
+# --- cost per attempt --------------------------------------------------------
+
+
+def test_cost_per_attempt_excludes_no_usage_and_undated():
+    summaries = (
+        _summary(1, _ts(2), "complete", cost=1.0),
+        _summary(2, _ts(1), "incomplete"),  # no usage data: excluded, never zero
+        _summary(3, None, "complete", cost=5.0),  # undated: excluded
+    )
+    points = cost_per_attempt(summaries)
+    assert [p.issue for p in points] == [1]
+    assert points[0].cost_value == 1.0
+
+
+def test_cost_per_attempt_orders_oldest_first():
+    summaries = (
+        _summary(2, _ts(1), "complete", cost=2.0),
+        _summary(1, _ts(3), "handoff", cost=0.5),
+    )
+    points = cost_per_attempt(summaries)
+    assert [p.issue for p in points] == [1, 2]
+    assert points[0].x_frac == 0.0
+    assert points[1].x_frac == 1.0
+
+
+def test_cost_per_attempt_single_is_centred():
+    (point,) = cost_per_attempt((_summary(1, _ts(0), "complete", cost=2.0),))
+    assert point.x_frac == 0.5
+
+
+def test_cost_per_attempt_empty_without_costs():
+    assert cost_per_attempt(()) == ()
+    assert cost_per_attempt((_summary(1, _ts(0), "complete"),)) == ()
+    assert cost_per_attempt((_summary(1, None, "complete", cost=1.0),)) == ()
+
+
+def test_cost_per_attempt_tooltip_carries_every_field():
+    (point,) = cost_per_attempt((_summary(7, _ts(0), "incomplete", cost=1.23),))
+    assert "#7" in point.tooltip
+    assert "60s" in point.tooltip
+    assert "incomplete" in point.tooltip
+    assert "$1.23" in point.tooltip
+
+
+def test_cost_per_attempt_shape_follows_outcome():
+    points = cost_per_attempt(
+        (
+            _summary(1, _ts(1), "complete", cost=1.0),
+            _summary(2, _ts(0), "incomplete", cost=1.0),
+        )
+    )
+    assert {p.shape for p in points} == {"circle", "square"}
+
+
+# --- cumulative cost ---------------------------------------------------------
+
+
+def test_cumulative_sums_daily_and_carries_gaps_forward():
+    summaries = (
+        _summary(1, _ts(2, 10), "complete", cost=1.0),
+        _summary(2, _ts(2, 15), "incomplete", cost=2.0),
+        _summary(3, _ts(0, 9), "complete", cost=4.0),
+        _summary(4, _ts(1, 9), "complete"),  # no usage: excluded, never zero
+    )
+    days = cumulative_cost_per_day(summaries, now=NOW, window="all")
+    assert len(days) == 3
+    assert [d.day for d in days] == sorted(d.day for d in days)
+    assert days[0].daily == 3.0
+    assert days[0].cumulative == 3.0
+    assert days[1].daily == 0.0
+    assert days[1].cumulative == 3.0
+    assert days[2].daily == 4.0
+    assert days[2].cumulative == 7.0
+    assert days[2].cumulative_text == "$7.00"
+
+
+def test_cumulative_empty_without_cost_data():
+    assert cumulative_cost_per_day((), now=NOW, window="all") == []
+    assert (
+        cumulative_cost_per_day((_summary(1, _ts(0), "complete"),), now=NOW, window="all")
+        == []
+    )
+    assert cumulative_cost_per_day((_summary(1, None, "complete"),), now=NOW) == []
+
+
+def test_cumulative_window_spans_trailing_days():
+    summaries = (_summary(1, _ts(1), "complete", cost=2.5),)
+    days = cumulative_cost_per_day(summaries, now=NOW, window="7")
+    assert len(days) == 8  # start day through today, inclusive
+    assert days[-1].cumulative == 2.5
+
+
+# --- totals and missing-cost count -------------------------------------------
+
+
+def test_cost_totals_sum_only_attempts_with_cost():
+    summaries = (
+        _summary(1, _ts(1), "complete", cost=1.0),
+        _summary(2, _ts(0), "complete", cost=2.5),
+        _summary(3, _ts(0), "incomplete"),
+    )
+    totals = cost_totals(summaries)
+    assert totals.total == 3.5
+    assert totals.with_cost == 2
+    assert totals.missing == 1
+
+
+def test_cost_totals_empty_is_zero():
+    totals = cost_totals(())
+    assert totals.total == 0.0
+    assert totals.with_cost == 0
+    assert totals.missing == 0
+
+
+def test_missing_cost_count_never_plots_zero():
+    summaries = (
+        _summary(1, _ts(1), "complete", cost=0.0),  # measured zero stays a value
+        _summary(2, _ts(0), "complete"),
+    )
+    assert missing_cost_count(summaries) == 1
+
+
+# --- soft threshold ----------------------------------------------------------
+
+
+def test_threshold_none_when_nothing_reports_it():
+    summaries = (
+        _summary(1, _ts(1), "complete", cost=1.0),
+        _summary(2, _ts(0), "complete", cost=2.0),
+    )
+    assert cost_soft_threshold(summaries) is None
+    assert cost_soft_threshold(()) is None
+
+
+def test_threshold_newest_reporting_attempt_wins():
+    summaries = (
+        _summary(1, _ts(0), "complete", cost=1.0, threshold=5.0),
+        _summary(2, _ts(2), "complete", cost=1.0, threshold=9.5),
+        _summary(3, _ts(1), "complete", cost=1.0),
+    )
+    assert cost_soft_threshold(summaries) == 5.0
+
+
+def test_threshold_undated_counts_only_as_fallback():
+    assert cost_soft_threshold((_summary(1, None, "complete", threshold=4.0),)) == 4.0
+
+
+# --- duration vs cost --------------------------------------------------------
+
+
+def test_duration_vs_cost_needs_both_values():
+    summaries = (
+        _summary(1, _ts(2), "complete", cost=1.0, duration=60.0),
+        _summary(2, _ts(1), "incomplete", cost=None, duration=30.0),
+        _summary(3, _ts(0), "complete", cost=2.0, duration=None),
+    )
+    points = duration_vs_cost(summaries)
+    assert [p.issue for p in points] == [1]
+
+
+def test_duration_vs_cost_excludes_undated():
+    points = duration_vs_cost(
+        (
+            _summary(1, None, "complete", cost=1.0, duration=60.0),
+            _summary(2, _ts(0), "complete", cost=1.0, duration=60.0),
+        )
+    )
+    assert [p.issue for p in points] == [2]
+
+
+def test_duration_vs_cost_scales_linearly():
+    points = duration_vs_cost(
+        (
+            _summary(1, _ts(1), "complete", cost=1.0, duration=30.0),
+            _summary(2, _ts(0), "incomplete", cost=2.0, duration=60.0),
+        )
+    )
+    by_issue = {p.issue: p for p in points}
+    assert by_issue[2].x_frac == 1.0
+    assert by_issue[1].x_frac == 0.5
+    assert by_issue[2].y_frac == 1.0
+    assert by_issue[1].y_frac == 0.5
+
+
+def test_duration_vs_cost_single_marks_centre_on_degenerate_axes():
+    (point,) = duration_vs_cost((_summary(1, _ts(0), "complete", cost=0.0, duration=0.0),))
+    assert point.x_frac == 0.5
+    assert point.y_frac == 0.5
+
+
+def test_duration_vs_cost_tooltip_carries_every_field():
+    (point,) = duration_vs_cost((_summary(9, _ts(0), "handoff", cost=3.0, duration=90.0),))
+    assert "#9" in point.tooltip
+    assert "handoff" in point.tooltip
+    assert "$3.00" in point.tooltip
+
+
+def test_duration_vs_cost_marks_coloured_by_outcome():
+    points = duration_vs_cost(
+        (
+            _summary(1, _ts(1), "complete", cost=1.0, duration=10.0),
+            _summary(2, _ts(0), "incomplete", cost=1.0, duration=20.0),
+        )
+    )
+    assert {p.outcome_key for p in points} == {"complete", "incomplete"}
+    assert {p.shape for p in points} == {"circle", "square"}
+
+
 # --- legend ----------------------------------------------------------------
 
 
@@ -336,3 +554,188 @@ def test_legend_lists_only_outcomes_present_in_stable_order():
     legend = outcome_legend(summaries)
     assert [entry.key for entry in legend] == ["complete", "handoff"]
     assert all(entry.label and entry.shape for entry in legend)
+
+
+# --- cost charts on the history page -----------------------------------------
+
+
+def _cost_page_payload(with_threshold=True):
+    import time as _time
+
+    now = _time.time()
+    recent = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now - 86400))
+    older = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now - 2 * 86400))
+    mid = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now - 3 * 86400))
+    old = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now - 40 * 86400))
+    recent_attempt = {
+        "outcome": "complete",
+        "started_at": recent,
+        "duration_seconds": 120,
+        "model_usage": {"m": {"input_tokens": 10, "cost_usd": 1.50}},
+        "model_stop_reason": "end_turn",
+    }
+    if with_threshold:
+        recent_attempt["cost_soft_threshold_usd"] = 2.0
+    older_attempt = {
+        "outcome": "incomplete",
+        "started_at": older,
+        "duration_seconds": 3600,
+        "model_usage": {"m": {"input_tokens": 20, "cost_usd": 0.50}},
+    }
+    stale_attempt = {
+        "outcome": "handoff",
+        "started_at": old,
+        "duration_seconds": 60,
+        "model_usage": {"m": {"input_tokens": 5, "cost_usd": 4.00}},
+    }
+    unmeasured_attempt = {
+        "outcome": "complete",
+        "started_at": mid,
+        "duration_seconds": 30,
+    }
+    return {
+        "layout": "attempt-logs/v1",
+        "attempts": [
+            {
+                "issue": 98,
+                "started": recent.replace(":", "-"),
+                "attempt": recent_attempt,
+            },
+            {
+                "issue": 41,
+                "started": older.replace(":", "-"),
+                "attempt": older_attempt,
+            },
+            {
+                "issue": 9,
+                "started": mid.replace(":", "-"),
+                "attempt": unmeasured_attempt,
+            },
+            {
+                "issue": 7,
+                "started": old.replace(":", "-"),
+                "attempt": stale_attempt,
+            },
+        ],
+        "active_started_at": None,
+        "unreadable": 0,
+    }
+
+
+def test_history_page_renders_cost_charts_with_totals():
+    from test_history import make_history_client
+
+    client, _, _ = make_history_client(
+        [("work", "running")], {"id-work": _cost_page_payload()}
+    )
+    body = client.get("/instances/work/history?window=all").text
+    assert "Cost per attempt" in body
+    assert "Cumulative cost" in body
+    assert "Duration vs cost" in body
+    # Totals count the attempt without usage data instead of plotting zero.
+    assert "$6.00" in body  # 1.50 + 0.50 + 4.00 (stale issue #7)
+    assert "without usage data" in body
+    assert "excluded from cost totals" in body
+
+
+def test_history_page_threshold_line_only_when_known():
+    from test_history import make_history_client
+
+    client, _, _ = make_history_client(
+        [("work", "running")], {"id-work": _cost_page_payload(with_threshold=True)}
+    )
+    body = client.get("/instances/work/history?window=all").text
+    assert "soft threshold" in body
+    assert 'class="threshold"' in body
+
+    client, _, _ = make_history_client(
+        [("work", "running")], {"id-work": _cost_page_payload(with_threshold=False)}
+    )
+    body = client.get("/instances/work/history?window=all").text
+    assert 'class="threshold"' not in body
+
+
+def test_history_page_cost_charts_respect_window_filter():
+    from test_history import make_history_client
+
+    client, _, _ = make_history_client(
+        [("work", "running")], {"id-work": _cost_page_payload()}
+    )
+    week = client.get("/instances/work/history?window=7").text
+    # Issue #7 is 40 days old with $4.00 of cost: outside the window, its
+    # cost drops out of the total ($6.00 -> $2.00).
+    assert "Issue #7" not in week
+    assert "$2.00" in week
+    assert "$6.00" not in week
+    everything = client.get("/instances/work/history?window=all").text
+    assert "Issue #7" in everything
+    assert "$6.00" in everything
+
+
+def test_history_page_cost_marks_show_issue_outcome_duration_and_cost():
+    from test_history import make_history_client
+
+    client, _, _ = make_history_client(
+        [("work", "running")], {"id-work": _cost_page_payload()}
+    )
+    body = client.get("/instances/work/history?window=all").text
+    assert "Issue #98" in body
+    assert "incomplete" in body
+    assert "$1.50" in body
+
+
+def test_history_page_no_cost_data_renders_notes_not_zeros():
+    import time as _time
+
+    from test_history import make_history_client
+
+    now = _time.time()
+    recent = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now - 86400))
+    payload = {
+        "layout": "attempt-logs/v1",
+        "attempts": [
+            {
+                "issue": 5,
+                "started": recent.replace(":", "-"),
+                "attempt": {"outcome": "incomplete", "started_at": recent},
+            }
+        ],
+        "active_started_at": None,
+        "unreadable": 0,
+    }
+    client, _, _ = make_history_client([("work", "running")], {"id-work": payload})
+    body = client.get("/instances/work/history?window=all").text
+    assert body.count("No cost data in this window.") == 3
+    assert "without usage data" in body
+    assert "$0.00" not in body
+
+
+def test_history_page_zero_cost_with_usage_still_charts():
+    import time as _time
+
+    from test_history import make_history_client
+
+    now = _time.time()
+    recent = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now - 86400))
+    payload = {
+        "layout": "attempt-logs/v1",
+        "attempts": [
+            {
+                "issue": 5,
+                "started": recent.replace(":", "-"),
+                "attempt": {
+                    "outcome": "complete",
+                    "started_at": recent,
+                    "duration_seconds": 5,
+                    "model_usage": {"m": {"input_tokens": 10, "cost_usd": 0}},
+                },
+            }
+        ],
+        "active_started_at": None,
+        "unreadable": 0,
+    }
+    client, _, _ = make_history_client([("work", "running")], {"id-work": payload})
+    body = client.get("/instances/work/history?window=all").text
+    # A measured zero is usage data: it charts instead of counting as missing.
+    assert "No cost data in this window." not in body
+    assert "without usage data" not in body

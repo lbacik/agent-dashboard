@@ -299,7 +299,17 @@ tr.active-row td { background: #f2f6fb; }
 .bars .bar.outcome-other { fill: var(--oc-other); }
 
 .bars .grid { stroke: var(--line); stroke-width: 1; }
+.timeline .grid, .timeline .grid-v { stroke: var(--line); stroke-width: 1; }
 .bars .axis, .timeline .axis { fill: var(--muted); font-size: 11px; }
+/* Cost charts: single-series bars use the accent; the soft threshold is a
+   dashed line with a text label, never colour alone (the label names it). */
+.bars .bar.cost { fill: var(--accent); }
+.timeline .threshold {
+  stroke: var(--danger-ink);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
+.timeline .thresh-label { fill: var(--danger-ink); font-size: 11px; }
 .bars .seg-label { fill: #fff; font-size: 11px; font-weight: 600; }
 .bars .seg:focus, .timeline .mark:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 
