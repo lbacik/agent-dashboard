@@ -7,12 +7,14 @@ import pytest
 from agent_dashboard import gateway
 from agent_dashboard.gateway import (
     AGENT_ROLE_LABEL,
+    AGENT_USER,
     DiscoveryTimeoutError,
     DockerGateway,
     DockerNotAvailableError,
     GatewayError,
     ManagedInstance,
     TelemetryTimeoutError,
+    argv_attempt_events,
     argv_attempt_history,
     argv_list_instances,
     argv_telemetry,
@@ -48,11 +50,15 @@ def test_every_argv_producer_is_pinned():
         "argv_list_instances": argv_list_instances(),
         "argv_telemetry": argv_telemetry("abc123"),
         "argv_attempt_history": argv_attempt_history("abc123"),
+        "argv_attempt_events": argv_attempt_events(
+            "abc123", 98, "2026-09-27T16:33:43.385090Z"
+        ),
     }
     assert set(producers) == {
         "argv_list_instances",
         "argv_telemetry",
         "argv_attempt_history",
+        "argv_attempt_events",
     }
     for argv in producers.values():
         assert isinstance(argv, list)
@@ -258,3 +264,92 @@ def test_telemetry_missing_cli(monkeypatch):
 def test_gateway_rejects_bad_telemetry_timeout():
     with pytest.raises(ValueError):
         DockerGateway(timeout=-1)
+
+
+# --- attempt events (progress chart) -----------------------------------------
+
+
+def test_attempt_events_argv_pinned():
+    argv = argv_attempt_events("abc123", 98, "2026-09-27T16:33:43.385090Z")
+    assert argv == [
+        "docker",
+        "exec",
+        "--user",
+        AGENT_USER,
+        "abc123",
+        "python",
+        "-c",
+        gateway.ATTEMPT_EVENTS_SCRIPT,
+        "98",
+        "2026-09-27T16-33-43.385090Z",
+    ]
+
+
+def test_attempt_events_argv_accepts_dash_started():
+    argv = argv_attempt_events("abc123", "98", "2026-09-27T16-33-43.385090Z")
+    assert argv[-2:] == ["98", "2026-09-27T16-33-43.385090Z"]
+
+
+def test_attempt_events_argv_rejects_bad_refs():
+    with pytest.raises(ValueError):
+        argv_attempt_events("abc123", "ninety-eight", "2026-09-27T16:33:43.385090Z")
+    with pytest.raises(ValueError):
+        argv_attempt_events("abc123", 98, "../state/attempt.json")
+    with pytest.raises(ValueError):
+        argv_attempt_events("abc123", 98, "not-a-timestamp")
+    with pytest.raises(ValueError):
+        argv_attempt_events("not a container!", 98, "2026-09-27T16:33:43.385090Z")
+
+
+def test_attempt_events_uses_pinned_argv(monkeypatch):
+    proc = _FakeProcess(stdout=b"{}", returncode=0)
+    seen = _patch_create_subprocess(monkeypatch, proc)
+    result = asyncio.run(
+        DockerGateway(timeout=5.0).attempt_events(
+            "abc123", 98, "2026-09-27T16:33:43.385090Z"
+        )
+    )
+    assert seen["argv"] == argv_attempt_events("abc123", 98, "2026-09-27T16:33:43.385090Z")
+    assert "shell" not in seen["kwargs"]
+    assert result.stdout == b"{}"
+    assert result.returncode == 0
+
+
+def test_attempt_events_timeout_kills_client_process(monkeypatch):
+    killed = []
+    reaped = []
+
+    class SlowProcess(_FakeProcess):
+        async def communicate(self):
+            await asyncio.sleep(10)
+            return b"", b""
+
+        def kill(self):
+            killed.append(True)
+
+        async def wait(self):
+            reaped.append(True)
+            return -9
+
+    async def fake_create(*argv, **kwargs):
+        return SlowProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    with pytest.raises(TelemetryTimeoutError, match="timed out"):
+        asyncio.run(
+            DockerGateway(timeout=0.05).attempt_events(
+                "abc123", 98, "2026-09-27T16:33:43.385090Z"
+            )
+        )
+    assert killed == [True]
+    assert reaped == [True]
+
+
+def test_attempt_events_missing_cli(monkeypatch):
+    _patch_create_subprocess(monkeypatch, exc=FileNotFoundError("no docker"))
+    with pytest.raises(DockerNotAvailableError):
+        asyncio.run(
+            DockerGateway(timeout=5.0).attempt_events(
+                "abc123", 98, "2026-09-27T16:33:43.385090Z"
+            )
+        )

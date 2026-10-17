@@ -94,6 +94,137 @@ except (OSError, ValueError):
 print(json.dumps(out))
 """
 
+#: Layout marker the per-attempt events collector stamps on its output.
+ATTEMPT_EVENTS_LAYOUT = "attempt-events/v1"
+
+#: Collector run inside the managed instance by ``argv_attempt_events``.
+#: A fixed script (never interpolated with operator input): the attempt
+#: reference travels as two argv arguments that the script re-validates
+#: with the verified name shapes before joining any path, so the daemon's
+#: ``..`` resolution cannot escape ``/data/logs``. It reads the attempt's
+#: ``attempt.json`` summary and keeps only the ``agent_output.json`` events
+#: the progress chart needs (periodic limit readings plus threshold and
+#: handoff events); the full stream never crosses the exec boundary.
+ATTEMPT_EVENTS_SCRIPT = """\
+import json
+import os
+import re
+import sys
+
+BASE = "/data/logs"
+ISSUE_RE = re.compile(r"[0-9]+\\Z")
+STARTED_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}\\.[0-9]+Z\\Z")
+MAX_ATTEMPT_BYTES = 1000000
+MAX_EVENTS_BYTES = 2000000
+KEEP_EVENTS = frozenset([
+    "limits_checked",
+    "token_soft_threshold_crossed",
+    "token_soft_threshold_subagents_stopped",
+    "token_soft_threshold_handoff_note_committed",
+])
+
+
+def read_capped(path, limit):
+    with open(path, "rb") as handle:
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("file too large")
+    return data
+
+
+def unknown(reason):
+    print(json.dumps({"layout": "unknown", "reason": reason}))
+    raise SystemExit(0)
+
+
+args = sys.argv[1:]
+if len(args) != 2:
+    unknown("expected issue and started arguments")
+issue, started = args
+if not ISSUE_RE.match(issue) or not STARTED_RE.match(started):
+    unknown("invalid attempt reference")
+if not os.path.isdir(BASE):
+    unknown("missing /data/logs")
+attempt_dir = os.path.join(BASE, issue, started)
+attempt = None
+unreadable = 0
+try:
+    record = json.loads(
+        read_capped(os.path.join(attempt_dir, "attempt.json"), MAX_ATTEMPT_BYTES).decode(
+            "utf-8"
+        )
+    )
+except (OSError, ValueError):
+    unreadable += 1
+else:
+    if isinstance(record, dict):
+        attempt = record
+    else:
+        unreadable += 1
+events = []
+total_events = 0
+truncated = False
+try:
+    raw = read_capped(
+        os.path.join(attempt_dir, "agent_output.json"), MAX_EVENTS_BYTES
+    ).decode("utf-8")
+except ValueError:
+    truncated = True
+except OSError:
+    unreadable += 1
+else:
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        total_events += 1
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            unreadable += 1
+            continue
+        if not isinstance(entry, dict):
+            unreadable += 1
+            continue
+        name = entry.get("event")
+        if not isinstance(name, str):
+            continue
+        if name not in KEEP_EVENTS and "handoff" not in name.lower():
+            continue
+        events.append(
+            {
+                "timestamp": entry.get("timestamp"),
+                "level": entry.get("level"),
+                "event": name,
+                "detail": entry.get("detail"),
+            }
+        )
+print(
+    json.dumps(
+        {
+            "layout": "attempt-events/v1",
+            "issue": int(issue),
+            "started": started,
+            "attempt": attempt,
+            "events": events,
+            "total_events": total_events,
+            "unreadable": unreadable,
+            "truncated": truncated,
+        }
+    )
+)
+"""
+
+#: One attempt reference: digits-only issue plus the UTC start with ``:``
+#: (as in ``attempt.json``) or ``-`` (as in the log directory name) and
+#: mandatory fractional seconds.
+ATTEMPT_ISSUE_RE = re.compile(r"[0-9]+\Z")
+ATTEMPT_STARTED_DASH_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}\.[0-9]+Z\Z"
+)
+ATTEMPT_STARTED_COLON_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z\Z"
+)
+
 
 class GatewayError(Exception):
     """A Docker failure with a human-readable reason."""
@@ -190,6 +321,60 @@ def argv_attempt_history(container_id: str) -> list[str]:
     ]
 
 
+def validate_attempt_ref(issue: int | str, started: str) -> tuple[int, str]:
+    """Validate one attempt reference; return ``(issue, dash-form started)``.
+
+    ``issue`` is digits (or a non-negative int); ``started`` is the UTC
+    start either as in ``attempt.json`` (``:``) or as in the log directory
+    name (``-``). Anything else raises :class:`ValueError` before an argv
+    is built, so no raw path ever reaches Docker.
+    """
+    if isinstance(issue, bool):
+        raise ValueError(f"invalid issue: {issue!r}")
+    if isinstance(issue, int):
+        if issue < 0:
+            raise ValueError(f"invalid issue: {issue!r}")
+        number = issue
+    elif isinstance(issue, str) and ATTEMPT_ISSUE_RE.fullmatch(issue):
+        number = int(issue)
+    else:
+        raise ValueError(f"invalid issue: {issue!r}")
+    if not isinstance(started, str):
+        raise ValueError(f"invalid attempt start: {started!r}")
+    if ATTEMPT_STARTED_COLON_RE.fullmatch(started):
+        date, clock = started.split("T", 1)
+        dash = f"{date}T{clock.replace(':', '-')}"
+    elif ATTEMPT_STARTED_DASH_RE.fullmatch(started):
+        dash = started
+    else:
+        raise ValueError(f"invalid attempt start: {started!r}")
+    return number, dash
+
+
+def argv_attempt_events(container_id: str, issue: int | str, started: str) -> list[str]:
+    """Argv for one Attempt log events exec: a single attempt's kept events.
+
+    A single ``docker exec`` runs the fixed :data:`ATTEMPT_EVENTS_SCRIPT`
+    with the instance's Python; besides the validated container ID the only
+    variable parts are the validated attempt reference (issue digits plus
+    the dash-form start), passed as plain argv arguments, never a path.
+    """
+    validate_container_id(container_id)
+    number, dash_started = validate_attempt_ref(issue, started)
+    return [
+        "docker",
+        "exec",
+        "--user",
+        AGENT_USER,
+        container_id,
+        "python",
+        "-c",
+        ATTEMPT_EVENTS_SCRIPT,
+        str(number),
+        dash_started,
+    ]
+
+
 def parse_ps_output(output: str) -> list[ManagedInstance]:
     """Parse ``docker ps --format`` rows, dropping compose one-off containers."""
     instances: list[ManagedInstance] = []
@@ -270,6 +455,32 @@ class DockerGateway:
         client process.
         """
         proc = await self._run(argv_telemetry(container_id))
+        try:
+            stdout, _stderr = await asyncio.wait_for(proc.communicate(), self.timeout)
+        except TimeoutError as exc:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+            raise TelemetryTimeoutError(
+                f"docker exec timed out after {self.timeout:g} s"
+            ) from exc
+        return TelemetryExec(stdout=stdout, returncode=proc.returncode)
+
+    async def attempt_events(
+        self, container_id: str, issue: int | str, started: str
+    ) -> TelemetryExec:
+        """Run one Attempt log events exec for a single attempt.
+
+        Like :meth:`telemetry` the exit code is reported, not raised: the
+        progress reader maps the stdout into limit readings. Only a
+        dashboard-side timeout raises (:class:`TelemetryTimeoutError`),
+        after killing and reaping the client process. An invalid container
+        ID or attempt reference raises :class:`ValueError` before anything
+        is spawned.
+        """
+        proc = await self._run(argv_attempt_events(container_id, issue, started))
         try:
             stdout, _stderr = await asyncio.wait_for(proc.communicate(), self.timeout)
         except TimeoutError as exc:

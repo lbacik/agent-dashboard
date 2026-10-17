@@ -42,7 +42,7 @@ from .charts import (
 )
 from .config import Settings
 from .fleet import FleetState, poll_forever
-from .gateway import DockerGateway, GatewayError
+from .gateway import DockerGateway, GatewayError, validate_attempt_ref
 from .history import (
     DEFAULT_WINDOW,
     VALID_WINDOWS,
@@ -51,6 +51,7 @@ from .history import (
     read_history,
 )
 from .overview import collect_overview, overview_legend
+from .progress import progress_series, read_progress
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -479,6 +480,117 @@ def create_app(
                 "share_ticks": share_ticks,
                 "share_definition": CACHE_READ_SHARE_DEFINITION,
             },
+        )
+
+    @app.get(
+        "/instances/{name}/attempts/{issue}/{started}/progress",
+        response_class=HTMLResponse,
+    )
+    async def attempt_progress(
+        request: Request, name: str, issue: str, started: str
+    ) -> Response:
+        """Attempt progress chart: turns and budget over elapsed time.
+
+        Static with manual refresh (no stream subscription): the kept
+        events for one attempt are read on demand with a single gateway
+        exec, running managed instances only. An unknown instance, a
+        stopped instance, an invalid reference, an unreadable log and an
+        unrecognised layout each render a clear message with status 200,
+        never an error. An attempt without limit readings renders a
+        "no progress data" note; an active attempt renders its partial
+        chart with a still-running note.
+        """
+
+        def progress_page(
+            row, error: str | None, result=None, series=None, **extra
+        ) -> Response:
+            return templates.TemplateResponse(
+                request,
+                "progress.html",
+                {
+                    **context(request),
+                    "row": row,
+                    "name": name,
+                    "issue": issue,
+                    "started": started,
+                    "result": result,
+                    "series": series,
+                    "error": error,
+                    **extra,
+                },
+            )
+
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        row = find_row(rows, name)
+        if row is None:
+            return progress_page(
+                None,
+                f"Unknown Managed instance {name!r}: it is unknown or was removed.",
+            )
+        if row.state != "running":
+            return progress_page(
+                row,
+                "Attempt progress is available for running managed instances only.",
+            )
+        try:
+            number, dash_started = validate_attempt_ref(issue, started)
+        except ValueError as exc:
+            return progress_page(row, f"Invalid attempt reference: {exc}")
+        try:
+            exec_result = await gw.attempt_events(
+                row.container_id, number, dash_started
+            )
+        except (GatewayError, ValueError) as exc:
+            return progress_page(row, f"Could not read the Attempt log: {exc}")
+        result = read_progress(
+            exec_result.stdout,
+            exec_result.returncode,
+            issue=number,
+            started=dash_started,
+        )
+        if not result.ok:
+            return progress_page(row, result.error, result=result)
+        series = progress_series(result)
+        handoff_points = []
+        if series is not None:
+            placed = [m for m in result.handoffs if m.elapsed is not None]
+            handoff_points = [
+                {
+                    "frac": frac,
+                    "name": mark.name,
+                    "timestamp_text": mark.timestamp_text,
+                }
+                for mark, frac in zip(placed, series.handoff_fracs)
+            ]
+        y_ticks = [(0.0, "0"), (0.5, "50%"), (1.0, "100%")]
+        return progress_page(
+            row,
+            None,
+            result=result,
+            series=series,
+            handoff_points=handoff_points,
+            y_ticks=y_ticks,
+            x_max_text=format_duration(series.x_max) if series is not None else None,
+            turns_peak_text=(
+                format_tokens(int(series.turns_peak))
+                if series is not None and series.turns_peak
+                else None
+            ),
+            budget_peak_text=(
+                format_tokens(series.budget_peak)
+                if series is not None and series.budget_peak
+                else None
+            ),
+            max_budget_text=(
+                format_tokens(result.limits.max_budget_tokens)
+                if result.limits.max_budget_tokens
+                else None
+            ),
+            soft_threshold_text=(
+                format_tokens(result.limits.soft_threshold_tokens)
+                if result.limits.soft_threshold_tokens
+                else None
+            ),
         )
 
     @app.get("/fleet", response_class=HTMLResponse)

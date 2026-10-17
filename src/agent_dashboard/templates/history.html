@@ -312,7 +312,7 @@
 <script src="/static/charts.js" defer></script>
 <table class="fleet history">
   <thead>
-    <tr><th>Issue</th><th>Started</th><th>Duration</th><th>Outcome</th><th>Model stop reason</th><th>Cost</th><th>Input</th><th>Cache read</th><th>Cache creation</th><th>Output</th></tr>
+    <tr><th>Issue</th><th>Started</th><th>Duration</th><th>Outcome</th><th>Model stop reason</th><th>Cost</th><th>Input</th><th>Cache read</th><th>Cache creation</th><th>Output</th><th>Progress</th></tr>
   </thead>
   <tbody>
     {% for attempt in result.summaries %}
@@ -327,6 +327,7 @@
       <td>{{ attempt.cache_read_text }}</td>
       <td>{{ attempt.cache_creation_text }}</td>
       <td>{{ attempt.output_text }}</td>
+      <td><a href="/instances/{{ name | urlencode }}/attempts/{{ attempt.issue }}/{{ attempt.started_at | replace(":", "-") | urlencode }}/progress">Progress</a></td>
     </tr>
     {% endfor %}
   </tbody>

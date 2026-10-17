@@ -28,12 +28,14 @@ class FakeGateway:
         self._error = error
         self._scripts: dict[str, TelemetryExec | Exception] = {}
         self._histories: dict[str, TelemetryExec | Exception] = {}
+        self._events: dict[str, TelemetryExec | Exception] = {}
         self.delay = 0.0
         self.history_delay = 0.0
         self.history_delays: dict[str, float] = {}
         self.list_calls = 0
         self.telemetry_calls: list[str] = []
         self.history_calls: list[str] = []
+        self.events_calls: list[tuple[str, str, str]] = []
         self.in_flight = 0
         self.peak_in_flight = 0
         self.per_id_in_flight: dict[str, int] = {}
@@ -69,6 +71,16 @@ class FakeGateway:
 
     def set_history_error(self, container_id: str, error: Exception) -> None:
         self._histories[container_id] = error
+
+    def set_events(
+        self, container_id: str, payload: dict, returncode: int = 0
+    ) -> None:
+        self._events[container_id] = TelemetryExec(
+            stdout=json.dumps(payload).encode(), returncode=returncode
+        )
+
+    def set_events_error(self, container_id: str, error: Exception) -> None:
+        self._events[container_id] = error
 
     async def list_instances(self) -> list[ManagedInstance]:
         self.list_calls += 1
@@ -109,6 +121,33 @@ class FakeGateway:
                         "attempts": [],
                         "active_started_at": None,
                         "unreadable": 0,
+                    }
+                ).encode(),
+                returncode=0,
+            ),
+        )
+        if isinstance(scripted, Exception):
+            raise scripted
+        return scripted
+
+    async def attempt_events(
+        self, container_id: str, issue: int | str, started: str
+    ) -> TelemetryExec:
+        """One scripted events exec; unscripted IDs report an empty payload."""
+        self.events_calls.append((container_id, str(issue), started))
+        scripted = self._events.get(
+            container_id,
+            TelemetryExec(
+                stdout=json.dumps(
+                    {
+                        "layout": "attempt-events/v1",
+                        "issue": 98,
+                        "started": "2026-09-27T16-33-43.385090Z",
+                        "attempt": {"outcome": "complete"},
+                        "events": [],
+                        "total_events": 0,
+                        "unreadable": 0,
+                        "truncated": False,
                     }
                 ).encode(),
                 returncode=0,
