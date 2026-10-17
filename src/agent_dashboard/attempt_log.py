@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -430,6 +431,79 @@ def filter_events(
         return not needle or needle in ev.detail.lower()
 
     return tuple(ev for ev in events if _keep(ev))
+
+
+def pair_tool_calls(events: tuple[LogEvent, ...]) -> dict[int, int]:
+    """FIFO pair tool calls with their results, both directions.
+
+    Results carry no call id, so a ``tool_result`` takes the oldest
+    unmatched ``tool_call`` with the same ``(tool, thread)`` key in event
+    order, as the prototype does. Runs over the full stream before
+    filtering and paging, so a pair link works across pages and filters.
+    Calls without a result, and results without a call, stay unpaired.
+    Model responses never pair. Never raises.
+    """
+    try:
+        rows = tuple(events)
+    except TypeError:
+        return {}
+    pending: dict[tuple[str, str | None], deque[int]] = defaultdict(deque)
+    by_seq: dict[int, LogEvent] = {}
+    for ev in rows:
+        if isinstance(ev, LogEvent):
+            by_seq.setdefault(ev.seq, ev)
+    pairs: dict[int, int] = {}
+    for ev in rows:
+        if not isinstance(ev, LogEvent) or ev.evidence is None:
+            continue
+        try:
+            key = (ev.evidence.tool, ev.evidence.thread)
+            if ev.event == "tool_call":
+                pending[key].append(ev.seq)
+            elif ev.event == "tool_result" and pending[key]:
+                call_seq = pending[key].popleft()
+                pairs[call_seq] = ev.seq
+                pairs[ev.seq] = call_seq
+        except (AttributeError, TypeError):
+            continue
+    # Drop pairs whose counterpart lost its evidence (defensive: the map
+    # above only pairs evidence rows, but callers may pass stale seqs).
+    return {
+        seq: other for seq, other in pairs.items() if other in by_seq and seq in by_seq
+    }
+
+
+def paired_files(
+    events: tuple[LogEvent, ...], pairs: dict[int, int] | None = None
+) -> dict[int, str]:
+    """Map each paired row ``seq`` to its counterpart's Evidence file name.
+
+    Computed from the full stream (see :func:`pair_tool_calls`); rows
+    without a pair, or whose counterpart has no Evidence file, are absent.
+    Never raises.
+    """
+    try:
+        rows = tuple(events)
+    except TypeError:
+        return {}
+    try:
+        pair_map = dict(pairs) if pairs is not None else pair_tool_calls(rows)
+    except (TypeError, ValueError):
+        return {}
+    by_seq: dict[int, LogEvent] = {}
+    for ev in rows:
+        if isinstance(ev, LogEvent):
+            by_seq.setdefault(ev.seq, ev)
+    out: dict[int, str] = {}
+    for seq, other in pair_map.items():
+        counterpart = by_seq.get(other)
+        if (
+            counterpart is not None
+            and counterpart.evidence is not None
+            and counterpart.evidence.file
+        ):
+            out[seq] = counterpart.evidence.file
+    return out
 
 
 def parse_page(raw: Any, pages: int) -> int:

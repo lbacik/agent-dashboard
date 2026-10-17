@@ -72,10 +72,10 @@
       <td>{{ ev.time_text }}</td>
       <td>{% if ev.level_known %}<span class="ev-level lvl-{{ ev.level }}">{{ ev.level }}</span>{% else %}{{ ev.level }}{% endif %}</td>
       <td>{{ ev.event }}</td>
-      <td>{% if ev.evidence %}{% if ev.evidence.tool %}<span class="ev-tool">{{ ev.evidence.tool }}</span> {% endif %}{% if ev.evidence.thread %}<span class="ev-thread">[{{ ev.evidence.thread }}]</span> {% endif %}<span class="ev-file">{{ ev.evidence.file }}</span> <a class="ev-open" data-slot="evidence-slot-{{ ev.seq }}" data-label="{{ "reply" if ev.event == "model_response" else "open" }}" href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}/files/{{ ev.evidence.file | urlencode }}" onclick="return toggleEvidence(this);">{{ "reply" if ev.event == "model_response" else "open" }}</a>{% else %}{{ ev.detail }}{% endif %}</td>
+      <td>{% if ev.evidence %}{% if ev.evidence.tool %}<span class="ev-tool">{{ ev.evidence.tool }}</span> {% endif %}{% if ev.evidence.thread %}<span class="ev-thread">[{{ ev.evidence.thread }}]</span> {% endif %}<span class="ev-file">{{ ev.evidence.file }}</span> <a class="ev-open" data-slot="evidence-slot-{{ ev.seq }}" data-label="{{ "reply" if ev.event == "model_response" else "open" }}" href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}/files/{{ ev.evidence.file | urlencode }}" onclick="return toggleEvidence(this);">{{ "reply" if ev.event == "model_response" else "open" }}</a>{% if ev.seq in pair_files %} <a class="ev-pair" data-slot="evidence-pair-slot-{{ ev.seq }}" data-label="{{ "open call" if ev.event == "tool_result" else "open result" }}" href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}/files/{{ pair_files[ev.seq] | urlencode }}" onclick="return toggleEvidence(this);" title="paired by order">{{ "open call" if ev.event == "tool_result" else "open result" }}</a> <span class="ev-pair-note">paired by order</span>{% endif %}{% else %}{{ ev.detail }}{% endif %}</td>
     </tr>
     {% if ev.evidence %}
-    <tr class="evidence-slot-row"><td colspan="5"><div class="evidence-slot" id="evidence-slot-{{ ev.seq }}"></div></td></tr>
+    <tr class="evidence-slot-row"><td colspan="5"><div class="evidence-slot" id="evidence-slot-{{ ev.seq }}"></div>{% if ev.seq in pair_files %}<div class="evidence-slot" id="evidence-pair-slot-{{ ev.seq }}"></div>{% endif %}</td></tr>
     {% endif %}
     {% endfor %}
   </tbody>

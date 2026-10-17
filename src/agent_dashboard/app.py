@@ -28,6 +28,8 @@ from .attempt_log import (
     format_preview,
     level_options,
     paginate,
+    pair_tool_calls,
+    paired_files,
     read_attempt_log,
 )
 from .charts import (
@@ -656,6 +658,7 @@ def create_app(
             refresh_url: str = "",
             prev_url: str | None = None,
             next_url: str | None = None,
+            pair_files: dict | None = None,
         ) -> Response:
             return templates.TemplateResponse(
                 request,
@@ -685,6 +688,7 @@ def create_app(
                     "refresh_url": refresh_url,
                     "prev_url": prev_url,
                     "next_url": next_url,
+                    "pair_files": pair_files or {},
                 },
             )
 
@@ -773,6 +777,9 @@ def create_app(
             event_value = ""
         names = event_names(result.events)
         levels = level_options(result.events)
+        # FIFO pairing runs over the full stream before filtering and
+        # paging, so a pair link works across pages and filters.
+        pair_files_map = paired_files(result.events, pair_tool_calls(result.events))
         filtered = filter_events(
             result.events, level=level_value, event=event_value, q=q_value
         )
@@ -815,6 +822,7 @@ def create_app(
             refresh_url=page_url(page_num if page_num > 1 else None),
             prev_url=page_url(page_num - 1) if page_num > 1 else None,
             next_url=page_url(page_num + 1) if page_num < pages else None,
+            pair_files=pair_files_map,
         )
 
     @app.get(
