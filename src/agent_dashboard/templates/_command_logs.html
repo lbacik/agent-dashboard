@@ -1,0 +1,2 @@
+<p class="hint">Command logs:{% for filename in command_logs %} <a class="ev-open" data-slot="command-log-slot" data-label="open" href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}/files/{{ filename | urlencode }}" onclick="return toggleEvidence(this);">{{ filename }}</a>{% endfor %}</p>
+<div class="evidence-slot" id="command-log-slot"></div>

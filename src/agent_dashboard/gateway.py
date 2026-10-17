@@ -589,6 +589,30 @@ def argv_attempt_log(container_id: str, issue: int | str, started: str) -> list[
     ]
 
 
+def argv_list_run_files(
+    container_id: str, issue: int | str, started: str
+) -> list[str]:
+    """Argv for one Attempt log run listing: the file names in a single run.
+
+    A single ``docker exec`` runs ``ls -1`` on the run directory; besides the
+    validated container ID the only variable parts are the validated attempt
+    reference (issue digits plus the dash-form start), joined into the path
+    inside the gateway, never from the request. No shell.
+    """
+    validate_container_id(container_id)
+    number, dash_started = validate_attempt_ref(issue, started)
+    return [
+        "docker",
+        "exec",
+        "--user",
+        AGENT_USER,
+        container_id,
+        "ls",
+        "-1",
+        f"/data/logs/{number}/{dash_started}",
+    ]
+
+
 #: Evidence files an Attempt log event points at: numbered tool call, tool
 #: result and model response files. ``agent_output.json`` and
 #: ``attempt.json`` are readable too (the stream download and the header),
@@ -917,6 +941,45 @@ class DockerGateway:
                     f"docker exec timed out after {self.log_timeout:g} s"
                 ) from exc
             return TelemetryExec(stdout=stdout, returncode=proc.returncode)
+
+    async def list_run_files(
+        self, container_id: str, issue: int | str, started: str
+    ) -> list[str]:
+        """List the file names in one attempt's run directory with ``ls -1``.
+
+        Like :meth:`telemetry` the exit code is reported, not raised, except
+        that a non-zero exit means the run is not there and maps to
+        :class:`FileNotFoundError`. The read is bounded by ``log_timeout``
+        and shares the log semaphore with the other Attempt log reads. An
+        invalid container ID or attempt reference raises :class:`ValueError`
+        before anything is spawned.
+        """
+        argv = argv_list_run_files(container_id, issue, started)
+        number, dash_started = validate_attempt_ref(issue, started)
+        async with self._log_semaphore:
+            proc = await self._run(argv)
+            try:
+                stdout, _stderr = await asyncio.wait_for(
+                    proc.communicate(), self.log_timeout
+                )
+            except TimeoutError as exc:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
+                raise AttemptLogTimeoutError(
+                    f"docker exec timed out after {self.log_timeout:g} s"
+                ) from exc
+            if proc.returncode != 0:
+                raise FileNotFoundError(
+                    f"attempt not found: {number}/{dash_started}"
+                )
+            return [
+                line
+                for line in stdout.decode(errors="replace").splitlines()
+                if line
+            ]
 
     async def read_file(
         self,

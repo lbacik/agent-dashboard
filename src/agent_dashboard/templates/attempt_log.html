@@ -15,6 +15,9 @@
 {% if result.issue_title %}
 <p class="hint">{{ result.issue_title }} · outcome {{ result.outcome_text }} · started {{ result.started_at }}</p>
 {% endif %}
+{% if command_logs %}
+{% include "_command_logs.html" %}
+{% endif %}
 {% else %}
 <h3 class="attempt-title">{{ result.issue_title if result.issue_title else "Issue #%d" % result.issue }}</h3>
 <dl class="facts">
@@ -35,6 +38,10 @@
 {% if result.unreadable %}
 <p class="hint">{{ result.unreadable }} log line(s) could not be read.</p>
 {% endif %}
+{% if command_logs %}
+{% include "_command_logs.html" %}
+{% endif %}
+<p class="hint"><a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}/files/agent_output.json/download">Download the full event stream (agent_output.json)</a></p>
 <form method="get" action="{{ attempt_url }}" class="history-filters log-filters">
   <label>Level
     <select name="level">

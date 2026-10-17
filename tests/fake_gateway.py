@@ -32,6 +32,7 @@ class FakeGateway:
         self._histories: dict[str, TelemetryExec | Exception] = {}
         self._events: dict[str, TelemetryExec | Exception] = {}
         self._logs: dict[str, TelemetryExec | Exception] = {}
+        self._run_files: dict[tuple[str, str, str], list[str] | Exception] = {}
         self._files: dict[tuple[str, str, str, str], FileResult | Exception] = {}
         self.delay = 0.0
         self.history_delay = 0.0
@@ -41,6 +42,7 @@ class FakeGateway:
         self.history_calls: list[str] = []
         self.events_calls: list[tuple[str, str, str]] = []
         self.log_calls: list[tuple[str, str, str]] = []
+        self.run_files_calls: list[tuple[str, str, str]] = []
         self.file_calls: list[tuple[str, str, str, str]] = []
         self.in_flight = 0
         self.peak_in_flight = 0
@@ -200,6 +202,25 @@ class FakeGateway:
         if isinstance(scripted, Exception):
             raise scripted
         return scripted
+
+    def set_run_files(
+        self,
+        container_id: str,
+        issue: int | str,
+        started: str,
+        files: list[str] | Exception,
+    ) -> None:
+        self._run_files[(container_id, str(issue), started)] = files
+
+    async def list_run_files(
+        self, container_id: str, issue: int | str, started: str
+    ) -> list[str]:
+        """Scripted run listing; unscripted runs hold no files."""
+        self.run_files_calls.append((container_id, str(issue), started))
+        scripted = self._run_files.get((container_id, str(issue), started), [])
+        if isinstance(scripted, Exception):
+            raise scripted
+        return list(scripted)
 
     def set_file(
         self,
