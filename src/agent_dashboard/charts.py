@@ -54,10 +54,21 @@ OUTCOME_SHAPES = {
     "other": "cross",
 }
 
-#: Radius for attempts without usage data: one neutral size, never scaled.
-NEUTRAL_RADIUS = 5.0
-MIN_RADIUS = 5.0
+#: Radius for attempts without usage data: one neutral size below any measured
+#: mark, never scaled.
+NEUTRAL_RADIUS = 4.0
+MIN_RADIUS = 6.0
 MAX_RADIUS = 13.0
+
+#: Legend glyph per timeline shape: the non-colour cue in text form.
+SHAPE_GLYPHS = {
+    "circle": "●",
+    "square": "■",
+    "triangle": "▲",
+    "diamond": "◆",
+    "ring": "○",
+    "cross": "✕",
+}
 
 LANES = 3
 
@@ -103,7 +114,7 @@ class TimelinePoint:
     shape: str
     cost_text: str
     has_cost: bool
-    x01: float
+    x_frac: float
     lane: int
     radius: float
     tooltip: str
@@ -182,7 +193,7 @@ def timeline_points(
 ) -> tuple[TimelinePoint, ...]:
     """One mark per dated attempt, oldest first.
 
-    ``x01`` is the fractional time position (a lone attempt sits at 0.5);
+    ``x_frac`` is the fractional time position (a lone attempt sits at 0.5);
     ``radius`` scales with the square root of cost so a 100x run is 10x
     wider, not 100x. Attempts without usage data share :data:`NEUTRAL_RADIUS`
     and ``has_cost=False`` so the template can render them hollow.
@@ -200,9 +211,9 @@ def timeline_points(
     for index, summary in enumerate(dated):
         assert summary.started_ts is not None
         if span <= 0:
-            x01 = 0.5
+            x_frac = 0.5
         else:
-            x01 = (summary.started_ts - lo) / span
+            x_frac = (summary.started_ts - lo) / span
         if summary.cost_value is None:
             radius = NEUTRAL_RADIUS
             has_cost = False
@@ -229,7 +240,7 @@ def timeline_points(
                 shape=OUTCOME_SHAPES[key],
                 cost_text=summary.cost_text,
                 has_cost=has_cost,
-                x01=x01,
+                x_frac=x_frac,
                 lane=index % LANES,
                 radius=radius,
                 tooltip=_tooltip(summary),

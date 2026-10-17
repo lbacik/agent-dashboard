@@ -137,14 +137,14 @@ def test_timeline_orders_oldest_first_with_scaled_positions():
     )
     points = timeline_points(summaries)
     assert [p.issue for p in points] == [1, 2]
-    assert points[0].x01 == 0.0
-    assert points[1].x01 == 1.0
+    assert points[0].x_frac == 0.0
+    assert points[1].x_frac == 1.0
     assert points[1].radius > points[0].radius
 
 
 def test_timeline_single_attempt_is_centred():
     (point,) = timeline_points((_summary(1, _ts(0), "complete", cost=2.0),))
-    assert point.x01 == 0.5
+    assert point.x_frac == 0.5
 
 
 def test_timeline_missing_cost_uses_neutral_size():

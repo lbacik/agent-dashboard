@@ -31,20 +31,11 @@
   {% set plot_w = W - LEFT - 12 %}{% set plot_h = H - TOP - BOTTOM %}
   {% set slot = plot_w / (buckets|length) %}{% set bar_w = [40, slot * 0.6] | min %}
   <svg class="bars" viewBox="0 0 {{ W }} {{ H }}" role="img" aria-label="Stacked bar chart of attempt outcomes per day">
-    {% if bucket_peak >= 2 %}
-    {% set mid = (bucket_peak + 1) // 2 %}
-    {% for tick in [0, mid, bucket_peak] %}
+    {% for tick in y_ticks %}
     {% set ty = TOP + plot_h - (tick / bucket_peak) * plot_h %}
     <line x1="{{ LEFT }}" y1="{{ ty }}" x2="{{ W - 12 }}" y2="{{ ty }}" class="grid" />
     <text x="{{ LEFT - 6 }}" y="{{ ty + 4 }}" text-anchor="end" class="axis">{{ tick }}</text>
     {% endfor %}
-    {% elif bucket_peak == 1 %}
-    {% for tick in [0, 1] %}
-    {% set ty = TOP + plot_h - (tick / bucket_peak) * plot_h %}
-    <line x1="{{ LEFT }}" y1="{{ ty }}" x2="{{ W - 12 }}" y2="{{ ty }}" class="grid" />
-    <text x="{{ LEFT - 6 }}" y="{{ ty + 4 }}" text-anchor="end" class="axis">{{ tick }}</text>
-    {% endfor %}
-    {% endif %}
     {% for bucket in buckets %}
     {% set x = LEFT + loop.index0 * slot + (slot - bar_w) / 2 %}
     {% set ns = namespace(base=TOP + plot_h) %}
@@ -84,7 +75,7 @@
     <text x="{{ W / 2 }}" y="{{ H - 8 }}" text-anchor="middle" class="axis">{{ points[(points|length - 1) // 2].started_at[:10] }}</text>
     {% endif %}
     {% for point in points %}
-    {% set cx = PAD + point.x01 * (W - 2 * PAD) %}
+    {% set cx = PAD + point.x_frac * (W - 2 * PAD) %}
     {% set cy = 30 + point.lane * 20 %}
     {% set r = point.radius %}
     <g class="mark outcome-{{ point.outcome_key }}{% if not point.has_cost %} no-cost{% endif %}" tabindex="0" role="img" aria-label="{{ point.tooltip }}" data-tip="{{ point.tooltip }}">

@@ -18,6 +18,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .charts import (
     OUTCOME_LABELS,
     OUTCOME_ORDER,
+    SHAPE_GLYPHS,
     outcome_legend,
     outcomes_per_day,
     timeline_points,
@@ -284,6 +285,12 @@ def create_app(
         buckets = outcomes_per_day(result.summaries, now=now_ts, window=result.window)
         points = timeline_points(result.summaries)
         peak = max((b.total for b in buckets), default=0)
+        if peak >= 2:
+            y_ticks = [0, (peak + 1) // 2, peak]
+        elif peak == 1:
+            y_ticks = [0, 1]
+        else:
+            y_ticks = []
         # X labels stay readable: show at most ~14 day ticks.
         label_every = max(1, -(-len(buckets) // 14))
         return templates.TemplateResponse(
@@ -302,16 +309,10 @@ def create_app(
                 "points": points,
                 "legend": outcome_legend(result.summaries),
                 "undated": undated_count(result.summaries),
-                "chart_keys": [k for k in OUTCOME_ORDER],
+                "chart_keys": list(OUTCOME_ORDER),
                 "chart_labels": dict(OUTCOME_LABELS),
-                "shape_glyphs": {
-                    "circle": "●",
-                    "square": "■",
-                    "triangle": "▲",
-                    "diamond": "◆",
-                    "ring": "○",
-                    "cross": "✕",
-                },
+                "shape_glyphs": dict(SHAPE_GLYPHS),
+                "y_ticks": y_ticks,
             },
         )
 
