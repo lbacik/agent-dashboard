@@ -518,12 +518,14 @@ def _run_collector_script(root, capsys, monkeypatch):
     real_open = open
     real_listdir = real_os.listdir
     real_isdir = real_os.path.isdir
+    real_isfile = real_os.path.isfile
 
     def fake_open(path, *args, **kwargs):
         return real_open(remap(path), *args, **kwargs)
 
     monkeypatch.setattr(real_os, "listdir", lambda p: real_listdir(remap(p)))
     monkeypatch.setattr(real_os.path, "isdir", lambda p: real_isdir(remap(p)))
+    monkeypatch.setattr(real_os.path, "isfile", lambda p: real_isfile(remap(p)))
     monkeypatch.setattr("builtins.open", fake_open)
     namespace: dict = {"__name__": "__collector_test__"}
     try:
@@ -554,11 +556,14 @@ def test_history_script_collects_attempts(tmp_path, capsys, monkeypatch):
     assert payload["layout"] == HISTORY_LAYOUT
     assert payload["active_started_at"] == "2026-09-27T16:33:43.385090Z"
     assert payload["unreadable"] == 1
-    assert len(payload["attempts"]) == 1
-    entry = payload["attempts"][0]
-    assert entry["issue"] == 98
-    assert entry["started"] == "2026-09-27T16-33-43.385090Z"
-    assert entry["attempt"]["outcome"] == "complete"
+    # A broken attempt.json stays listed (attempt None) so its Attempt log
+    # stays reachable, instead of only being counted as unreadable.
+    assert len(payload["attempts"]) == 2
+    by_issue = {entry["issue"]: entry for entry in payload["attempts"]}
+    assert by_issue[98]["attempt"]["outcome"] == "complete"
+    assert by_issue[98]["started"] == "2026-09-27T16-33-43.385090Z"
+    assert by_issue[99]["attempt"] is None
+    assert by_issue[99]["has_events"] is False
 
 
 def test_history_script_missing_logs_is_unknown_layout(tmp_path, capsys, monkeypatch):
@@ -731,3 +736,340 @@ def test_history_single_exec_per_page_view():
     )
     client.get("/instances/work/history")
     assert gateway.history_calls == ["id-work"]
+
+
+# --- attempt history gaps: missing summaries, PR column, no-events note ------
+
+
+def test_missing_attempt_json_lists_row_with_no_outcome_status():
+    from agent_dashboard.history import IN_PROGRESS_TEXT, NO_OUTCOME_TEXT
+
+    assert NO_OUTCOME_TEXT == "no outcome (crashed or abandoned)"
+    assert IN_PROGRESS_TEXT == "in progress"
+    payload = _payload(
+        [
+            _entry(98, "2026-09-27T16-33-43.385090Z", COMPLETE),
+            {
+                "issue": 99,
+                "started": "2026-09-28T10-00-00.000000Z",
+                "attempt": None,
+                "has_events": True,
+            },
+        ]
+    )
+    stdout, code = _stdout(payload)
+    result = read_history(stdout, code, now=NOW, window="all")
+    assert result.ok
+    assert result.total == 2
+    by_issue = {s.issue: s for s in result.summaries}
+    missing = by_issue[99]
+    assert missing.outcome_text == "no outcome (crashed or abandoned)"
+    assert missing.active is False
+    assert missing.has_summary is False
+    assert missing.has_events is True
+    assert missing.started_at == "2026-09-28T10:00:00.000000Z"
+    assert missing.started_ts is not None
+    assert missing.duration_text == "n/a"
+    assert missing.cost_text == "n/a"
+    # Newest first: the missing run sorts by its directory name.
+    assert [s.issue for s in result.summaries] == [99, 98]
+
+
+def test_missing_attempt_json_active_is_in_progress():
+    started = "2026-10-16T10:00:00.000000Z"
+    payload = _payload(
+        [
+            {
+                "issue": 7,
+                "started": "2026-10-16T10-00-00.000000Z",
+                "attempt": None,
+                "has_events": True,
+            }
+        ],
+        active_started_at=started,
+    )
+    stdout, code = _stdout(payload)
+    (summary,) = read_history(stdout, code, now=NOW).summaries
+    assert summary.outcome_text == "in progress"
+    assert summary.active is True
+    assert summary.has_summary is False
+    assert summary.duration_text != "n/a"
+
+
+def test_unparsable_attempt_entry_still_lists_a_row():
+    # The collector converts a broken attempt.json to attempt None; the
+    # parser keeps that row reachable with the crashed status.
+    payload = _payload(
+        [
+            {
+                "issue": 5,
+                "started": "2026-09-27T10-00-00.000000Z",
+                "attempt": None,
+                "has_events": False,
+            }
+        ],
+        unreadable=1,
+    )
+    stdout, code = _stdout(payload)
+    result = read_history(stdout, code, now=NOW)
+    assert result.ok
+    assert result.total == 1
+    assert result.unreadable == 1
+    (summary,) = result.summaries
+    assert summary.outcome_text == "no outcome (crashed or abandoned)"
+    assert summary.has_events is False
+
+
+def test_non_dict_attempt_entries_are_still_skipped_and_counted():
+    payload = _payload(
+        [
+            _entry(1, "2026-09-27T10-00-00.000000Z", COMPLETE),
+            {"issue": 2, "started": "2026-09-27T10-00-00.000000Z", "attempt": [1, 2]},
+        ]
+    )
+    stdout, code = _stdout(payload)
+    result = read_history(stdout, code, now=NOW)
+    assert result.total == 1
+    assert result.unreadable == 1
+
+
+def test_missing_rows_respect_the_time_window_filter():
+    old_started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(NOW - 40 * 86400))
+    payload = _payload(
+        [
+            {
+                "issue": 9,
+                "started": old_started.replace(":", "-"),
+                "attempt": None,
+                "has_events": True,
+            },
+            _aged_attempt(1, 1, NOW),
+        ]
+    )
+    stdout, code = _stdout(payload)
+    assert read_history(stdout, code, now=NOW, window="all").total == 2
+    week = read_history(stdout, code, now=NOW, window="7").summaries
+    assert [s.issue for s in week] == [1]
+
+
+def test_charts_count_only_attempts_with_a_usable_summary():
+    from agent_dashboard.charts import (
+        cost_totals,
+        outcomes_per_day,
+        timeline_points,
+    )
+
+    payload = _payload(
+        [
+            _entry(98, "2026-09-27T16-33-43.385090Z", COMPLETE),
+            {
+                "issue": 99,
+                "started": "2026-09-27T16-33-43.385090Z",
+                "attempt": None,
+                "has_events": True,
+            },
+        ]
+    )
+    stdout, code = _stdout(payload)
+    result = read_history(stdout, code, now=NOW, window="all")
+    assert result.total == 2
+    charted = tuple(s for s in result.summaries if s.has_summary)
+    assert len(charted) == 1
+    assert charted[0].issue == 98
+    # The missing row never feeds the charts, as today.
+    assert sum(b.total for b in outcomes_per_day(charted, now=NOW, window="all")) == 1
+    assert len(timeline_points(charted)) == 1
+    assert cost_totals(charted).with_cost == 1
+
+
+def test_pr_fields_parse_link_number_and_blank():
+    with_pr = dict(
+        COMPLETE,
+        pull_request={"number": 12, "url": "https://example.test/pr/12"},
+    )
+    number_only = dict(COMPLETE, pull_request={"number": 7})
+    bad_pr = dict(COMPLETE, pull_request={"number": "12", "url": ""})
+    payload = _payload(
+        [
+            _entry(1, "2026-09-27T16-33-43.385090Z", with_pr),
+            _entry(2, "2026-09-28T16-33-43.385090Z", number_only),
+            _entry(3, "2026-09-29T16-33-43.385090Z", bad_pr),
+            _entry(4, "2026-09-30T16-33-43.385090Z", COMPLETE),
+        ]
+    )
+    stdout, code = _stdout(payload)
+    by_issue = {s.issue: s for s in read_history(stdout, code, now=NOW).summaries}
+    assert (by_issue[1].pr_number, by_issue[1].pr_url) == (
+        12,
+        "https://example.test/pr/12",
+    )
+    assert (by_issue[2].pr_number, by_issue[2].pr_url) == (7, None)
+    assert (by_issue[3].pr_number, by_issue[3].pr_url) == (None, None)
+    assert (by_issue[4].pr_number, by_issue[4].pr_url) == (None, None)
+
+
+def test_has_events_defaults_to_true_for_old_payloads():
+    stdout, code = _stdout(_payload([_entry(1, "2026-09-27T10-00-00.000000Z", COMPLETE)]))
+    (summary,) = read_history(stdout, code, now=NOW).summaries
+    assert summary.has_events is True
+    assert summary.has_summary is True
+
+
+def test_history_script_flags_missing_agent_output(tmp_path, capsys, monkeypatch):
+    logs = tmp_path / "logs"
+    with_events = logs / "98" / "2026-09-27T16-33-43.385090Z"
+    with_events.mkdir(parents=True)
+    (with_events / "attempt.json").write_text(json.dumps(COMPLETE))
+    (with_events / "agent_output.json").write_text('{"event": "x"}\n')
+    without_events = logs / "99" / "2026-09-28T10-00-00.000000Z"
+    without_events.mkdir(parents=True)
+    (without_events / "attempt.json").write_text(json.dumps(COMPLETE))
+    missing = logs / "100" / "2026-09-29T10-00-00.000000Z"
+    missing.mkdir(parents=True)
+    payload = _run_collector_script(tmp_path, capsys, monkeypatch)
+    by_issue = {entry["issue"]: entry for entry in payload["attempts"]}
+    assert by_issue[98]["has_events"] is True
+    assert by_issue[99]["has_events"] is False
+    assert by_issue[100]["attempt"] is None
+    assert by_issue[100]["has_events"] is False
+
+
+def test_history_page_lists_missing_row_with_status_and_link():
+    payload = {
+        "layout": HISTORY_LAYOUT,
+        "attempts": [
+            {
+                "issue": 99,
+                "started": "2026-09-28T10-00-00.000000Z",
+                "attempt": None,
+                "has_events": True,
+            }
+        ],
+        "active_started_at": None,
+        "unreadable": 1,
+    }
+    client, _, _ = make_history_client([("work", "running")], {"id-work": payload})
+    body = client.get("/instances/work/history?window=all").text
+    assert "no outcome (crashed or abandoned)" in body
+    # The row keeps its Attempt log link so the log stays reachable.
+    assert "/instances/work/attempts/99/2026-09-28T10-00-00.000000Z" in body
+    assert "2026-09-28T10:00:00.000000Z" in body
+
+
+def test_history_page_marks_active_missing_row_in_progress():
+    started = "2026-10-16T10:00:00.000000Z"
+    payload = {
+        "layout": HISTORY_LAYOUT,
+        "attempts": [
+            {
+                "issue": 7,
+                "started": "2026-10-16T10-00-00.000000Z",
+                "attempt": None,
+                "has_events": True,
+            }
+        ],
+        "active_started_at": started,
+        "unreadable": 1,
+    }
+    client, _, _ = make_history_client([("work", "running")], {"id-work": payload})
+    body = client.get("/instances/work/history?window=all").text
+    assert "in progress" in body
+    assert "active-row" in body
+
+
+def test_history_page_pr_column_renders_link_number_and_blank():
+    payload = {
+        "layout": HISTORY_LAYOUT,
+        "attempts": [
+            {
+                "issue": 1,
+                "started": "2026-09-27T16-33-43.385090Z",
+                "attempt": dict(
+                    COMPLETE,
+                    pull_request={"number": 12, "url": "https://example.test/pr/12"},
+                ),
+                "has_events": True,
+            },
+            {
+                "issue": 2,
+                "started": "2026-09-28T16-33-43.385090Z",
+                "attempt": dict(COMPLETE, pull_request={"number": 7}),
+                "has_events": True,
+            },
+            {
+                "issue": 3,
+                "started": "2026-09-29T16-33-43.385090Z",
+                "attempt": dict(COMPLETE),
+                "has_events": True,
+            },
+        ],
+        "active_started_at": None,
+        "unreadable": 0,
+    }
+    client, _, _ = make_history_client([("work", "running")], {"id-work": payload})
+    body = client.get("/instances/work/history?window=all").text
+    assert "<th>PR</th>" in body
+    assert '<a href="https://example.test/pr/12">#12</a>' in body
+    assert "#7" in body
+    # Plain numbers never link without a URL.
+    assert "https://example.test/pr/12" in body
+    assert body.count("https://example.test/pr/12") == 1
+
+
+def test_history_page_no_events_note():
+    payload = {
+        "layout": HISTORY_LAYOUT,
+        "attempts": [
+            {
+                "issue": 1,
+                "started": "2026-09-27T16-33-43.385090Z",
+                "attempt": dict(COMPLETE),
+                "has_events": False,
+            },
+            {
+                "issue": 2,
+                "started": "2026-09-28T16-33-43.385090Z",
+                "attempt": dict(COMPLETE),
+                "has_events": True,
+            },
+        ],
+        "active_started_at": None,
+        "unreadable": 0,
+    }
+    client, _, _ = make_history_client([("work", "running")], {"id-work": payload})
+    body = client.get("/instances/work/history?window=all").text
+    assert "<th>Events</th>" in body
+    assert "no events" in body
+    assert body.count("no events") == 1
+
+
+def test_history_page_with_missing_rows_still_charts_usable_summaries():
+    payload = {
+        "layout": HISTORY_LAYOUT,
+        "attempts": [
+            {
+                "issue": 98,
+                "started": "2026-09-27T16-33-43.385090Z",
+                "attempt": dict(COMPLETE),
+                "has_events": True,
+            },
+            {
+                "issue": 99,
+                "started": "2026-09-28T10-00-00.000000Z",
+                "attempt": None,
+                "has_events": False,
+            },
+        ],
+        "active_started_at": None,
+        "unreadable": 1,
+    }
+    client, _, _ = make_history_client([("work", "running")], {"id-work": payload})
+    response = client.get("/instances/work/history?window=all")
+    assert response.status_code == 200
+    body = response.text
+    assert "#98" in body and "#99" in body
+    assert "no outcome (crashed or abandoned)" in body
+    assert "no events" in body
+    # Charts still render from the usable summary only.
+    assert "Outcomes" in body
+    assert "complete" in body

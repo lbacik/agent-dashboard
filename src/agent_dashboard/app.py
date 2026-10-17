@@ -361,8 +361,12 @@ def create_app(
                     "error": result.error,
                 },
             )
-        buckets = outcomes_per_day(result.summaries, now=now_ts, window=result.window)
-        points = timeline_points(result.summaries)
+        # Charts count only attempts with a usable summary: runs whose
+        # attempt.json is missing or unparsable stay in the table (so the
+        # Attempt log stays reachable) but never feed the charts.
+        charted = tuple(s for s in result.summaries if s.has_summary)
+        buckets = outcomes_per_day(charted, now=now_ts, window=result.window)
+        points = timeline_points(charted)
         peak = max((b.total for b in buckets), default=0)
         if peak >= 2:
             y_ticks = [0, (peak + 1) // 2, peak]
@@ -372,13 +376,13 @@ def create_app(
             y_ticks = []
         # X labels stay readable: show at most ~14 day ticks.
         label_every = max(1, -(-len(buckets) // 14))
-        cost_points = cost_per_attempt(result.summaries)
+        cost_points = cost_per_attempt(charted)
         cumulative = cumulative_cost_per_day(
-            result.summaries, now=now_ts, window=result.window
+            charted, now=now_ts, window=result.window
         )
-        scatter = duration_vs_cost(result.summaries)
-        totals = cost_totals(result.summaries)
-        threshold = cost_soft_threshold(result.summaries)
+        scatter = duration_vs_cost(charted)
+        totals = cost_totals(charted)
+        threshold = cost_soft_threshold(charted)
         cost_peak = (
             max(
                 [p.cost_value for p in cost_points]
@@ -425,9 +429,9 @@ def create_app(
             else []
         )
         cum_label_every = max(1, -(-len(cumulative) // 14))
-        token_points = tokens_per_attempt(result.summaries)
-        share_points = cache_share_per_attempt(result.summaries)
-        token_missing = missing_token_count(result.summaries)
+        token_points = tokens_per_attempt(charted)
+        share_points = cache_share_per_attempt(charted)
+        token_missing = missing_token_count(charted)
         token_peak = max((p.total for p in token_points), default=0.0)
         if token_peak > 0:
             token_ticks = [
@@ -454,8 +458,8 @@ def create_app(
                 "bucket_peak": peak,
                 "label_every": label_every,
                 "points": points,
-                "legend": outcome_legend(result.summaries),
-                "undated": undated_count(result.summaries),
+                "legend": outcome_legend(charted),
+                "undated": undated_count(charted),
                 "chart_keys": list(OUTCOME_ORDER),
                 "chart_labels": dict(OUTCOME_LABELS),
                 "shape_glyphs": dict(SHAPE_GLYPHS),

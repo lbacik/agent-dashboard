@@ -170,6 +170,10 @@ class AttemptSummary:
     cache_read_value: float | None = None
     cache_creation_value: float | None = None
     output_value: float | None = None
+    pr_number: int | None = None
+    pr_url: str | None = None
+    has_events: bool = True
+    has_summary: bool = True
 
 
 @dataclass(frozen=True)
@@ -252,13 +256,107 @@ def _read_stop_reason(attempt: dict[str, Any], has_usage: bool) -> str:
     return NOT_APPLICABLE
 
 
+#: Status for a run directory whose ``attempt.json`` is missing or unparsable
+#: and which is not the active attempt.
+NO_OUTCOME_TEXT = "no outcome (crashed or abandoned)"
+
+#: Status for a run directory whose ``attempt.json`` is missing or unparsable
+#: but which matches the instance's active checkpoint.
+IN_PROGRESS_TEXT = "in progress"
+
+
+def _read_pr(attempt: dict[str, Any]) -> tuple[int | None, str | None]:
+    """Pull request number/url from one attempt record, or ``(None, None)``."""
+    pr = attempt.get("pull_request")
+    if not isinstance(pr, dict):
+        return None, None
+    number = pr.get("number")
+    if isinstance(number, bool) or not isinstance(number, int):
+        number = None
+    url = _str(pr.get("url"))
+    return number, url
+
+
+def _read_has_events(entry: dict[str, Any]) -> bool:
+    """Whether the run directory holds an ``agent_output.json`` event stream.
+
+    Missing keys (payloads written before the flag existed) read as True so
+    old payloads never gain a spurious "no events" note.
+    """
+    raw = entry.get("has_events", True)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return raw != 0
+    return True
+
+
+def _missing_summary(
+    issue: int,
+    entry: dict[str, Any],
+    active_started_at: str | None,
+    now: float,
+) -> AttemptSummary:
+    """One row for a run directory without a usable ``attempt.json`` summary.
+
+    The row keeps the Attempt log reachable: the start falls back to the run
+    directory name, the status is "in progress" for the active attempt else
+    "no outcome (crashed or abandoned)", and everything else renders as
+    ``n/a``. Charts only count rows with a usable summary (``has_summary``),
+    so this row never feeds them.
+    """
+    started_at = _restore_started(entry.get("started"))
+    started_ts = _parse_time(started_at)
+    if active_started_at and started_at == active_started_at:
+        outcome_text = IN_PROGRESS_TEXT
+        active = True
+    else:
+        outcome_text = NO_OUTCOME_TEXT
+        active = False
+    if active and started_ts is not None:
+        duration_value: float | None = max(0.0, now - started_ts)
+        duration_text = format_duration(duration_value)
+    else:
+        duration_value = None
+        duration_text = NOT_APPLICABLE
+    return AttemptSummary(
+        issue=issue,
+        issue_title=None,
+        started_at=started_at or NOT_APPLICABLE,
+        started_ts=started_ts,
+        duration_text=duration_text,
+        duration_value=duration_value,
+        outcome_text=outcome_text,
+        active=active,
+        stop_reason_text=NOT_APPLICABLE,
+        cost_text=NOT_APPLICABLE,
+        cost_value=None,
+        cost_threshold_value=None,
+        input_text=NOT_APPLICABLE,
+        cache_read_text=NOT_APPLICABLE,
+        cache_creation_text=NOT_APPLICABLE,
+        output_text=NOT_APPLICABLE,
+        has_usage=False,
+        input_value=None,
+        cache_read_value=None,
+        cache_creation_value=None,
+        output_value=None,
+        pr_number=None,
+        pr_url=None,
+        has_events=_read_has_events(entry),
+        has_summary=False,
+    )
+
+
 def _read_entry(entry: Any, active_started_at: str | None, now: float) -> AttemptSummary | None:
     if not isinstance(entry, dict):
         return None
     issue = entry.get("issue")
     if isinstance(issue, bool) or not isinstance(issue, int):
         return None
-    attempt = entry.get("attempt")
+    attempt = entry.get("attempt", None) if "attempt" in entry else None
+    if attempt is None:
+        return _missing_summary(issue, entry, active_started_at, now)
     if not isinstance(attempt, dict):
         return None
     started_at = _str(attempt.get("started_at")) or _restore_started(entry.get("started"))
@@ -284,6 +382,7 @@ def _read_entry(entry: Any, active_started_at: str | None, now: float) -> Attemp
         duration_value = None
         duration_text = NOT_APPLICABLE
     usage = _read_usage(attempt)
+    pr_number, pr_url = _read_pr(attempt)
     return AttemptSummary(
         issue=issue,
         issue_title=_str(attempt.get("issue_title")),
@@ -306,6 +405,10 @@ def _read_entry(entry: Any, active_started_at: str | None, now: float) -> Attemp
         cache_read_value=usage["cache_read_value"],
         cache_creation_value=usage["cache_creation_value"],
         output_value=usage["output_value"],
+        pr_number=pr_number,
+        pr_url=pr_url,
+        has_events=_read_has_events(entry),
+        has_summary=True,
     )
 
 

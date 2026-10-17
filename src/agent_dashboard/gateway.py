@@ -30,10 +30,12 @@ CONTAINER_ID_RE = re.compile(r"[0-9a-fA-F]{1,64}\Z")
 
 #: Collector run inside the managed instance by ``argv_attempt_history``.
 #: A fixed script (never interpolated with operator input): it walks
-#: ``/data/logs/<issue>/<started_at>/attempt.json`` with the verified name
-#: shapes, reads the active checkpoint for the in-progress attempt, and
-#: prints one JSON document. ``/data/logs`` itself holds the paths, so no
-#: raw path ever appears in the argv.
+#: ``/data/logs/<issue>/<started_at>/`` with the verified name shapes, keeps
+#: one record per run directory (even when ``attempt.json`` is missing or
+#: unparsable, so the Attempt log stays reachable), flags whether
+#: ``agent_output.json`` exists, reads the active checkpoint for the
+#: in-progress attempt, and prints one JSON document. ``/data/logs`` itself
+#: holds the paths, so no raw path ever appears in the argv.
 HISTORY_SCRIPT = """\
 import json
 import os
@@ -75,16 +77,25 @@ for issue in issues:
     for started in started_names:
         if not STARTED_RE.match(started):
             continue
-        path = os.path.join(issue_dir, started, "attempt.json")
+        run_dir = os.path.join(issue_dir, started)
+        path = os.path.join(run_dir, "attempt.json")
         try:
             record = json.loads(read_capped(path, MAX_ATTEMPT_BYTES).decode("utf-8"))
         except (OSError, ValueError):
             out["unreadable"] += 1
-            continue
-        if not isinstance(record, dict):
+            record = None
+        if record is not None and not isinstance(record, dict):
             out["unreadable"] += 1
-            continue
-        out["attempts"].append({"issue": int(issue), "started": started, "attempt": record})
+            record = None
+        has_events = os.path.isfile(os.path.join(run_dir, "agent_output.json"))
+        out["attempts"].append(
+            {
+                "issue": int(issue),
+                "started": started,
+                "attempt": record,
+                "has_events": has_events,
+            }
+        )
 try:
     state = json.loads(read_capped(STATE, MAX_STATE_BYTES).decode("utf-8"))
     if isinstance(state, dict) and isinstance(state.get("started_at"), str):
