@@ -55,6 +55,7 @@ from .charts import (
 from .config import Settings
 from .fleet import FleetState, poll_forever
 from .gateway import (
+    COMMAND_LOG_RE,
     EVIDENCE_PREVIEW_CAP,
     DockerGateway,
     GatewayError,
@@ -659,6 +660,7 @@ def create_app(
             prev_url: str | None = None,
             next_url: str | None = None,
             pair_files: dict | None = None,
+            command_logs: tuple[str, ...] = (),
         ) -> Response:
             return templates.TemplateResponse(
                 request,
@@ -672,6 +674,7 @@ def create_app(
                     "dash_started": dash_started,
                     "result": result,
                     "error": error,
+                    "command_logs": command_logs,
                     "page_events": page_events,
                     "page_num": page_num,
                     "pages": pages,
@@ -745,6 +748,17 @@ def create_app(
                 reset_url=base_url,
                 refresh_url=base_url,
             )
+        try:
+            run_files = await gw.list_run_files(row.container_id, number, dash)
+        except (GatewayError, ValueError, FileNotFoundError):
+            run_files = []
+        command_logs = tuple(
+            sorted(
+                name
+                for name in run_files
+                if isinstance(name, str) and COMMAND_LOG_RE.fullmatch(name) is not None
+            )
+        )
         result = read_attempt_log(
             exec_result.stdout,
             exec_result.returncode,
@@ -761,6 +775,7 @@ def create_app(
                 attempt_url=base_url,
                 reset_url=base_url,
                 refresh_url=base_url,
+                command_logs=command_logs,
             )
         params = request.query_params
         raw_level = params.get("level", "")
@@ -823,6 +838,7 @@ def create_app(
             prev_url=page_url(page_num - 1) if page_num > 1 else None,
             next_url=page_url(page_num + 1) if page_num < pages else None,
             pair_files=pair_files_map,
+            command_logs=command_logs,
         )
 
     @app.get(
@@ -913,6 +929,66 @@ def create_app(
             text=text,
             raw_url=file_url(dash, file, raw=True),
             formatted_url=file_url(dash, file),
+            download_url=file_url(dash, file) + "/download",
+        )
+
+    @app.get(
+        "/instances/{name}/attempts/{issue}/{started}/files/{file}/download",
+    )
+    async def attempt_file_download(
+        request: Request, name: str, issue: str, started: str, file: str
+    ) -> Response:
+        """Download one allow-listed file of an attempt in full, as an attachment.
+
+        The same ``read_file`` gateway operation as the inline preview but
+        with no cap, sent to the client as a chunked stream. The file name
+        passes the read allow-list first: a failure returns 404 without any
+        Docker call. Every other problem (unknown instance, stopped
+        instance, invalid reference, gateway error, missing file) renders a
+        clear message with status 200, never an error.
+        """
+        try:
+            validate_log_file(file)
+        except ValueError:
+            return PlainTextResponse(
+                f"Unknown Evidence file {file!r}.", status_code=404
+            )
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        row = find_row(rows, name)
+        if row is None:
+            return PlainTextResponse(
+                f"Unknown Managed instance {name!r}: it is unknown or was removed."
+            )
+        if row.state != "running":
+            return PlainTextResponse(
+                "Attempt logs are available for running managed instances only."
+            )
+        try:
+            number, dash = validate_attempt_ref(issue, started)
+        except ValueError as exc:
+            return PlainTextResponse(f"Invalid attempt reference: {exc}")
+        try:
+            result = await gw.read_file(row.container_id, number, dash, file, cap=None)
+        except FileNotFoundError:
+            return PlainTextResponse(
+                f"Evidence file {file} was not found in this attempt."
+            )
+        except (GatewayError, ValueError) as exc:
+            return PlainTextResponse(f"Could not download the Evidence file: {exc}")
+        content = result.content
+
+        def chunks():
+            """Yield the uncapped file chunk by chunk to the client."""
+            for offset in range(0, len(content), 65536):
+                yield content[offset : offset + 65536]
+
+        return StreamingResponse(
+            chunks(),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{file}"',
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     @app.get("/fleet", response_class=HTMLResponse)

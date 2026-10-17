@@ -4,6 +4,7 @@
 <div class="evidence-preview">
   <div class="evidence-bar">
     <span class="evidence-size">{{ size_text }}</span>
+    <a href="{{ download_url }}">download</a>
     {% if raw %}
     <a href="{{ formatted_url }}" hx-get="{{ formatted_url }}" hx-target="closest .evidence-preview" hx-swap="outerHTML">formatted</a>
     {% else %}
