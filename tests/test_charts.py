@@ -565,6 +565,7 @@ def _cost_page_payload(with_threshold=True):
     now = _time.time()
     recent = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now - 86400))
     older = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now - 2 * 86400))
+    mid = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now - 3 * 86400))
     old = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now - 40 * 86400))
     recent_attempt = {
         "outcome": "complete",
@@ -585,6 +586,12 @@ def _cost_page_payload(with_threshold=True):
         "outcome": "handoff",
         "started_at": old,
         "duration_seconds": 60,
+        "model_usage": {"m": {"input_tokens": 5, "cost_usd": 4.00}},
+    }
+    unmeasured_attempt = {
+        "outcome": "complete",
+        "started_at": mid,
+        "duration_seconds": 30,
     }
     return {
         "layout": "attempt-logs/v1",
@@ -598,6 +605,11 @@ def _cost_page_payload(with_threshold=True):
                 "issue": 41,
                 "started": older.replace(":", "-"),
                 "attempt": older_attempt,
+            },
+            {
+                "issue": 9,
+                "started": mid.replace(":", "-"),
+                "attempt": unmeasured_attempt,
             },
             {
                 "issue": 7,
@@ -621,7 +633,7 @@ def test_history_page_renders_cost_charts_with_totals():
     assert "Cumulative cost" in body
     assert "Duration vs cost" in body
     # Totals count the attempt without usage data instead of plotting zero.
-    assert "$2.00" in body  # 1.50 + 0.50
+    assert "$6.00" in body  # 1.50 + 0.50 + 4.00 (stale issue #7)
     assert "without usage data" in body
     assert "excluded from cost totals" in body
 
@@ -650,11 +662,14 @@ def test_history_page_cost_charts_respect_window_filter():
         [("work", "running")], {"id-work": _cost_page_payload()}
     )
     week = client.get("/instances/work/history?window=7").text
-    # Issue #7 is 40 days old: outside the window, out of the cost total.
+    # Issue #7 is 40 days old with $4.00 of cost: outside the window, its
+    # cost drops out of the total ($6.00 -> $2.00).
     assert "Issue #7" not in week
     assert "$2.00" in week
+    assert "$6.00" not in week
     everything = client.get("/instances/work/history?window=all").text
     assert "Issue #7" in everything
+    assert "$6.00" in everything
 
 
 def test_history_page_cost_marks_show_issue_outcome_duration_and_cost():

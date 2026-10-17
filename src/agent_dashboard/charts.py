@@ -508,7 +508,8 @@ def duration_vs_cost(
 
     ``x_frac`` scales linearly with cost and ``y_frac`` with duration; a lone
     mark sits at 0.5 on a degenerate axis. Attempts missing either value are
-    excluded (and counted by :func:`missing_cost_count` for cost).
+    excluded: cost-missing attempts are counted by :func:`missing_cost_count`,
+    while an attempt with cost but no duration has no separate count.
     """
     rows = sorted(
         (
