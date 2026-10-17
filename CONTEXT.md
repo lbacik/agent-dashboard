@@ -19,3 +19,11 @@ _Avoid_: Summary, status message, state
 **Attention rank**:
 The order in which the dashboard lists managed instances: those needing the operator first (unreachable, recovery hold, consecutive errors, handoff in progress), then those approaching the soft threshold, then working, idle, and offline ones.
 _Avoid_: Priority, severity, sort order
+
+**Attempt log**:
+The retained record of one implementation attempt on a managed instance: its ordered event stream plus its evidence files. The agent owns it; the dashboard only reads it.
+_Avoid_: Session, run log, history
+
+**Evidence file**:
+One numbered file in an attempt log holding a tool call's input, a tool call's result, or the model's reply text. Which tool a call belongs to is stated only by the event stream, never by the file itself.
+_Avoid_: Request file, response file, log file

@@ -203,16 +203,18 @@ def attempts():
             usage = a.get("model_usage") or {}
             cost = sum(v.get("costUSD", 0) for v in usage.values()) if usage else None
             pr = (a.get("pull_request") or {}).get("number")
-            rows.append(
+            rows.append((has_events,
                 f"<tr class='{cls}'><td><a href='/logs/{issue_dir.name}/{rd.name}'>#{issue_dir.name}</a></td>"
                 f"<td>{esc(a.get('issue_title', ''))}</td><td>{esc(a.get('started_at', rd.name))}</td>"
                 f"<td>{esc(outcome)}</td><td>{f'{dur:.0f}s' if dur else ''}</td>"
                 f"<td>{f'${cost:.2f}' if cost else ''}</td><td>{f'PR {pr}' if pr else ''}</td>"
-                f"<td class=dim>{'events' if has_events else 'no events'}</td></tr>"
-            )
+                f"<td class=dim>{'events' if has_events else 'no events (variants look identical)'}</td></tr>"
+            ))
     body = (
+        "<p class=dim>Only runs marked 'events' have a timeline; the others have no agent_output.json, "
+        "so all variants render the same 'layout not recognised' page.</p>"
         "<table><tr><th>Issue<th>Title<th>Started<th>Outcome<th>Duration<th>Cost<th>PR<th></tr>"
-        + "".join(rows)
+        + "".join(r for _, r in sorted(rows, key=lambda x: not x[0]))
         + "</table>"
     )
     return page("Attempts", body, "instances / <b>demo</b> / logs")
