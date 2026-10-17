@@ -18,6 +18,7 @@ from agent_dashboard.gateway import (
     argv_attempt_history,
     argv_attempt_log,
     argv_list_instances,
+    argv_read_file,
     argv_telemetry,
     parse_ps_output,
 )
@@ -57,6 +58,9 @@ def test_every_argv_producer_is_pinned():
         "argv_attempt_log": argv_attempt_log(
             "abc123", 98, "2026-09-27T16:33:43.385090Z"
         ),
+        "argv_read_file": argv_read_file(
+            "abc123", 98, "2026-09-27T16:33:43.385090Z", "0003_tool_call.json"
+        ),
     }
     assert set(producers) == {
         "argv_list_instances",
@@ -64,6 +68,7 @@ def test_every_argv_producer_is_pinned():
         "argv_attempt_history",
         "argv_attempt_events",
         "argv_attempt_log",
+        "argv_read_file",
     }
     for argv in producers.values():
         assert isinstance(argv, list)

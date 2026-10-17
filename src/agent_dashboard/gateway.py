@@ -2,16 +2,21 @@
 
 All Docker access uses argv lists (no shell). The gateway exposes discovery
 (``list_instances``), one telemetry exec per running container
-(``telemetry``), and one Attempt log history exec per running container
-(``attempt_history``). Exit codes are never raised as errors here: the
-collector classifies each telemetry exec into a poll outcome, and the
+(``telemetry``), one Attempt log history exec per running container
+(``attempt_history``), the per-attempt event stream reads, and one Evidence
+file read per file (``read_file``). Exit codes are never raised as errors
+here, except a missing Evidence file (``docker cp`` exit 1 with
+``Could not find the file`` on stderr), which maps to ``FileNotFoundError``:
+the collector classifies each telemetry exec into a poll outcome, and the
 history reader maps its exec output into attempt summaries.
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
 import re
+import tarfile
 from dataclasses import dataclass
 
 AGENT_ROLE_LABEL = "io.github.lbacik.simple-coding-agent.role=agent"
@@ -584,6 +589,173 @@ def argv_attempt_log(container_id: str, issue: int | str, started: str) -> list[
     ]
 
 
+#: Evidence files an Attempt log event points at: numbered tool call, tool
+#: result and model response files. ``agent_output.json`` and
+#: ``attempt.json`` are readable too (the stream download and the header),
+#: as are the setup/baseline/check command logs.
+EVIDENCE_FILE_RE = re.compile(
+    r"\d{4,}_(tool_call\.json|tool_result\.json|model_response\.txt)\Z"
+)
+COMMAND_LOG_RE = re.compile(r"(setup|baseline_check|check)_(stdout|stderr)\.log\Z")
+
+#: Single files readable by name, besides the numbered Evidence files.
+SINGLE_LOG_FILES = frozenset({"agent_output.json", "attempt.json"})
+
+#: Cap on an Evidence file or command log preview: the fragment shows the
+#: first bytes with a truncation notice past this size.
+EVIDENCE_PREVIEW_CAP = 256 * 1024
+
+#: One tar header block; the member header gives the file's total size.
+_TAR_BLOCK = 512
+
+#: A tar end-of-archive marker: two zero blocks, one suffices to reject.
+_ZERO_BLOCK = b"\0" * _TAR_BLOCK
+
+
+def validate_log_file(filename: str) -> str:
+    """Return the file name when it is on the read allow-list, else raise.
+
+    The check runs in the route layer before the gateway is called and again
+    here (defence in depth: the gateway must not trust its caller, because
+    ``docker cp`` resolves ``..`` and there is no other barrier). A name that
+    fails gives 404 in the route or :class:`ValueError` here; it never
+    reaches argv. ``transcripts/`` and everything under ``/data/state`` stay
+    unreachable, deliberately. Uses :func:`re.fullmatch`, never ``match``
+    with ``$``.
+    """
+    if (
+        isinstance(filename, str)
+        and filename
+        and (
+            EVIDENCE_FILE_RE.fullmatch(filename) is not None
+            or filename in SINGLE_LOG_FILES
+            or COMMAND_LOG_RE.fullmatch(filename) is not None
+        )
+    ):
+        return filename
+    raise ValueError(f"invalid log file: {filename!r}")
+
+
+def argv_read_file(
+    container_id: str, issue: int | str, started: str, filename: str
+) -> list[str]:
+    """Argv for one Evidence file read: ``docker cp`` streams a tar archive.
+
+    The validated attempt reference and file name are joined into the source
+    path inside the gateway; no raw path ever comes from the request. Never
+    ``-L``, never a directory.
+    """
+    validate_container_id(container_id)
+    number, dash_started = validate_attempt_ref(issue, started)
+    validate_log_file(filename)
+    return [
+        "docker",
+        "cp",
+        f"{container_id}:/data/logs/{number}/{dash_started}/{filename}",
+        "-",
+    ]
+
+
+@dataclass(frozen=True)
+class FileResult:
+    """One Evidence file read: ``content`` (up to the cap), its header size,
+    and whether the preview was truncated."""
+
+    content: bytes
+    total_size: int
+    truncated: bool
+
+
+class _NeedMoreTar(Exception):
+    """Internal: fewer than one tar header block read so far."""
+
+
+def _first_member_offset(data: bytes) -> tuple[int, int, str]:
+    """``(size, content offset, typeflag)`` of the tar stream's first member.
+
+    A byte-level header walk (pax extended headers are skipped) that tells
+    the streaming read exactly where the content starts, so at most the cap
+    is read before the ``docker cp`` process is killed. Raises
+    :class:`_NeedMoreTar` when fewer than one header block is available and
+    :class:`GatewayError` (``layout not recognised``) when the bytes are not
+    a tar stream or hold no file member.
+    """
+    pos = 0
+    while True:
+        if len(data) < pos + _TAR_BLOCK:
+            raise _NeedMoreTar()
+        header = data[pos : pos + _TAR_BLOCK]
+        if header == _ZERO_BLOCK:
+            raise GatewayError(
+                "layout not recognised: evidence archive holds no file"
+            )
+        try:
+            size = int(header[124:136].rstrip(b"\0 ").strip() or b"0", 8)
+        except ValueError as exc:
+            raise GatewayError(
+                "layout not recognised: evidence archive is not a tar stream"
+            ) from exc
+        if size < 0:
+            raise GatewayError(
+                "layout not recognised: evidence archive is not a tar stream"
+            )
+        typeflag = chr(header[156])
+        if typeflag in ("x", "X", "g"):
+            pos += _TAR_BLOCK + -(-size // _TAR_BLOCK) * _TAR_BLOCK
+            continue
+        return size, pos + _TAR_BLOCK, typeflag
+
+
+def _tar_first_member(data: bytes) -> tarfile.TarInfo | None:
+    """The tar stream's first member, parsed with ``tarfile`` streaming mode.
+
+    Returns ``None`` when the stream holds no member at all; raises
+    :class:`GatewayError` (``layout not recognised``) on anything else that
+    is not exactly one leading regular-file member's header.
+    """
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r|") as tar:
+            return tar.next()
+    except GatewayError:
+        raise
+    except (tarfile.TarError, EOFError, OSError, ValueError) as exc:
+        raise GatewayError(
+            "layout not recognised: evidence archive is not a tar stream"
+        ) from exc
+
+
+def _extract_single_member(data: bytes) -> bytes:
+    """The content of a tar stream holding exactly one regular-file member.
+
+    Anything else (no member, a directory or symlink member, several
+    members) is ``layout not recognised``.
+    """
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r|") as tar:
+            first = tar.next()
+            if first is None:
+                raise GatewayError(
+                    "layout not recognised: evidence archive holds no file"
+                )
+            if not first.isfile():
+                raise GatewayError(
+                    "layout not recognised: evidence archive holds no regular file"
+                )
+            extracted = tar.extractfile(first)
+            content = extracted.read() if extracted is not None else b""
+            if tar.next() is not None:
+                raise GatewayError(
+                    "layout not recognised: evidence archive holds several files"
+                )
+            return content
+    except GatewayError:
+        raise
+    except (tarfile.TarError, EOFError, OSError, ValueError) as exc:
+        raise GatewayError(
+            "layout not recognised: evidence archive is not a tar stream"
+        ) from exc
+
+
 class DockerGateway:
     """Runs discovery and telemetry execs through the Docker CLI.
 
@@ -745,3 +917,138 @@ class DockerGateway:
                     f"docker exec timed out after {self.log_timeout:g} s"
                 ) from exc
             return TelemetryExec(stdout=stdout, returncode=proc.returncode)
+
+    async def read_file(
+        self,
+        container_id: str,
+        issue: int | str,
+        started: str,
+        filename: str,
+        cap: int | None = EVIDENCE_PREVIEW_CAP,
+    ) -> FileResult:
+        """Read one Evidence file out of a managed instance with ``docker cp``.
+
+        The argv carries the validated container ID plus the validated
+        attempt reference and file name joined into the source path (never
+        ``-L``, never a directory, no shell); the file name passes the
+        allow-list here as well as in the route. ``docker cp`` streams a tar
+        archive to stdout, parsed in streaming mode (``r|``): exactly one
+        regular-file member is expected, anything else (a directory or
+        symlink member, zero or several members, a non-tar stream) is
+        ``layout not recognised``. The member header gives ``total_size``;
+        at most ``cap`` content bytes are read before the ``docker cp``
+        process is killed and reaped (``cap=None`` reads the whole file).
+        The exit status of ``docker cp`` itself is honoured: a missing file
+        is exit 1 with ``Could not find the file`` on stderr and maps to
+        :class:`FileNotFoundError`. The read is bounded by ``log_timeout``
+        and shares the log semaphore with the other Attempt log reads.
+        """
+        argv = argv_read_file(container_id, issue, started, filename)
+        if cap is not None and (
+            isinstance(cap, bool) or not isinstance(cap, int) or cap < 1
+        ):
+            raise ValueError(f"invalid cap: {cap!r}")
+        async with self._log_semaphore:
+            proc = await self._run(argv)
+            try:
+                return await asyncio.wait_for(
+                    self._read_cp_result(proc, filename, cap), self.log_timeout
+                )
+            except TimeoutError as exc:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
+                raise AttemptLogTimeoutError(
+                    f"docker cp timed out after {self.log_timeout:g} s"
+                ) from exc
+
+    async def _read_cp_result(
+        self, proc, filename: str, cap: int | None
+    ) -> FileResult:
+        """Drain one ``docker cp`` tar stream into a capped :class:`FileResult`.
+
+        Reads stdout chunk by chunk so a file over the cap stops the daemon
+        side early (kill and reap); the tar membership decision itself always
+        goes through ``tarfile`` in streaming mode. The byte-level header
+        walk (:func:`_first_member_offset`) only tells the loop where the
+        content starts, so at most the cap is read before the kill.
+        """
+        buf = bytearray()
+        size: int | None = None
+        offset = 0
+        regular = False
+        saw_non_regular = False
+        while True:
+            if (
+                size is not None
+                and regular
+                and cap is not None
+                and size > cap
+                and len(buf) >= offset + cap
+            ):
+                break
+            chunk = await proc.stdout.read(65536)
+            if not chunk:
+                break
+            buf += chunk
+            if size is None and not saw_non_regular and len(buf) >= _TAR_BLOCK:
+                try:
+                    size, offset, typeflag = _first_member_offset(bytes(buf))
+                except _NeedMoreTar:
+                    pass
+                except GatewayError:
+                    pass  # Ruled precisely at EOF over the full stream.
+                else:
+                    regular = typeflag in ("0", "\0")
+                    if not regular:
+                        saw_non_regular = True
+                        break
+        data = bytes(buf)
+        killed = bool(
+            size is not None
+            and regular
+            and cap is not None
+            and size > cap
+            and len(data) >= offset + cap
+        )
+        if killed:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        else:
+            # The loop left early only for a non-regular first member; drain
+            # the rest so stderr can be read without deadlocking the pipes.
+            while await proc.stdout.read(65536):
+                pass
+        stderr = await proc.stderr.read()
+        returncode = await proc.wait()
+        if returncode != 0 and b"could not find the file" in stderr.lower():
+            raise FileNotFoundError(f"evidence file not found: {filename!r}")
+        if killed:
+            # The preview stops at the cap, so a trailing second member
+            # cannot be checked; the buffered head always holds the full
+            # header blocks, which tarfile confirms as one regular file.
+            first = _tar_first_member(data)
+            if first is None or not first.isfile():
+                raise GatewayError(
+                    "layout not recognised: "
+                    "evidence archive holds no regular file"
+                )
+            content = data[offset : offset + (cap if cap is not None else 0)]
+            total = first.size
+        elif saw_non_regular:
+            raise GatewayError(
+                "layout not recognised: "
+                "evidence archive holds no regular file"
+            )
+        else:
+            content = _extract_single_member(data)
+            total = size if size is not None else len(content)
+        return FileResult(
+            content=content,
+            total_size=total,
+            truncated=total > len(content),
+        )

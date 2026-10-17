@@ -72,8 +72,11 @@
       <td>{{ ev.time_text }}</td>
       <td>{% if ev.level_known %}<span class="ev-level lvl-{{ ev.level }}">{{ ev.level }}</span>{% else %}{{ ev.level }}{% endif %}</td>
       <td>{{ ev.event }}</td>
-      <td>{{ ev.detail }}</td>
+      <td>{% if ev.evidence %}{% if ev.evidence.tool %}<span class="ev-tool">{{ ev.evidence.tool }}</span> {% endif %}{% if ev.evidence.thread %}<span class="ev-thread">[{{ ev.evidence.thread }}]</span> {% endif %}<span class="ev-file">{{ ev.evidence.file }}</span> <a class="ev-open" data-slot="evidence-slot-{{ ev.seq }}" data-label="{{ "reply" if ev.event == "model_response" else "open" }}" href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}/files/{{ ev.evidence.file | urlencode }}" onclick="return toggleEvidence(this);">{{ "reply" if ev.event == "model_response" else "open" }}</a>{% else %}{{ ev.detail }}{% endif %}</td>
     </tr>
+    {% if ev.evidence %}
+    <tr class="evidence-slot-row"><td colspan="5"><div class="evidence-slot" id="evidence-slot-{{ ev.seq }}"></div></td></tr>
+    {% endif %}
     {% endfor %}
   </tbody>
 </table>
@@ -83,4 +86,24 @@
 <div class="paging"><span>page {{ page_num }}/{{ pages }}, {{ filtered_total }} events</span>{% if prev_url %} <a href="{{ prev_url }}">&larr; prev</a>{% endif %}{% if next_url %} <a href="{{ next_url }}">next &rarr;</a>{% endif %}</div>
 {% endif %}
 <p class="hint"><a href="/instances/{{ name | urlencode }}/history">Back to attempt history</a> · <a href="/">Back to the fleet</a> · data is read on demand; use Refresh for the latest.</p>
+<script>
+function toggleEvidence(link) {
+  var slot = document.getElementById(link.getAttribute("data-slot"));
+  if (!slot) { return true; }
+  if (slot.getAttribute("data-open") === "1") {
+    slot.innerHTML = "";
+    slot.removeAttribute("data-open");
+    link.textContent = link.getAttribute("data-label");
+  } else {
+    slot.setAttribute("data-open", "1");
+    link.textContent = "close";
+    if (window.htmx) {
+      window.htmx.ajax("GET", link.getAttribute("href"), {target: "#" + slot.getAttribute("id"), swap: "innerHTML"});
+    } else {
+      fetch(link.getAttribute("href")).then(function (resp) { return resp.text(); }).then(function (html) { slot.innerHTML = html; });
+    }
+  }
+  return false;
+}
+</script>
 {% endblock %}

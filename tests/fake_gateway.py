@@ -14,6 +14,8 @@ import asyncio
 import json
 
 from agent_dashboard.gateway import (
+    EVIDENCE_PREVIEW_CAP,
+    FileResult,
     ManagedInstance,
     TelemetryExec,
     TelemetryTimeoutError,
@@ -30,6 +32,7 @@ class FakeGateway:
         self._histories: dict[str, TelemetryExec | Exception] = {}
         self._events: dict[str, TelemetryExec | Exception] = {}
         self._logs: dict[str, TelemetryExec | Exception] = {}
+        self._files: dict[tuple[str, str, str, str], FileResult | Exception] = {}
         self.delay = 0.0
         self.history_delay = 0.0
         self.history_delays: dict[str, float] = {}
@@ -38,6 +41,7 @@ class FakeGateway:
         self.history_calls: list[str] = []
         self.events_calls: list[tuple[str, str, str]] = []
         self.log_calls: list[tuple[str, str, str]] = []
+        self.file_calls: list[tuple[str, str, str, str]] = []
         self.in_flight = 0
         self.peak_in_flight = 0
         self.per_id_in_flight: dict[str, int] = {}
@@ -195,4 +199,39 @@ class FakeGateway:
         )
         if isinstance(scripted, Exception):
             raise scripted
+        return scripted
+
+    def set_file(
+        self,
+        container_id: str,
+        issue: int | str,
+        started: str,
+        filename: str,
+        result: FileResult | Exception,
+    ) -> None:
+        self._files[(container_id, str(issue), started, filename)] = result
+
+    async def read_file(
+        self,
+        container_id: str,
+        issue: int | str,
+        started: str,
+        filename: str,
+        cap: int | None = EVIDENCE_PREVIEW_CAP,
+    ) -> FileResult:
+        """One scripted file read; unscripted files report not found."""
+        self.file_calls.append((container_id, str(issue), started, filename))
+        scripted = self._files.get(
+            (container_id, str(issue), started, filename),
+            FileNotFoundError(f"evidence file not found: {filename!r}"),
+        )
+        if isinstance(scripted, Exception):
+            raise scripted
+        assert isinstance(scripted, FileResult)
+        if cap is not None and len(scripted.content) > cap:
+            return FileResult(
+                content=scripted.content[:cap],
+                total_size=scripted.total_size,
+                truncated=True,
+            )
         return scripted

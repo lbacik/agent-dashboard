@@ -1,0 +1,18 @@
+{% if error %}
+<p class="banner" role="alert">{{ error }}</p>
+{% else %}
+<div class="evidence-preview">
+  <div class="evidence-bar">
+    <span class="evidence-size">{{ size_text }}</span>
+    {% if raw %}
+    <a href="{{ formatted_url }}" hx-get="{{ formatted_url }}" hx-target="closest .evidence-preview" hx-swap="outerHTML">formatted</a>
+    {% else %}
+    <a href="{{ raw_url }}" hx-get="{{ raw_url }}" hx-target="closest .evidence-preview" hx-swap="outerHTML">raw</a>
+    {% endif %}
+  </div>
+  {% if truncated %}
+  <p class="evidence-truncated" role="note"><strong>truncated at 256 KB, {{ total_size }} B total</strong></p>
+  {% endif %}
+  <pre class="evidence-content">{{ text }}</pre>
+</div>
+{% endif %}

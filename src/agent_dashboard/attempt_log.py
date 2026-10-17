@@ -25,10 +25,11 @@ Tolerance rules (mirroring the history and progress readers):
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
-from .gateway import ATTEMPT_LOG_LAYOUT
+from .gateway import ATTEMPT_LOG_LAYOUT, validate_log_file
 from .history import LAYOUT_NOT_RECOGNISED, NOT_APPLICABLE, format_cost, format_duration
 
 #: Rows per page on the Attempt log page.
@@ -62,6 +63,58 @@ MODEL_COST_KEYS = (
 )
 
 
+#: Events whose detail may name an Evidence file. Skill events carry their
+#: payload inline, have no file, and stay plain rows.
+EVIDENCE_EVENTS = ("tool_call", "tool_result", "model_response")
+
+#: Evidence reference in an event detail: the tool name, the optional
+#: ``[main]``/``[subagent:id]`` thread tag (absent on old agent versions),
+#: and the numbered Evidence file. The detail may carry a suffix after the
+#: file name (e.g. `` (chars=85)`` on model responses). Model responses
+#: carry no tool name at all (``-> <file> (chars=<N>)`` per the layout
+#: research), so a bare ``->`` prefix links those too.
+EVIDENCE_REF_RE = re.compile(
+    r"^(?:(?P<tool>.*?)(?: \[(?P<thread>main|subagent:[^\]]+)\])? -> |-> )"
+    r"(?P<file>\d{4,}_(?:tool_call\.json|tool_result\.json|model_response\.txt))"
+)
+
+
+@dataclass(frozen=True)
+class EvidenceRef:
+    """One Evidence reference parsed from an event detail: tool name, the
+    optional thread tag, and the allow-listed file name."""
+
+    tool: str
+    thread: str | None
+    file: str
+
+
+def parse_evidence_ref(event: Any, detail: Any) -> EvidenceRef | None:
+    """Parse an Evidence reference from one event detail, or ``None``.
+
+    Only ``tool_call``, ``tool_result`` and ``model_response`` events link
+    to a file. A detail without ``->`` stays a plain row, and a file name
+    that fails the read allow-list never becomes a link. Never raises.
+    """
+    try:
+        if event not in EVIDENCE_EVENTS or not isinstance(detail, str):
+            return None
+        match = EVIDENCE_REF_RE.match(detail)
+        if match is None:
+            return None
+        candidate = detail[match.start("file") :].split()[0]
+        if candidate != match.group("file"):
+            return None
+        validate_log_file(candidate)
+    except (ValueError, IndexError):
+        return None
+    return EvidenceRef(
+        tool=match.group("tool") or "",
+        thread=match.group("thread"),
+        file=candidate,
+    )
+
+
 @dataclass(frozen=True)
 class LogEvent:
     """One ordered event row: ``seq`` is the 1-based line number in the file."""
@@ -73,6 +126,7 @@ class LogEvent:
     level_known: bool = False
     event: str = "unknown"
     detail: str = ""
+    evidence: EvidenceRef | None = None
 
 
 @dataclass(frozen=True)
@@ -233,6 +287,7 @@ def _read_event(entry: Any, seq: int) -> LogEvent:
         level_known=level in KNOWN_LEVELS,
         event=event,
         detail=detail,
+        evidence=parse_evidence_ref(event, detail),
     )
 
 
@@ -399,3 +454,27 @@ def paginate(
 def format_file_mb(size_bytes: int) -> str:
     """``M B`` display for the truncation notice, e.g. ``4.2 MB``."""
     return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def format_preview(filename: str, content: bytes, truncated: bool) -> str:
+    """Display text for one Evidence file fragment: decoded as read.
+
+    Formatted means pretty-printed JSON for ``*.json``; it falls back to the
+    raw text when the content is truncated or is not valid JSON. ``raw=1``
+    callers pass the result through unchanged by rendering without calling
+    this function. Never raises on garbage input.
+    """
+    try:
+        text = content.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    if truncated or not filename.endswith(".json"):
+        return text
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return text
+    try:
+        return json.dumps(parsed, indent=2)
+    except (ValueError, TypeError):
+        return text
