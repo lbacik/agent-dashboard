@@ -1,4 +1,9 @@
-"""FastAPI app: handlers read only the in-memory fleet state."""
+"""FastAPI app: the fleet table reads only the in-memory fleet state.
+
+The overview panel (on ``/``) and the history page read attempt summaries
+on demand with bounded parallel gateway execs; the ``/fleet`` partial and
+the ``/stream`` events serve the in-memory state only.
+"""
 
 from __future__ import annotations
 
@@ -45,6 +50,7 @@ from .history import (
     format_duration,
     read_history,
 )
+from .overview import collect_overview, overview_legend
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -193,9 +199,48 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> Response:
+        """Fleet table plus the static overview panel.
+
+        The table streams over SSE after every poll cycle; the overview
+        panel is static with manual refresh (like the history page):
+        attempt summaries for every running instance are read on demand, in
+        parallel with a bounded timeout, so one slow instance neither delays
+        nor breaks the page.
+        """
         rows, error = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        window = request.query_params.get("window", DEFAULT_WINDOW)
+        if window not in VALID_WINDOWS:
+            window = "all"
         wanted = request.query_params.get("instance") or ""
         row = find_row(rows, wanted) if wanted else None
+        now_ts = time.time()
+        overview = await collect_overview(
+            rows,
+            gw,
+            window=window,
+            now=now_ts,
+            timeout=cfg.exec_timeout,
+            max_concurrent_execs=cfg.max_concurrent_execs,
+        )
+        outcome_peak = max((inst.shown for inst in overview.rows if inst.ok), default=0)
+        if outcome_peak >= 2:
+            outcome_ticks = [0, (outcome_peak + 1) // 2, outcome_peak]
+        elif outcome_peak == 1:
+            outcome_ticks = [0, 1]
+        else:
+            outcome_ticks = []
+        cost_peak = max(
+            (inst.cost_total for inst in overview.rows if inst.cost_total is not None),
+            default=0.0,
+        )
+        if cost_peak > 0:
+            cost_ticks = [
+                (0.0, format_cost(0)),
+                (0.5, format_cost(cost_peak / 2)),
+                (1.0, format_cost(cost_peak)),
+            ]
+        else:
+            cost_ticks = []
         return templates.TemplateResponse(
             request,
             "index.html",
@@ -206,6 +251,17 @@ def create_app(
                 "drawer_open": bool(wanted),
                 "row": row,
                 "name": wanted,
+                "window": window,
+                "overview": overview,
+                "legend": overview_legend(overview),
+                "chart_keys": list(OUTCOME_ORDER),
+                "chart_labels": dict(OUTCOME_LABELS),
+                "shape_glyphs": dict(SHAPE_GLYPHS),
+                "outcome_peak": outcome_peak,
+                "outcome_ticks": outcome_ticks,
+                "cost_peak": cost_peak,
+                "cost_ticks": cost_ticks,
+                "fleet_total_text": format_cost(overview.total_cost),
             },
         )
 

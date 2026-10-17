@@ -29,6 +29,8 @@ class FakeGateway:
         self._scripts: dict[str, TelemetryExec | Exception] = {}
         self._histories: dict[str, TelemetryExec | Exception] = {}
         self.delay = 0.0
+        self.history_delay = 0.0
+        self.history_delays: dict[str, float] = {}
         self.list_calls = 0
         self.telemetry_calls: list[str] = []
         self.history_calls: list[str] = []
@@ -95,6 +97,9 @@ class FakeGateway:
     async def attempt_history(self, container_id: str) -> TelemetryExec:
         """One scripted history exec; unscripted IDs report an empty log."""
         self.history_calls.append(container_id)
+        delay = self.history_delays.get(container_id, self.history_delay)
+        if delay:
+            await asyncio.sleep(delay)
         scripted = self._histories.get(
             container_id,
             TelemetryExec(
