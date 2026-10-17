@@ -220,6 +220,91 @@
   <p class="empty">No cost data in this window.</p>
   {% endif %}
 </figure>
+<figure class="chart">
+  <figcaption>Tokens per attempt <span class="fig-sub">tokens per attempt over time, stacked by category</span></figcaption>
+  {% if token_points %}
+  <ul class="chart-legend token-legend" aria-label="Token category legend">
+    {% for key, label, suffix in token_categories %}
+    <li><span class="swatch tok-{{ suffix }}" aria-hidden="true"></span> {{ label }}</li>
+    {% endfor %}
+  </ul>
+  {% set W = 720 %}{% set H = 240 %}{% set LEFT = 64 %}{% set TOP = 12 %}{% set BOTTOM = 30 %}
+  {% set plot_w = W - LEFT - 12 %}{% set plot_h = H - TOP - BOTTOM %}
+  {% set bar_w = 18 %}
+  <svg class="bars tokens" viewBox="0 0 {{ W }} {{ H }}" role="img" aria-label="Stacked bar chart of tokens per attempt over time">
+    {% for frac, label in token_ticks %}
+    {% set ty = TOP + plot_h - frac * plot_h %}
+    <line x1="{{ LEFT }}" y1="{{ ty }}" x2="{{ W - 12 }}" y2="{{ ty }}" class="grid" />
+    <text x="{{ LEFT - 6 }}" y="{{ ty + 4 }}" text-anchor="end" class="axis">{{ label }}</text>
+    {% endfor %}
+    <text x="{{ LEFT }}" y="{{ H - 10 }}" text-anchor="middle" class="axis">{{ token_points[0].started_at[:10] }}</text>
+    <text x="{{ W - 12 }}" y="{{ H - 10 }}" text-anchor="middle" class="axis">{{ token_points[-1].started_at[:10] }}</text>
+    {% for point in token_points %}
+    {% set cx = LEFT + point.x_frac * plot_w %}
+    {% set x = cx - bar_w / 2 %}
+    {% set ns = namespace(base=TOP + plot_h) %}
+    <g class="seg" tabindex="0" role="img" aria-label="{{ point.tooltip }}" data-tip="{{ point.tooltip }}">
+      <title>{{ point.tooltip }}</title>
+      {% for suffix, value in point.segments %}
+      {% if token_peak %}{% set h = (value / token_peak) * plot_h %}{% else %}{% set h = 0 %}{% endif %}
+      {% if h > 0 %}
+      {% set y = ns.base - h %}
+      <rect x="{{ x }}" y="{{ y }}" width="{{ bar_w }}" height="{{ h }}" class="bar tok-{{ suffix }}" />
+      {% set ns.base = y %}
+      {% endif %}
+      {% endfor %}
+      {% if point.total == 0 %}
+      <rect x="{{ x }}" y="{{ TOP + plot_h - 2 }}" width="{{ bar_w }}" height="2" class="bar tok-zero" />
+      {% endif %}
+    </g>
+    {% endfor %}
+  </svg>
+  {% else %}
+  <p class="empty">No token data in this window.</p>
+  {% endif %}
+</figure>
+<figure class="chart">
+  <figcaption>Cache read share <span class="fig-sub">per attempt over time · {{ share_definition }}</span></figcaption>
+  {% if share_points %}
+  {% set W = 720 %}{% set H = 240 %}{% set LEFT = 64 %}{% set TOP = 12 %}{% set BOTTOM = 30 %}
+  {% set plot_w = W - LEFT - 12 %}{% set plot_h = H - TOP - BOTTOM %}
+  <svg class="timeline share" viewBox="0 0 {{ W }} {{ H }}" role="img" aria-label="Scatter chart of cache read share per attempt over time">
+    {% for frac, label in share_ticks %}
+    {% set ty = TOP + plot_h - frac * plot_h %}
+    <line x1="{{ LEFT }}" y1="{{ ty }}" x2="{{ W - 12 }}" y2="{{ ty }}" class="grid" />
+    <text x="{{ LEFT - 6 }}" y="{{ ty + 4 }}" text-anchor="end" class="axis">{{ label }}</text>
+    {% endfor %}
+    <text x="{{ LEFT }}" y="{{ H - 10 }}" text-anchor="middle" class="axis">{{ share_points[0].started_at[:10] }}</text>
+    <text x="{{ W - 12 }}" y="{{ H - 10 }}" text-anchor="middle" class="axis">{{ share_points[-1].started_at[:10] }}</text>
+    {% for point in share_points %}
+    {% set cx = LEFT + point.x_frac * plot_w %}
+    {% set cy = TOP + plot_h - point.share * plot_h %}
+    {% set r = 6 %}
+    <g class="mark outcome-{{ point.outcome_key }}" tabindex="0" role="img" aria-label="{{ point.tooltip }}" data-tip="{{ point.tooltip }}">
+      <title>{{ point.tooltip }}</title>
+      {% if point.shape == "circle" %}
+      <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r }}" />
+      {% elif point.shape == "ring" %}
+      <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r }}" class="hollow" />
+      {% elif point.shape == "square" %}
+      <rect x="{{ cx - r }}" y="{{ cy - r }}" width="{{ 2 * r }}" height="{{ 2 * r }}" />
+      {% elif point.shape == "triangle" %}
+      <polygon points="{{ cx }},{{ cy - r }} {{ cx - r }},{{ cy + r }} {{ cx + r }},{{ cy + r }}" />
+      {% elif point.shape == "diamond" %}
+      <polygon points="{{ cx }},{{ cy - r }} {{ cx + r }},{{ cy }} {{ cx }},{{ cy + r }} {{ cx - r }},{{ cy }}" />
+      {% else %}
+      <path d="M {{ cx - r }} {{ cy - r }} L {{ cx + r }} {{ cy + r }} M {{ cx - r }} {{ cy + r }} L {{ cx + r }} {{ cy - r }}" class="cross" />
+      {% endif %}
+    </g>
+    {% endfor %}
+  </svg>
+  {% else %}
+  <p class="empty">No cache share data in this window.</p>
+  {% endif %}
+</figure>
+{% if token_missing %}
+<p class="hint">{{ token_missing }} attempt(s) without usage data are not charted.</p>
+{% endif %}
 {% if undated %}
 <p class="hint">{{ undated }} attempt(s) without a start time are not charted.</p>
 {% endif %}

@@ -11,7 +11,12 @@ table, so they respect the page's time window filter without extra queries:
   threshold when one is known;
 - cumulative cost: the running USD total per UTC day;
 - duration vs cost: one mark per attempt with usage data and a known
-  duration, shaped and coloured by outcome.
+  duration, shaped and coloured by outcome;
+- tokens per attempt: one stacked bar per attempt with token data along
+  time, with one segment per token category (input, cache read, cache
+  creation, output);
+- cache read share: one mark per attempt with a defined share along
+  time, shaped by outcome, showing prompt-caching efficiency.
 
 Rendering is server-side inline SVG (see ADR 0004): no build step, no
 network fetch, so the page works offline over an SSH tunnel. Each outcome
@@ -20,7 +25,8 @@ and axis labels carry the non-colour cue so nothing relies on colour alone.
 Attempts without a parseable start time are excluded from every chart and
 counted by :func:`undated_count`. Attempts without cost data are excluded
 from the cost charts and counted by :func:`missing_cost_count`, never
-plotted as zero.
+plotted as zero. Attempts without token data are excluded from the token
+charts and counted by :func:`missing_token_count`, never plotted as zero.
 """
 
 from __future__ import annotations
@@ -550,6 +556,241 @@ def duration_vs_cost(
                     else 0.5
                 ),
                 tooltip=_tooltip(summary),
+            )
+        )
+    return tuple(points)
+
+
+# --- token charts ------------------------------------------------------------
+
+#: Token categories in stable stack/legend order, with the CSS class suffix
+#: each stacked segment renders with (``tok-<suffix>``).
+TOKEN_CATEGORIES = (
+    ("input", "input", "input"),
+    ("cache_read", "cache read", "cache-read"),
+    ("cache_creation", "cache creation", "cache-creation"),
+    ("output", "output", "output"),
+)
+
+#: The single definition of cache read share, reused by the calculation and
+#: the history page so the two can never drift apart.
+CACHE_READ_SHARE_DEFINITION = "cache read ÷ (input + cache read + cache creation)"
+
+
+def format_tokens(value: int | float) -> str:
+    """Format a token count for chart axis ticks (``120,000``)."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return f"{value:,}"
+
+
+def _token_values(summary: AttemptSummary) -> tuple[float | None, ...]:
+    return (
+        summary.input_value,
+        summary.cache_read_value,
+        summary.cache_creation_value,
+        summary.output_value,
+    )
+
+
+def _has_tokens(summary: AttemptSummary) -> bool:
+    """Whether an attempt reported any token counter (a real number, never zero-fill)."""
+    return any(v is not None for v in _token_values(summary))
+
+
+def missing_token_count(
+    summaries: tuple[AttemptSummary, ...] | list[AttemptSummary],
+) -> int:
+    """Attempts left out of the token charts for lack of token data."""
+    return sum(1 for s in summaries if not _has_tokens(s))
+
+
+def cache_read_share(summary: AttemptSummary) -> float | None:
+    """Share of input-side tokens served from cache, or None when undefined.
+
+    Defined once as cache read tokens over total input-side tokens
+    (input + cache read + cache creation); output tokens are not
+    input-side and never count. Missing categories count as zero once an
+    attempt reported some token data, but an attempt without token data
+    and a zero input-side total (all zeros, or input-side only from
+    missing categories) both mean undefined, never zero.
+    """
+    if not _has_tokens(summary):
+        return None
+    input_side = (
+        summary.input_value or 0.0,
+        summary.cache_read_value or 0.0,
+        summary.cache_creation_value or 0.0,
+    )
+    total = sum(input_side)
+    if total <= 0:
+        return None
+    return (summary.cache_read_value or 0.0) / total
+
+
+def _token_tooltip(summary: AttemptSummary, share: float | None) -> str:
+    if share is None:
+        share_text = "n/a"
+    else:
+        share_text = f"{share:.0%}"
+    return (
+        f"Issue #{summary.issue} · Started {summary.started_at} · "
+        f"Outcome {summary.outcome_text} · "
+        f"Input {summary.input_text} · Cache read {summary.cache_read_text} · "
+        f"Cache creation {summary.cache_creation_text} · "
+        f"Output {summary.output_text} · Cache read share {share_text}"
+    )
+
+
+@dataclass(frozen=True)
+class TokenPoint:
+    """One stacked token bar: per-category counters plus time position.
+
+    ``segments`` pairs each :data:`TOKEN_CATEGORIES` CSS suffix with its
+    counter value, so the template stacks from one source of truth.
+    """
+
+    issue: int
+    started_at: str
+    started_ts: float
+    outcome_text: str
+    outcome_key: str
+    label: str
+    shape: str
+    input_value: float
+    cache_read_value: float
+    cache_creation_value: float
+    output_value: float
+    total: float
+    x_frac: float
+    tooltip: str
+    segments: tuple[tuple[str, float], ...] = ()
+
+
+@dataclass(frozen=True)
+class CacheSharePoint:
+    """One cache-read-share mark: fractional share against time, plus tooltip."""
+
+    issue: int
+    started_at: str
+    started_ts: float
+    outcome_text: str
+    outcome_key: str
+    label: str
+    shape: str
+    share: float
+    share_text: str
+    x_frac: float
+    tooltip: str
+
+
+def _with_tokens(summaries: tuple[AttemptSummary, ...]) -> list[AttemptSummary]:
+    """Dated attempts with token data, oldest first."""
+    return sorted(
+        (s for s in summaries if s.started_ts is not None and _has_tokens(s)),
+        key=lambda s: (s.started_ts, s.issue),
+    )
+
+
+def tokens_per_attempt(
+    summaries: tuple[AttemptSummary, ...] | list[AttemptSummary],
+) -> tuple[TokenPoint, ...]:
+    """One stacked bar per dated attempt with token data, oldest first.
+
+    ``x_frac`` is the fractional time position (a lone attempt sits at
+    0.5); vertical scaling is left to the template, which divides each
+    category by the peak attempt total. Missing categories render as
+    zero once an attempt reported some token data; attempts without any
+    token data are excluded and counted by :func:`missing_token_count`,
+    never plotted as zero.
+    """
+    dated = _with_tokens(tuple(summaries))
+    if not dated:
+        return ()
+    stamps = [s.started_ts for s in dated if s.started_ts is not None]
+    lo, hi = min(stamps), max(stamps)
+    span = hi - lo
+    points: list[TokenPoint] = []
+    for summary in dated:
+        assert summary.started_ts is not None
+        if span <= 0:
+            x_frac = 0.5
+        else:
+            x_frac = (summary.started_ts - lo) / span
+        key = normalize_outcome(summary.outcome_text)
+        values = {
+            "input": summary.input_value or 0.0,
+            "cache_read": summary.cache_read_value or 0.0,
+            "cache_creation": summary.cache_creation_value or 0.0,
+            "output": summary.output_value or 0.0,
+        }
+        total = sum(values.values())
+        segments = tuple(
+            (suffix, values[cat_key]) for cat_key, _, suffix in TOKEN_CATEGORIES
+        )
+        points.append(
+            TokenPoint(
+                issue=summary.issue,
+                started_at=summary.started_at,
+                started_ts=summary.started_ts,
+                outcome_text=summary.outcome_text,
+                outcome_key=key,
+                label=OUTCOME_LABELS[key],
+                shape=OUTCOME_SHAPES[key],
+                input_value=values["input"],
+                cache_read_value=values["cache_read"],
+                cache_creation_value=values["cache_creation"],
+                output_value=values["output"],
+                total=total,
+                x_frac=x_frac,
+                tooltip=_token_tooltip(summary, cache_read_share(summary)),
+                segments=segments,
+            )
+        )
+    return tuple(points)
+
+
+def cache_share_per_attempt(
+    summaries: tuple[AttemptSummary, ...] | list[AttemptSummary],
+) -> tuple[CacheSharePoint, ...]:
+    """One mark per dated attempt with a defined cache read share, oldest first.
+
+    ``x_frac`` is the fractional time position (a lone attempt sits at
+    0.5); the vertical axis always spans 0-100%. Attempts without token
+    data or with a zero input-side total have no defined share and are
+    excluded: the former are counted by :func:`missing_token_count`,
+    the latter are measured zeros with no share to plot.
+    """
+    dated = _with_tokens(tuple(summaries))
+    if not dated:
+        return ()
+    stamps = [s.started_ts for s in dated if s.started_ts is not None]
+    lo, hi = min(stamps), max(stamps)
+    span = hi - lo
+    points: list[CacheSharePoint] = []
+    for summary in dated:
+        assert summary.started_ts is not None
+        share = cache_read_share(summary)
+        if share is None:
+            continue
+        if span <= 0:
+            x_frac = 0.5
+        else:
+            x_frac = (summary.started_ts - lo) / span
+        key = normalize_outcome(summary.outcome_text)
+        points.append(
+            CacheSharePoint(
+                issue=summary.issue,
+                started_at=summary.started_at,
+                started_ts=summary.started_ts,
+                outcome_text=summary.outcome_text,
+                outcome_key=key,
+                label=OUTCOME_LABELS[key],
+                shape=OUTCOME_SHAPES[key],
+                share=share,
+                share_text=f"{share:.0%}",
+                x_frac=x_frac,
+                tooltip=_token_tooltip(summary, share),
             )
         )
     return tuple(points)

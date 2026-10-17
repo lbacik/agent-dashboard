@@ -95,6 +95,39 @@ def test_complete_attempt_parses_every_field():
     assert summary.has_usage is True
 
 
+def test_usage_numeric_values_sum_across_models():
+    attempt = {
+        "outcome": "complete",
+        "started_at": "2026-09-27T16:33:43.385090Z",
+        "duration_seconds": 60,
+        "model_usage": {
+            "claude-a": {"input_tokens": 100, "cache_read_input_tokens": 30},
+            "claude-b": {"input_tokens": 200, "output_tokens": 20},
+        },
+        "model_stop_reason": "end_turn",
+    }
+    stdout, code = _stdout(_payload([_entry(1, "2026-09-27T16-33-43.385090Z", attempt)]))
+    (summary,) = read_history(stdout, code, now=NOW).summaries
+    assert summary.input_value == 300
+    assert summary.cache_read_value == 30
+    assert summary.cache_creation_value is None
+    assert summary.output_value == 20
+
+
+def test_usage_numeric_values_missing_without_usage():
+    attempt = {
+        "outcome": "infrastructure_error",
+        "started_at": "2026-09-27T16:33:43.385090Z",
+        "duration_seconds": 17,
+    }
+    stdout, code = _stdout(_payload([_entry(5, "2026-09-27T16-33-43.385090Z", attempt)]))
+    (summary,) = read_history(stdout, code, now=NOW).summaries
+    assert summary.input_value is None
+    assert summary.cache_read_value is None
+    assert summary.cache_creation_value is None
+    assert summary.output_value is None
+
+
 def test_usage_sums_across_models():
     attempt = {
         "outcome": "complete",
