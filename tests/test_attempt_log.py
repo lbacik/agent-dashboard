@@ -786,6 +786,17 @@ def test_log_page_missing_stream_is_layout_not_recognised_with_header():
     assert "Add a widget" in response.text
 
 
+def test_log_page_unknown_layout_never_claims_missing_attempt_json():
+    payload = _payload([TOOL_CALL_NEW], layout="bogus-layout/v9")
+    client, _, _ = make_log_client(
+        [("work", "running")], {"id-work": payload}
+    )
+    response = client.get(f"/instances/work/attempts/98/{STARTED_DASH}")
+    assert response.status_code == 200
+    assert "layout not recognised" in response.text
+    assert NO_ATTEMPT_JSON not in response.text
+
+
 def test_log_page_truncated_stream_shows_notice():
     events = [_ev("tool_call", f"detail {i}") for i in range(10)]
     client, _, _ = make_log_client(
