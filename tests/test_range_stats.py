@@ -104,12 +104,14 @@ def test_custom_labels():
 
 
 def test_history_window_mapping():
-    assert parse_range({"preset": "7d"}).history_window == "7"
-    assert parse_range({"preset": "30d"}).history_window == "30"
-    assert parse_range({"preset": "24h"}).history_window == "all"
-    assert parse_range({"preset": "90d"}).history_window == "all"
-    assert parse_range({"preset": "all"}).history_window == "all"
-    assert parse_range({"from": "2026-10-01", "to": "2026-10-02"}).history_window == "all"
+    assert parse_range({"preset": "7d"}).history_window == "preset=7d"
+    assert parse_range({"preset": "30d"}).history_window == "preset=30d"
+    assert parse_range({"preset": "24h"}).history_window == "preset=24h"
+    assert parse_range({"preset": "90d"}).history_window == "preset=90d"
+    assert parse_range({"preset": "all"}).history_window == "preset=all"
+    custom = parse_range({"from": "2026-10-01", "to": "2026-10-02"})
+    assert custom.history_window == "from=2026-10-01&to=2026-10-02"
+    assert custom.history_window == custom.query
 
 
 # --- cutting ---------------------------------------------------------------

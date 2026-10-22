@@ -139,7 +139,7 @@ def test_stats_default_range_is_30_days():
     body = client.get("/instances/work/stats").text
     assert "last 30 days" in body
     assert "Attempt history →" in body
-    assert "/instances/work/history?window=30" in body
+    assert "/instances/work/history?preset=30d" in body
     # Two of three attempts in range; only the recent one has usage data.
     assert "2" in body and "of 3 attempts" in body
     assert "$1.00" in body
@@ -221,17 +221,20 @@ def test_stats_each_preset_updates_only_the_card():
         assert 'id="drawer"' not in body
 
 
-def test_stats_preset_history_link_uses_closest_window():
+def test_stats_preset_history_link_keeps_the_exact_range():
     now = time.time()
     client, _, _, _ = make_stats_client(
         {"work": "running"},
         {"id-work": history_with(now, (1, 1, "complete", 1.0))},
     )
-    assert "/history?window=7" in client.get("/instances/work/stats?preset=7d").text
-    assert "/history?window=30" in client.get("/instances/work/stats?preset=30d").text
-    assert "/history?window=all" in client.get("/instances/work/stats?preset=24h").text
-    assert "/history?window=all" in client.get("/instances/work/stats?preset=90d").text
-    assert "/history?window=all" in client.get("/instances/work/stats?preset=all").text
+    assert "/history?preset=7d" in client.get("/instances/work/stats?preset=7d").text
+    assert "/history?preset=30d" in client.get("/instances/work/stats?preset=30d").text
+    assert "/history?preset=24h" in client.get("/instances/work/stats?preset=24h").text
+    assert "/history?preset=90d" in client.get("/instances/work/stats?preset=90d").text
+    assert "/history?preset=all" in client.get("/instances/work/stats?preset=all").text
+    day = time.strftime("%Y-%m-%d", time.gmtime(now - 1 * 86400))
+    body = client.get(f"/instances/work/stats?from={day}&to={day}").text
+    assert f"/history?from={day}&amp;to={day}" in body
 
 
 def test_stats_clicking_a_day_selects_that_day():

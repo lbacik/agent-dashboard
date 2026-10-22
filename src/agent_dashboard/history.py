@@ -35,9 +35,16 @@ LAYOUT_NOT_RECOGNISED = "layout not recognised"
 
 NOT_APPLICABLE = "n/a"
 
-VALID_WINDOWS = ("7", "30", "all")
+VALID_WINDOWS = ("24h", "7d", "30d", "90d", "all", "7", "30")
 DEFAULT_WINDOW = "30"
-WINDOW_DAYS = {"7": 7.0, "30": 30.0}
+WINDOW_DAYS = {
+    "24h": 1.0,
+    "7d": 7.0,
+    "30d": 30.0,
+    "90d": 90.0,
+    "7": 7.0,
+    "30": 30.0,
+}
 
 #: Token counters summed across the per-model usage map.
 TOKEN_KEYS = (
@@ -460,7 +467,8 @@ def read_history(
     ``returncode`` is accepted for signature parity with the telemetry
     classifier but does not decide the outcome: a payload with the expected
     layout is trusted, anything else is ``layout not recognised``. ``window``
-    is one of ``7``/``30``/``all`` (anything else means ``all``); attempts
+    is one of ``24h``/``7d``/``30d``/``90d``/``all`` (plus the legacy
+    ``7``/``30`` aliases; anything else means ``all``); attempts
     without a parseable start are always shown.
     """
     del returncode
