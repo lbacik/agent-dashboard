@@ -50,6 +50,7 @@ class FakeGateway:
         self._histories: dict[str, TelemetryExec | Exception] = {}
         self._events: dict[str, TelemetryExec | Exception] = {}
         self._logs: dict[str, TelemetryExec | Exception] = {}
+        self._tails: dict[str, TelemetryExec | Exception] = {}
         self._run_files: dict[tuple[str, str, str], list[str] | Exception] = {}
         self._files: dict[tuple[str, str, str, str], FileResult | Exception] = {}
         self._logs_trees: dict[str, bytes | Exception] = {}
@@ -62,6 +63,7 @@ class FakeGateway:
         self.history_calls: list[str] = []
         self.events_calls: list[tuple[str, str, str]] = []
         self.log_calls: list[tuple[str, str, str]] = []
+        self.tail_calls: list[tuple[str, str, str]] = []
         self.run_files_calls: list[tuple[str, str, str]] = []
         self.file_calls: list[tuple[str, str, str, str]] = []
         self.logs_tree_calls: list[str] = []
@@ -121,6 +123,16 @@ class FakeGateway:
 
     def set_log_error(self, container_id: str, error: Exception) -> None:
         self._logs[container_id] = error
+
+    def set_tail(
+        self, container_id: str, payload: dict, returncode: int = 0
+    ) -> None:
+        self._tails[container_id] = TelemetryExec(
+            stdout=json.dumps(payload).encode(), returncode=returncode
+        )
+
+    def set_tail_error(self, container_id: str, error: Exception) -> None:
+        self._tails[container_id] = error
 
     async def list_instances(self) -> list[ManagedInstance]:
         self.list_calls += 1
@@ -208,6 +220,34 @@ class FakeGateway:
                 stdout=json.dumps(
                     {
                         "layout": "attempt-log/v1",
+                        "issue": 98,
+                        "started": "2026-09-27T16-33-43.385090Z",
+                        "attempt": {"outcome": "complete"},
+                        "events": [],
+                        "total_events": 0,
+                        "unreadable": 0,
+                        "truncated": False,
+                        "file_size": 0,
+                    }
+                ).encode(),
+                returncode=0,
+            ),
+        )
+        if isinstance(scripted, Exception):
+            raise scripted
+        return scripted
+
+    async def attempt_tail_log(
+        self, container_id: str, issue: int | str, started: str
+    ) -> TelemetryExec:
+        """One scripted tail read; unscripted IDs report an empty tail."""
+        self.tail_calls.append((container_id, str(issue), started))
+        scripted = self._tails.get(
+            container_id,
+            TelemetryExec(
+                stdout=json.dumps(
+                    {
+                        "layout": "attempt-log-tail/v1",
                         "issue": 98,
                         "started": "2026-09-27T16-33-43.385090Z",
                         "attempt": {"outcome": "complete"},

@@ -67,8 +67,16 @@ def _parsed(events):
     return result.events
 
 
+def _tail_payload_from(log_payload):
+    """Convert a head-layout scripted payload into a tail-layout one."""
+    tail = dict(log_payload)
+    if tail.get("layout") == "attempt-log/v1":
+        tail["layout"] = "attempt-log-tail/v1"
+    return tail
+
+
 def make_activity_client(snapshot, log_payload, files=None):
-    """A running instance with one telemetry snapshot plus a scripted log."""
+    """A running instance with one telemetry snapshot plus a scripted tail."""
     now = time.time()
     state = FleetState()
     gateway = FakeGateway([ManagedInstance("work", "id-work", "running")])
@@ -87,6 +95,7 @@ def make_activity_client(snapshot, log_payload, files=None):
     gateway.set_snapshot("id-work", snap)
     asyncio.run(run_cycle(state, gateway, max_concurrent_execs=4, now=now))
     gateway.set_log("id-work", log_payload)
+    gateway.set_tail("id-work", _tail_payload_from(log_payload))
     for filename, result in (files or {}).items():
         gateway.set_file("id-work", "98", STARTED_DASH, filename, result)
     app = create_app(
@@ -367,19 +376,24 @@ def test_activity_marks_failed_results():
     assert "error" in body
 
 
-def test_activity_truncated_log_links_instead_of_stale_data():
+def test_activity_truncated_tail_still_shows_newest_calls():
     snapshot = load_snapshot("snapshot-attempt-in-progress.json")
     payload = _payload(
-        [_ev("tool_call", "Bash [main] -> 0001_tool_call.json")],
+        [_ev("tool_call", "Bash [main] -> 0999_tool_call.json")],
         truncated=True,
+        total_events=5000,
         file_size=5 * 1024 * 1024,
     )
-    client, _, _ = make_activity_client(snapshot, payload)
+    client, _, _ = make_activity_client(
+        snapshot,
+        payload,
+        {"0999_tool_call.json": BASH_CALL},
+    )
     body = client.get("/instances/work/activity").text
-    assert "larger than the read cap" in body
-    assert "latest calls are not visible" in body
-    assert "Open the Attempt log" in body
-    assert "ls -la" not in body
+    assert "larger than the read cap" not in body
+    assert "Bash" in body
+    assert "running" in body
+    assert "Open the Attempt log" not in body or "log" in body
 
 
 def test_activity_stays_visible_through_publishing():

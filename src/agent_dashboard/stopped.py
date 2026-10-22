@@ -29,8 +29,10 @@ from .gateway import (
     ATTEMPT_EVENTS_LAYOUT,
     ATTEMPT_ISSUE_RE,
     ATTEMPT_LOG_LAYOUT,
+    ATTEMPT_LOG_TAIL_LAYOUT,
     ATTEMPT_STARTED_DASH_RE,
     LOG_STREAM_CAP,
+    LOG_TAIL_CAP,
     validate_attempt_ref,
 )
 
@@ -227,6 +229,135 @@ def _stream_events(
             }
         )
     return events, total_events, 0, False
+
+
+def _tail_events(
+    content: bytes, cap: int
+) -> tuple[list[dict[str, Any]], int, bool]:
+    """Parse the last ``cap`` bytes of one ``agent_output.json`` content.
+
+    Returns ``(events, total_events, truncated)`` with the tail exec
+    collector's semantics: blank lines are skipped, a line that does not
+    parse (or is not an object) becomes a synthetic ``unparsable_line``
+    WARNING row, and past ``cap`` bytes the tail is kept with ``truncated``
+    set. ``total_events`` is the full stream's non-blank line count, so the
+    caller can number rows with the file's line numbers. Only the
+    ``timestamp``/``level``/``event``/``detail`` keys are kept, as over the
+    exec boundary. Never raises on garbage input.
+    """
+    try:
+        total = sum(1 for line in content.splitlines() if line.strip())
+    except Exception:
+        return [], 0, True
+    if total == 0:
+        return [], 0, False
+    if len(content) <= cap:
+        truncated = False
+        tail = content
+        aligned = True
+    else:
+        truncated = True
+        tail = content[-cap:]
+        start = len(content) - cap
+        aligned = start <= 0 or content[start - 1 : start] == b"\n"
+    try:
+        raw = tail.decode("utf-8", errors="replace")
+    except Exception:
+        return [], total, True
+    lines = raw.splitlines()
+    if not aligned and lines:
+        lines = lines[1:]
+    events: list[dict[str, Any]] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            entry = None
+        if not isinstance(entry, dict):
+            events.append(
+                {
+                    "timestamp": None,
+                    "level": "WARNING",
+                    "event": "unparsable_line",
+                    "detail": line[:200],
+                }
+            )
+            continue
+        events.append(
+            {
+                "timestamp": entry.get("timestamp"),
+                "level": entry.get("level"),
+                "event": entry.get("event"),
+                "detail": entry.get("detail"),
+            }
+        )
+    return events, total, truncated
+
+
+def parse_run_tree_tail(
+    data: bytes, *, issue: int, started: str
+) -> tuple[dict[str, Any], list[str]]:
+    """Build a tail-layout payload from one run-directory copy.
+
+    Returns the payload plus every regular file's base name in the run.
+    Semantics mirror the tail exec collector: the newest
+    :data:`LOG_TAIL_CAP` bytes aligned to whole lines, the full stream's
+    count in ``total_events`` for file line numbers, and the true member
+    size in ``file_size``.
+    """
+    _number, dash_started = validate_attempt_ref(issue, started)
+    attempt: dict[str, Any] | None = None
+    attempt_seen = False
+    unreadable = 0
+    events: list[dict[str, Any]] = []
+    total_events = 0
+    truncated = False
+    file_size = 0
+    names: list[str] = []
+    for parts, size, content in _members(data):
+        if len(parts) < 2:
+            continue
+        run_raw, filename = parts[-2], parts[-1]
+        if ATTEMPT_STARTED_DASH_RE.fullmatch(run_raw) is None:
+            continue
+        if run_raw != dash_started:
+            continue
+        if not filename:
+            continue
+        names.append(filename)
+        if filename == ATTEMPT_FILE and not attempt_seen:
+            attempt_seen = True
+            if len(content) > MAX_ATTEMPT_BYTES:
+                unreadable += 1
+            else:
+                try:
+                    record = json.loads(content.decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    unreadable += 1
+                else:
+                    if isinstance(record, dict):
+                        attempt = record
+                    else:
+                        unreadable += 1
+        elif filename == EVENTS_FILE and not events and not truncated:
+            file_size = size
+            events, total_events, truncated = _tail_events(content, LOG_TAIL_CAP)
+    return (
+        {
+            "layout": ATTEMPT_LOG_TAIL_LAYOUT,
+            "issue": _number,
+            "started": dash_started,
+            "attempt": attempt,
+            "events": events,
+            "total_events": total_events,
+            "unreadable": unreadable,
+            "truncated": truncated,
+            "file_size": file_size,
+        },
+        sorted(set(names)),
+    )
 
 
 def parse_run_tree(
