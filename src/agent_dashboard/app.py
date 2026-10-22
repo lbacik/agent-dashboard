@@ -294,12 +294,19 @@ def create_app(
         """Instance drawer fragment, refreshed on every `fleet` SSE event.
 
         A click on a table row fetches this into `#drawer-holder`; the
-        drawer's own `hx-trigger="sse:fleet"` re-fetches it after every poll
-        cycle. An unknown or removed instance renders the gone fragment
-        (status 200) so a refresh can also bring the drawer back.
+        drawer then keeps its `<aside>` and swaps only the inner content
+        (`hx-target="this"` with `hx-select=".drawer-inner"`), so the
+        scroll position survives the refresh. An unknown or removed
+        instance renders the gone fragment (status 200) so a refresh can
+        also bring the drawer back. An empty fleet is transient (the
+        dashboard just started, or a discovery cycle came back empty):
+        status 204 performs no swap, so an open drawer keeps its last
+        snapshot instead of flipping into "gone" and back.
         """
         rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
         row = find_row(rows, name)
+        if row is None and not rows:
+            return Response(status_code=204)
         return templates.TemplateResponse(
             request, "_drawer.html", {**context(request), "row": row, "name": name}
         )
