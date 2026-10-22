@@ -9,7 +9,7 @@
    own (load-once widgets with `hx-preserve`) from inheriting the drawer's
    own fetch attributes. #}
 {% macro fig(f) -%}
-<div class="figure">{{ f.text }}{% if f.basis %} <span class="basis">{{ f.basis }}</span>{% endif %}</div>
+<span class="figure">{{ f.text }}{% if f.basis and f.basis != f.text %} <span class="basis">{{ f.basis }}</span>{% endif %}</span>
 {%- endmacro %}
 {% if row is none %}
 <aside id="drawer" class="drawer"
@@ -104,7 +104,7 @@
     <h4>Subagent contexts</h4>
     <dl class="facts">
       {% for sub in d.subagents %}
-      <div><dt>{{ sub.slot }} ({{ sub.kind }}){% if sub.running %} · running{% endif %}</dt><dd>{{ fig(sub.figure) }}</dd></div>
+      <div class="subagent"><dt title="{{ sub.slot }}"><span class="sub-id">{{ sub.slot }}</span><span class="sub-kind">{{ sub.kind }}{% if sub.running %} · <strong>running</strong>{% endif %}</span></dt><dd>{{ fig(sub.figure) }}</dd></div>
       {% endfor %}
     </dl>
     {% endif %}
