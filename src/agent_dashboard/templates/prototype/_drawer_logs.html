@@ -1,0 +1,29 @@
+{# PROTOTYPE: drawer log links plus a lazily loaded slot with the former
+   overview figures (attempts, outcomes, cost per window). hx-preserve keeps
+   the loaded slot across the drawer's SSE refresh. #}
+{% import "prototype/_proto.html" as p %}
+{% set d = row.drawer %}
+{% set live_url = attempt_log_url(row.name, d.issue_number, d.active_started) if d else None %}
+{% set slot_id = "proto-attempts-" ~ (row.name | replace(" ", "-") | replace(".", "-")) %}
+{% set slot_url = "/instances/" ~ (row.name | urlencode) ~ "/prototype-attempts?variant=" ~ variant %}
+{% if variant == "A" %}
+<p class="proto-drawer-links">
+  <a class="proto-iconlink" href="{{ p.history_url(row.name) }}">{{ p.logs_icon() }}<span>Attempt history</span></a>
+  {% if live_url %}<a class="proto-iconlink" href="{{ live_url }}">{{ p.live_icon() }}<span>Current attempt log #{{ d.issue_number }}</span></a>{% endif %}
+</p>
+<section class="drawer-section">
+  <h3>Attempts</h3>
+  <div id="{{ slot_id }}" hx-preserve hx-get="{{ slot_url }}" hx-trigger="load"><p class="hint">Loading…</p></div>
+</section>
+{% elif variant == "B" %}
+<div id="{{ slot_id }}" class="proto-stats-slot" hx-preserve hx-get="{{ slot_url }}" hx-trigger="load"><p class="hint">Loading attempt figures…</p></div>
+<p class="proto-drawer-links">
+  <a class="proto-btn" href="{{ p.history_url(row.name) }}">{{ p.logs_icon() }} Attempt history</a>
+  {% if live_url %}<a class="proto-btn proto-btn-live" href="{{ live_url }}">{{ p.live_icon() }} Live log #{{ d.issue_number }}</a>{% endif %}
+</p>
+{% else %}
+<div id="{{ slot_id }}" hx-preserve hx-get="{{ slot_url }}" hx-trigger="load">
+  <a class="proto-card" href="{{ p.history_url(row.name) }}"><span class="proto-card-title">{{ p.logs_icon() }} Attempt history</span><span class="hint">Loading…</span></a>
+</div>
+{% if live_url %}<p class="proto-drawer-links"><a class="proto-iconlink" href="{{ live_url }}">{{ p.live_icon() }}<span>Current attempt log #{{ d.issue_number }}</span></a></p>{% endif %}
+{% endif %}

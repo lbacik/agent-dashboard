@@ -1,0 +1,21 @@
+{# PROTOTYPE variant B drawer slot: stat tiles plus one stacked outcome bar,
+   above everything else in the drawer. #}
+{% import "prototype/_proto.html" as p %}
+{% set slot_id = "proto-attempts-" ~ (name | replace(" ", "-") | replace(".", "-")) %}
+<div class="proto-stats">
+  <div class="proto-stats-head"><span>Attempts</span>{{ p.window_links(name, slot_id, variant, window) }}</div>
+  {% if inst is none %}
+  <p class="hint">Unknown instance.</p>
+  {% elif not inst.ok %}
+  <p class="hint">{{ inst.error }}</p>
+  {% else %}
+  <div class="proto-tiles">
+    <div class="proto-tile"><span class="proto-tile-value">{{ inst.shown }}</span><span class="proto-tile-label">attempts{% if inst.total != inst.shown %} (of {{ inst.total }}){% endif %}</span></div>
+    <div class="proto-tile"><span class="proto-tile-value">{{ inst.counts.get("complete", 0) }}</span><span class="proto-tile-label">complete</span></div>
+    <div class="proto-tile"><span class="proto-tile-value">{{ inst.cost_text }}</span><span class="proto-tile-label">cost{% if inst.cost_missing %} · {{ inst.cost_missing }} w/o usage{% endif %}</span></div>
+  </div>
+  {{ p.outcome_bar(inst, chart_keys, chart_labels) }}
+  {% if inst.shown %}{{ p.outcome_legend(inst, chart_keys, chart_labels, shape_glyphs, outcome_shapes) }}{% endif %}
+  {% if inst.unreadable %}<p class="hint">{{ inst.unreadable }} unreadable attempt(s).</p>{% endif %}
+  {% endif %}
+</div>

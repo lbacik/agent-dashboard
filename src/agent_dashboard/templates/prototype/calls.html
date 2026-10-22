@@ -1,0 +1,56 @@
+{# PROTOTYPE: drawer activity widget (now + last call/response), from the Attempt log. #}
+{% import "prototype/_proto.html" as p %}
+{% set calls_id = "proto-calls-" ~ (name | replace(" ", "-") | replace(".", "-")) %}
+{# Out-of-band: the one-line state in the (possibly collapsed) summary. #}
+<span id="{{ calls_id }}-sum" class="proto-calls-sum" hx-swap-oob="true">{% if error %}unavailable{% elif activity.state == "tool" %}<strong>{{ activity.current[-1].evidence.tool }}</strong> running {{ cur_elapsed }}{% elif activity.state == "model" %}model working · {{ since_elapsed }}{% if activity.last_call %} · last: {{ activity.last_call.evidence.tool }}{% endif %}{% endif %}</span>
+{% if error %}
+<p class="hint">{{ error }}{% if log_url %} <a href="{{ log_url }}">Open the Attempt log</a>{% endif %}</p>
+{% else %}
+{% set a = activity %}
+<div class="proto-now proto-now-{{ a.state }}">
+  <div class="proto-now-top">
+    <span class="proto-now-label"><span class="proto-pulse" aria-hidden="true"></span>Now</span>
+    {% if a.state == "tool" %}
+    {% set cur = a.current[-1] %}
+    <span class="proto-now-main">
+      <strong>{{ cur.evidence.tool }}</strong>{% if cur.evidence.thread and cur.evidence.thread != "main" %} <span class="stale-tag">{{ cur.evidence.thread }}</span>{% endif %}
+      <span class="age">running {{ cur_elapsed }}{% if a.current | length > 1 %} · {{ a.current | length - 1 }} more in parallel{% endif %}</span>
+    </span>
+    <a class="proto-iconlink proto-now-link" href="{{ log_url }}?q={{ cur.evidence.file | urlencode }}" title="Open in the Attempt log">{{ p.logs_icon() }}</a>
+    {% elif a.state == "model" %}
+    <span class="proto-now-main"><strong>Model is working</strong> <span class="age">{{ since_elapsed }} since the last event</span></span>
+    {% else %}
+    <span class="proto-now-main hint">No events yet.</span>
+    {% endif %}
+  </div>
+  {% if a.state == "tool" %}
+  {% if cur_head %}<div class="proto-io-head" title="{{ cur_head }}">{{ cur_head }}</div>{% endif %}
+  <pre class="proto-io">{{ cur_body }}</pre>
+  {% elif message %}
+  <p class="proto-message" title="{{ message }}">“{{ message }}”</p>
+  {% endif %}
+</div>
+
+{% if a.last_call and a.last_result %}
+<div class="proto-last">
+  <div class="proto-last-head">
+    <span class="proto-now-label">Last call</span>
+    <strong>{{ a.last_call.evidence.tool }}</strong>{% if a.last_call.evidence.thread and a.last_call.evidence.thread != "main" %} <span class="stale-tag">{{ a.last_call.evidence.thread }}</span>{% endif %}
+    <span class="age">{{ a.last_call.time_text }} · took {{ call_took }} · {{ call_ago }} ago</span>
+    {% if res_error %}<span class="pill pill-unreachable">error</span>{% endif %}
+    <a class="proto-iconlink proto-now-link" href="{{ log_url }}?q={{ a.last_call.evidence.file | urlencode }}" title="Open in the Attempt log">{{ p.logs_icon() }}</a>
+  </div>
+  <div class="proto-io-grid">
+    <div>
+      <div class="proto-io-label">call{% if call_head %} · <span class="proto-io-head">{{ call_head }}</span>{% endif %}</div>
+      <pre class="proto-io">{{ call_body }}</pre>
+    </div>
+    <div>
+      <div class="proto-io-label">response{% if res_head %} · <span class="proto-io-head">{{ res_head }}</span>{% endif %}</div>
+      <pre class="proto-io{% if res_error %} proto-io-error{% endif %}">{{ res_body }}</pre>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% if file_error %}<p class="hint">Could not read an Evidence file: {{ file_error }}</p>{% endif %}
+{% endif %}

@@ -1,0 +1,196 @@
+/* PROTOTYPE (throwaway, branch prototype/fleet-view-logs). Tokens only. */
+
+.proto-switcher {
+  position: fixed; left: 50%; bottom: 1rem; transform: translateX(-50%);
+  z-index: 1000; display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.35rem 0.5rem; border-radius: 999px;
+  background: var(--card); color: var(--ink);
+  border: 2px solid var(--accent); box-shadow: 0 6px 20px var(--shadow); font-size: 0.85rem;
+}
+.proto-switcher button {
+  border: 1px solid var(--line); border-radius: 999px; width: 2rem; height: 2rem; cursor: pointer;
+  background: var(--surface-2); color: var(--ink); font-size: 1rem;
+}
+.proto-switcher button:hover { background: var(--hover); border-color: var(--accent-soft); }
+.proto-switcher-label { padding: 0 0.4rem; font-weight: 700; white-space: nowrap; }
+.proto-switcher-label span { font-weight: 400; }
+
+.proto-icon { width: 1em; height: 1em; vertical-align: -0.15em; flex: none; }
+.proto-iconlink { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; text-decoration: none; }
+.proto-iconlink:hover span { text-decoration: underline; }
+.proto-icon-only { color: var(--muted); margin-left: 0.15rem; }
+.proto-icon-only:hover { color: var(--link); }
+.proto-logs-cell { white-space: nowrap; }
+.proto-logs-cell .proto-iconlink + .proto-iconlink { margin-left: 0.6rem; }
+.proto-count {
+  display: inline-block; min-width: 1.4rem; padding: 0 0.4rem; border-radius: 999px;
+  background: var(--off-bg); color: var(--off-ink); font-size: 0.78rem; text-align: center;
+}
+.proto-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* A: details + slim table */
+.proto-offline-a { margin-top: 1.25rem; }
+.proto-offline-a > summary { cursor: pointer; color: var(--muted); font-weight: 600; padding: 0.4rem 0; }
+.proto-offline-a[open] > summary { margin-bottom: 0.5rem; }
+.proto-offline-a table.fleet td { color: var(--muted); }
+
+/* B: grouped rows in one table */
+.proto-group-head td { background: var(--surface-2); padding: 0; }
+.proto-toggle {
+  width: 100%; display: flex; align-items: center; gap: 0.5rem; text-align: left;
+  border: 0; background: transparent; padding: 0.55rem 0.75rem; cursor: pointer;
+  color: var(--ink); font: inherit; font-weight: 600;
+}
+.proto-caret { display: inline-block; transition: transform 0.15s; }
+.proto-names { color: var(--muted); font-weight: 400; font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proto-b .proto-offline-b { display: none; }
+.proto-b.is-open .proto-offline-b { display: table-row-group; }
+.proto-b.is-open .proto-caret { transform: rotate(90deg); }
+.proto-b.is-open .proto-names { display: none; }
+.proto-offline-b td { color: var(--muted); }
+
+/* C: buttons + chip strip */
+.proto-actions { white-space: nowrap; }
+.proto-btn {
+  display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.55rem;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--card);
+  color: var(--ink); text-decoration: none; font-size: 0.8rem; white-space: nowrap;
+}
+.proto-btn:hover { border-color: var(--accent-soft); background: var(--hover); }
+.proto-btn-live { color: var(--link); }
+.proto-actions .proto-btn + .proto-btn { margin-left: 0.3rem; }
+.proto-offline-c {
+  margin-top: 1rem; border: 1px dashed var(--line); border-radius: 8px; background: var(--card);
+}
+.proto-offline-c > summary { cursor: pointer; padding: 0.55rem 0.8rem; font-size: 0.88rem; }
+.proto-chips {
+  list-style: none; margin: 0; padding: 0 0.8rem 0.8rem;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.5rem;
+}
+.proto-chip {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem;
+  padding: 0.5rem 0.65rem; border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+}
+.proto-chip:hover { background: var(--hover); }
+
+/* Drawer: up to half the screen, facts flow into columns when there is room. */
+.drawer { width: min(92vw, max(30rem, 50vw)); }
+.drawer dl.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); column-gap: 1.75rem; }
+.drawer dl.facts > div { grid-template-columns: minmax(8rem, 11rem) 1fr; }
+.proto-diag {
+  position: fixed; left: 1rem; bottom: 1rem; z-index: 1001; max-width: 28rem;
+  padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.8rem;
+  background: var(--danger-bg); color: var(--danger-ink); border: 1px solid var(--danger-line);
+}
+
+/* Drawer */
+.proto-drawer-links { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin: 0 0 1rem; font-size: 0.88rem; }
+.proto-slot-head { margin: 0 0 0.5rem; }
+.proto-window { display: inline-flex; gap: 0.6rem; font-size: 0.8rem; }
+.proto-window a.current { font-weight: 700; color: var(--ink); text-decoration: none; }
+.proto-hbar { display: block; width: 100%; height: 10px; margin: 0.6rem 0 0.3rem; border-radius: 3px; overflow: hidden; }
+.proto-legend { margin: 0.3rem 0 0; font-size: 0.8rem; }
+
+.proto-stats-slot { margin-bottom: 0.75rem; }
+.proto-stats { border: 1px solid var(--line); border-radius: 8px; padding: 0.7rem 0.8rem; background: var(--surface-2); }
+.proto-stats-head { display: flex; justify-content: space-between; align-items: baseline; font-weight: 600; font-size: 0.85rem; margin-bottom: 0.5rem; }
+.proto-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
+.proto-tile { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 0.45rem 0.55rem; display: flex; flex-direction: column; }
+.proto-tile-value { font-size: 1.1rem; font-weight: 700; }
+.proto-tile-label { color: var(--muted); font-size: 0.75rem; }
+
+.proto-card { display: block; border: 1px solid var(--line); border-radius: 8px; padding: 0.7rem 0.8rem; margin-bottom: 0.75rem; background: var(--card); color: inherit; text-decoration: none; }
+.proto-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
+.proto-card-title { display: inline-flex; align-items: center; gap: 0.35rem; font-weight: 600; text-decoration: none; }
+.proto-card-line { margin: 0.2rem 0 0; font-size: 0.85rem; }
+
+/* Drawer activity widget (now + last call/response), above the budget bar.
+   Fixed height with inner scrolling, so live refreshes never move the drawer. */
+.proto-calls { margin: 0.5rem 0 0.9rem; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.proto-calls > summary {
+  display: flex; align-items: baseline; gap: 0.4rem; cursor: pointer; list-style: none;
+  padding: 0.45rem 0.75rem; white-space: nowrap; overflow: hidden;
+}
+.proto-calls > summary::-webkit-details-marker { display: none; }
+.proto-calls > summary::before { content: "▸"; color: var(--muted); transition: transform 0.15s; }
+.proto-calls[open] > summary::before { transform: rotate(90deg); }
+.proto-calls[open] > summary { border-bottom: 1px solid var(--line); }
+.proto-calls-sum { color: var(--muted); font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; }
+.proto-calls-body {
+  height: 25rem; overflow: hidden; padding: 0.6rem;
+  display: grid; grid-template-rows: 8.5rem minmax(0, 1fr); gap: 0.6rem;
+}
+.proto-calls-body > .hint { grid-row: 1 / -1; margin: 0; }
+.proto-now, .proto-last { border: 1px solid var(--line); border-radius: 8px; padding: 0.5rem 0.7rem; background: var(--card); min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.proto-now { border-left: 3px solid var(--off-ink); }
+.proto-now-tool { border-left-color: var(--accent); background: var(--hover); }
+.proto-now-model { border-left-color: var(--oc-other); }
+.proto-now-label { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-right: 0.4rem; }
+.proto-now-main { font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proto-now-top { display: flex; align-items: baseline; gap: 0.3rem; min-width: 0; }
+.proto-now-link { margin-left: auto; }
+.proto-pulse { display: none; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--accent); }
+.proto-now-tool .proto-pulse, .proto-now-model .proto-pulse { display: inline-block; animation: proto-pulse 1.4s ease-in-out infinite; }
+.proto-now-model .proto-pulse { background: var(--oc-other); }
+@keyframes proto-pulse { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .proto-pulse { animation: none !important; } }
+.proto-message {
+  margin: 0.35rem 0 0; font-size: 0.85rem; color: var(--muted); font-style: italic;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.proto-now pre.proto-io { flex: 1 1 0; min-height: 0; }
+.proto-last-head { font-size: 0.9rem; margin-bottom: 0.35rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
+.proto-io-grid { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); grid-auto-rows: minmax(0, 1fr); gap: 0.5rem; }
+.proto-io-grid > div { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.proto-io-grid pre.proto-io { flex: 1 1 0; min-height: 0; }
+.proto-io-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.2rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; }
+.proto-io-head { font-size: 0.8rem; color: var(--ink); }
+.proto-now > .proto-io-head { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 0.2rem; }
+pre.proto-io {
+  margin: 0.3rem 0 0; padding: 0.45rem 0.55rem; overflow: auto;
+  background: var(--surface-2); border-radius: 6px; font-size: 0.76rem; line-height: 1.35;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+pre.proto-io-error { background: var(--danger-bg); color: var(--danger-ink); }
+.proto-last-head { display: flex; align-items: baseline; gap: 0.3rem; }
+.proto-last-head .age { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Attempt-history card keeps its height while loading or switching windows. */
+#drawer [id^="proto-attempts-"] { min-height: 8.5rem; }
+/* Facts labels never spill into the value column (long ids have no break points). */
+.drawer dl.facts dt, .drawer dl.facts dd { min-width: 0; overflow-wrap: anywhere; }
+.proto-sub dt { display: flex; flex-direction: column; }
+.proto-sub-id { font-family: ui-monospace, monospace; font-size: 0.8rem; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proto-sub-kind { font-size: 0.78rem; }
+.proto-events-more { margin-top: 0.6rem; align-items: baseline; }
+
+/* Range card: selector variants A/B/C. */
+.proto-range-label { color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
+.proto-range-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.6rem; margin: 0.55rem 0 0.2rem; }
+.proto-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface-2); }
+.proto-seg a {
+  padding: 0.18rem 0.55rem; font-size: 0.8rem; color: var(--ink); text-decoration: none;
+  border-left: 1px solid var(--line);
+}
+.proto-seg a:first-child { border-left: 0; }
+.proto-seg a:hover { background: var(--hover); }
+.proto-seg a.current { background: var(--card); color: var(--link); font-weight: 700; box-shadow: inset 0 -2px 0 var(--accent); }
+.proto-seg-mode a.current { box-shadow: inset 0 0 0 1px var(--accent-soft); background: var(--card); color: var(--link); }
+.proto-dates { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; }
+.proto-dates input[type="date"] {
+  font: inherit; font-size: 0.8rem; padding: 0.12rem 0.3rem; color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; background: var(--card);
+}
+.proto-dates .proto-btn { cursor: pointer; font: inherit; font-size: 0.8rem; }
+.proto-strip { margin: 0.5rem 0 0.1rem; cursor: crosshair; user-select: none; touch-action: none; }
+.proto-strip svg { display: block; width: 100%; height: 48px; }
+.proto-strip-day { fill: transparent; }
+.proto-strip-day.is-sel { fill: var(--accent-soft); fill-opacity: 0.22; }
+.proto-strip.is-dragging .proto-strip-day.is-sel { fill: transparent; }
+.proto-strip-day.is-drag, .proto-strip.is-dragging .proto-strip-day.is-drag { fill: var(--accent); fill-opacity: 0.25; }
+.proto-strip-day:hover { fill: var(--accent); fill-opacity: 0.15; }
+.proto-strip-empty { fill: var(--line); }
+.proto-strip-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.7rem; margin-top: 0.15rem; }
+
+/* Drawer facts: figures flow inline as one sentence instead of one per line. */
+.drawer dl.facts dd .figure { display: inline; white-space: nowrap; }
+.drawer dl.facts dd .basis { font-size: 0.75rem; }

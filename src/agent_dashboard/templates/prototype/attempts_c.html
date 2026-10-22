@@ -1,0 +1,21 @@
+{# PROTOTYPE variant C drawer slot: the history link becomes a card that
+   carries the window figures; clicking the card opens the history. #}
+{% import "prototype/_proto.html" as p %}
+{% set slot_id = "proto-attempts-" ~ (name | replace(" ", "-") | replace(".", "-")) %}
+<div class="proto-card">
+  <div class="proto-card-head">
+    <a class="proto-card-title" href="{{ p.history_url(name) }}?window={{ window }}">{{ p.logs_icon() }} Attempt history →</a>
+    {{ p.window_links(name, slot_id, variant, window) }}
+  </div>
+  {% if inst is none %}
+  <p class="hint">Unknown instance.</p>
+  {% elif not inst.ok %}
+  <p class="hint">{{ inst.error }}</p>
+  {% else %}
+  {{ p.outcome_bar(inst, chart_keys, chart_labels) }}
+  <p class="proto-card-line">
+    <strong>{{ inst.shown }}</strong> of {{ inst.total }} attempts · <strong>{{ inst.cost_text }}</strong>{% if inst.cost_missing %} ({{ inst.cost_missing }} w/o usage){% endif %}{% if inst.unreadable %} · {{ inst.unreadable }} unreadable{% endif %}
+  </p>
+  {% if inst.shown %}{{ p.outcome_legend(inst, chart_keys, chart_labels, shape_glyphs, outcome_shapes) }}{% endif %}
+  {% endif %}
+</div>

@@ -1,0 +1,43 @@
+{# PROTOTYPE (throwaway): shared icons and helpers for the fleet view variants. #}
+{% macro logs_icon() -%}
+<svg class="proto-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 1.5h6L13 5v9.5H3.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9.5 1.5V5H13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8h5M5.5 10.5h5M5.5 13h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+{%- endmacro %}
+
+{% macro live_icon() -%}
+<svg class="proto-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M1 8.5h3l1.8-5 3.4 9 1.8-4H15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+{%- endmacro %}
+
+{% macro row_attrs(row, variant) -%}
+class="fleet-row" hx-get="/instances/{{ row.name | urlencode }}?variant={{ variant }}" hx-target="#drawer-holder" hx-swap="innerHTML" hx-push-url="/?variant={{ variant }}&instance={{ row.name | urlencode }}"
+{%- endmacro %}
+
+{% macro history_url(name) -%}/instances/{{ name | urlencode }}/history{%- endmacro %}
+
+{% macro outcome_bar(inst, keys, labels) -%}
+{% if inst and inst.ok and inst.shown %}
+<svg class="bars proto-hbar" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="{{ inst.outcome_text }}">
+  {% set ns = namespace(x=0) %}
+  {% for key in keys %}{% set c = inst.counts.get(key, 0) %}{% if c %}{% set w = c / inst.shown * 100 %}
+  <rect x="{{ ns.x }}" y="0" width="{{ w }}" height="10" class="bar outcome-{{ key }}"><title>{{ labels[key] }}: {{ c }}</title></rect>
+  {% set ns.x = ns.x + w %}{% endif %}{% endfor %}
+</svg>
+{% endif %}
+{%- endmacro %}
+
+{% macro outcome_legend(inst, keys, labels, glyphs, shapes) -%}
+<ul class="chart-legend proto-legend">
+  {% for key in keys %}{% set c = inst.counts.get(key, 0) %}{% if c %}
+  <li><span class="glyph outcome-{{ key }}" aria-hidden="true">{{ glyphs[shapes[key]] }}</span> {{ labels[key] }} {{ c }}</li>
+  {% endif %}{% endfor %}
+</ul>
+{%- endmacro %}
+
+{% macro window_links(name, slot_id, variant, window) -%}
+<span class="proto-window">
+  {% for key, label in [("7", "7 d"), ("30", "30 d"), ("all", "All")] %}
+  <a href="#" class="{% if window == key %}current{% endif %}"
+     hx-get="/instances/{{ name | urlencode }}/prototype-attempts?variant={{ variant }}&window={{ key }}"
+     hx-target="#{{ slot_id }}" hx-swap="innerHTML">{{ label }}</a>
+  {% endfor %}
+</span>
+{%- endmacro %}

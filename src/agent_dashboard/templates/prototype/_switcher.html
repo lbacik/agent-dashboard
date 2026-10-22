@@ -1,0 +1,20 @@
+{# PROTOTYPE (throwaway): floating variant switcher; ← / → also cycle.
+   On fleet variant C it cycles the attempt-card range selector (cookie
+   proto_card); otherwise the fleet variant (?variant=). #}
+<link rel="stylesheet" href="/static/prototype.css">
+{% if variant == "C" %}
+<nav class="proto-switcher" aria-label="Prototype variant switcher"
+     data-variants="{{ prototype_cards.keys() | join(',') }}" data-current="{{ card }}" data-cookie="proto_card">
+  <button type="button" data-step="-1" aria-label="Previous variant">←</button>
+  <span class="proto-switcher-label">Card {{ card }} <span>({{ prototype_cards[card] }})</span></span>
+  <button type="button" data-step="1" aria-label="Next variant">→</button>
+</nav>
+{% else %}
+<nav class="proto-switcher" aria-label="Prototype variant switcher"
+     data-variants="{{ prototype_variants.keys() | join(',') }}" data-current="{{ variant }}">
+  <button type="button" data-step="-1" aria-label="Previous variant">←</button>
+  <span class="proto-switcher-label">{{ variant }} <span>({{ prototype_variants[variant] }})</span></span>
+  <button type="button" data-step="1" aria-label="Next variant">→</button>
+</nav>
+{% endif %}
+<script src="/static/prototype.js" defer></script>

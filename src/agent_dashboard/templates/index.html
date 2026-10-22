@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+{% if not variant %}
 <section class="overview" id="overview" aria-label="Fleet overview">
   <h2>Fleet overview</h2>
   <div class="history-filters">
@@ -122,13 +123,14 @@
   <div class="chart-tip" id="chart-tip" hidden></div>
   <script src="/static/charts.js" defer></script>
 </section>
+{% endif %}
 <div id="live"
      hx-ext="sse"
-     sse-connect="/stream">
+     sse-connect="/stream{% if variant %}?variant={{ variant }}{% endif %}">
   <div id="fleet"
        sse-swap="fleet"
        hx-swap="innerHTML">
-    {% include "_fleet_table.html" %}
+    {% include ("prototype/fleet_" ~ variant|lower ~ ".html") if variant else "_fleet_table.html" %}
   </div>
   <div id="drawer-holder">
     {% if drawer_open %}
@@ -140,4 +142,5 @@
   <p class="hint">Enable JavaScript for live updates; otherwise reload the page.</p>
 </noscript>
 <script src="/static/drawer.js" defer></script>
+{% if variant %}{% include "prototype/_switcher.html" %}{% endif %}
 {% endblock %}

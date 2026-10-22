@@ -12,8 +12,9 @@ import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qs, quote, unquote, urlencode
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
@@ -36,6 +37,7 @@ from .charts import (
     CACHE_READ_SHARE_DEFINITION,
     OUTCOME_LABELS,
     OUTCOME_ORDER,
+    OUTCOME_SHAPES,
     SHAPE_GLYPHS,
     TOKEN_CATEGORIES,
     cache_share_per_attempt,
@@ -69,8 +71,10 @@ from .history import (
     format_duration,
     read_history,
 )
-from .overview import collect_overview, overview_legend
+from .overview import collect_overview, overview_legend, summarize_instance
 from .progress import progress_series, read_progress
+from .prototype_calls import call_preview, elapsed_text, find_activity, result_preview
+from .prototype_range import COUNTS, PRESETS, apply_range, day_strip, parse_range
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -80,6 +84,28 @@ ALLOWED_HOSTS = {"localhost", "127.0.0.1"}
 
 SSE_RETRY_MS = 3000
 SSE_HEARTBEAT_S = 15.0
+
+# PROTOTYPE (throwaway, branch prototype/fleet-view-logs): three variants of
+# the fleet page without the overview panel, switchable via ?variant=.
+# Only active with AGENT_DASHBOARD_PROTOTYPE=1; otherwise the page is unchanged.
+PROTOTYPE = os.environ.get("AGENT_DASHBOARD_PROTOTYPE") == "1"
+PROTOTYPE_VARIANTS = {
+    "A": "Logs column + collapsed table",
+    "B": "One table, grouped rows",
+    "C": "Action buttons + not running from A",
+}
+# PROTOTYPE: variants of the drawer's attempt-statistics range selector
+# (with fleet variant C); the floating switcher cycles these now.
+PROTOTYPE_CARDS = {
+    "A": "Presets + last N attempts",
+    "B": "Presets + custom dates",
+    "C": "Presets + activity strip",
+}
+
+
+def parse_qs_flat(text: str) -> dict[str, str]:
+    """PROTOTYPE: a query string as a flat dict (last value wins)."""
+    return {k: v[-1] for k, v in parse_qs(unquote(text)).items()}
 
 
 def format_sse_event(event: str, data: str) -> str:
@@ -215,8 +241,32 @@ def create_app(
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
+    def prototype_variant(request: Request) -> str | None:
+        if not PROTOTYPE:
+            return None
+        wanted = request.query_params.get("variant", "C").upper()
+        return wanted if wanted in PROTOTYPE_VARIANTS else "C"
+
+    def attempt_log_url(name: str, issue, started) -> str | None:
+        """PROTOTYPE: link to one attempt's log, or None for an unusable ref."""
+        if issue is None or not started:
+            return None
+        try:
+            number, dash = validate_attempt_ref(issue, started)
+        except ValueError:
+            return None
+        return f"/instances/{quote(name, safe='')}/attempts/{number}/{quote(dash, safe='')}"
+
+    templates.env.globals["attempt_log_url"] = attempt_log_url
+    templates.env.globals["prototype_variants"] = PROTOTYPE_VARIANTS
+
     def context(request: Request) -> dict:
-        return {"request": request, "poll_interval": int(cfg.poll_interval)}
+        return {
+            "request": request,
+            "poll_interval": int(cfg.poll_interval),
+            "variant": prototype_variant(request),
+            "card": prototype_card(request) if PROTOTYPE else None,
+        }
 
     def find_row(rows, name: str):
         """The fleet row for one instance name, or None when unknown/removed."""
@@ -238,6 +288,22 @@ def create_app(
             window = "all"
         wanted = request.query_params.get("instance") or ""
         row = find_row(rows, wanted) if wanted else None
+        variant = prototype_variant(request)
+        if variant:
+            # PROTOTYPE: no overview panel, so no attempt-summary reads here.
+            return templates.TemplateResponse(
+                request,
+                "index.html",
+                {
+                    **context(request),
+                    "rows": rows,
+                    "error": error,
+                    "drawer_open": bool(wanted),
+                    "row": row,
+                    "name": wanted,
+                    "window": window,
+                },
+            )
         now_ts = time.time()
         overview = await collect_overview(
             rows,
@@ -300,8 +366,222 @@ def create_app(
         """
         rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
         row = find_row(rows, name)
+        if row is None and not rows and prototype_variant(request):
+            # PROTOTYPE: an empty fleet (dashboard just started, no cycle yet)
+            # is transient; 204 makes htmx keep the open drawer as it is.
+            return Response(status_code=204)
         return templates.TemplateResponse(
             request, "_drawer.html", {**context(request), "row": row, "name": name}
+        )
+
+    # PROTOTYPE: Evidence files never change once written, so previews are
+    # cached by (container, attempt, file); bounded to keep memory small.
+    evidence_cache: dict[tuple[str, int, str, str], tuple[bytes, bool]] = {}
+
+    async def evidence(container_id: str, number: int, dash: str, file: str):
+        key = (container_id, number, dash, file)
+        if key not in evidence_cache:
+            result = await gw.read_file(container_id, number, dash, file, cap=16384)
+            if len(evidence_cache) > 256:
+                evidence_cache.clear()
+            evidence_cache[key] = (result.content, result.truncated)
+        return evidence_cache[key]
+
+    @app.get("/instances/{name}/prototype-calls", response_class=HTMLResponse)
+    async def prototype_calls(request: Request, name: str) -> Response:
+        """PROTOTYPE: drawer activity widget, refreshed on every fleet event.
+
+        Reads the active attempt's event stream (one exec) and at most
+        three Evidence files (cached), then renders "now" plus the last
+        call and its response.
+        """
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        row = find_row(rows, name)
+
+        def page(**extra) -> Response:
+            return templates.TemplateResponse(
+                request,
+                "prototype/calls.html",
+                {**context(request), "name": name, "row": row, **extra},
+            )
+
+        d = row.drawer if row is not None else None
+        if row is None or row.state != "running" or d is None:
+            return page(error="Instance is not running.")
+        issue = d.issue_number if d.issue_number is not None else d.active_issue
+        if issue is None or not d.active_started:
+            return page(error="No active attempt.")
+        try:
+            number, dash = validate_attempt_ref(issue, d.active_started)
+            exec_result = await gw.attempt_log(row.container_id, number, dash)
+        except (GatewayError, ValueError) as exc:
+            return page(error=f"Could not read the Attempt log: {exc}")
+        log = read_attempt_log(
+            exec_result.stdout, exec_result.returncode, issue=number, started=dash
+        )
+        if not log.ok:
+            return page(error=log.error or "layout not recognised")
+        if log.truncated:
+            return page(
+                error="The Attempt log is larger than the read cap "
+                f"({format_file_mb(log.file_size)}); the dashboard reads only its head, "
+                "so the latest calls are not visible.",
+                log_url=attempt_log_url(name, number, dash),
+            )
+        activity = find_activity(log.events)
+        now = datetime.now(UTC)
+        view: dict = {
+            "activity": activity,
+            "log_url": attempt_log_url(name, number, dash),
+        }
+        try:
+            if activity.state == "tool":
+                cur = activity.current[-1]
+                content, _ = await evidence(row.container_id, number, dash, cur.evidence.file)
+                view["cur_head"], view["cur_body"] = call_preview(cur.evidence.tool, content)
+                view["cur_elapsed"] = elapsed_text(activity.since.timestamp_text, now=now)
+            elif activity.state == "model" and activity.since is not None:
+                view["since_elapsed"] = elapsed_text(activity.since.timestamp_text, now=now)
+            if activity.last_call is not None and activity.last_result is not None:
+                call_content, _ = await evidence(
+                    row.container_id, number, dash, activity.last_call.evidence.file
+                )
+                res_content, res_trunc = await evidence(
+                    row.container_id, number, dash, activity.last_result.evidence.file
+                )
+                view["call_head"], view["call_body"] = call_preview(
+                    activity.last_call.evidence.tool, call_content
+                )
+                view["res_head"], view["res_body"], view["res_error"] = result_preview(
+                    activity.last_call.evidence.tool, res_content, res_trunc
+                )
+                view["call_took"] = elapsed_text(
+                    activity.last_call.timestamp_text, activity.last_result.timestamp_text
+                )
+                view["call_ago"] = elapsed_text(activity.last_result.timestamp_text, now=now)
+            if activity.last_message is not None:
+                msg, _ = await evidence(
+                    row.container_id, number, dash, activity.last_message.evidence.file
+                )
+                view["message"] = msg.decode("utf-8", errors="replace").strip()[:400]
+        except (GatewayError, ValueError, FileNotFoundError) as exc:
+            view["file_error"] = str(exc)
+        return page(error=None, **view)
+
+    def prototype_card(request: Request) -> str:
+        """PROTOTYPE: range-selector card variant, from the ``proto_card`` cookie."""
+        wanted = (request.cookies.get("proto_card") or "C").upper()
+        return wanted if wanted in PROTOTYPE_CARDS else "C"
+
+    templates.env.globals["prototype_cards"] = PROTOTYPE_CARDS
+
+    async def prototype_range_card(request: Request, name: str) -> Response:
+        """PROTOTYPE: attempt statistics for a flexible range (card A/B/C).
+
+        An explicit choice carries ``r=1``; otherwise the last choice comes
+        from the ``proto_range`` cookie, so it survives switching instances.
+        """
+        params = request.query_params
+        if "r" not in params:
+            params = parse_qs_flat(request.cookies.get("proto_range", ""))
+        spec = parse_range(params)
+        card = prototype_card(request)
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        row = find_row(rows, name)
+        ctx = {
+            **context(request),
+            "name": name,
+            "row": row,
+            "card": card,
+            "spec": spec,
+            "presets": list(PRESETS),
+            "counts": list(COUNTS),
+            "today": time.strftime("%Y-%m-%d", time.gmtime()),
+            "chart_keys": list(OUTCOME_ORDER),
+            "chart_labels": dict(OUTCOME_LABELS),
+            "shape_glyphs": dict(SHAPE_GLYPHS),
+            "outcome_shapes": dict(OUTCOME_SHAPES),
+            "inst": None,
+            "error": None,
+            "strip": [],
+            "strip_peak": 0,
+        }
+
+        def page() -> Response:
+            return templates.TemplateResponse(request, "prototype/range_card.html", ctx)
+
+        if row is None:
+            ctx["error"] = "Unknown instance."
+            return page()
+        if row.state != "running":
+            ctx["error"] = "Attempt history is available for running managed instances only."
+            return page()
+        try:
+            exec_result = await asyncio.wait_for(
+                gw.attempt_history(row.container_id), cfg.exec_timeout
+            )
+        except (TimeoutError, GatewayError, ValueError) as exc:
+            ctx["error"] = f"Could not read the Attempt log: {exc}"
+            return page()
+        now_ts = time.time()
+        full = read_history(exec_result.stdout, exec_result.returncode, now=now_ts, window="all")
+        if not full.ok:
+            ctx["error"] = full.error
+            return page()
+        cut = apply_range(full, spec, now_ts)
+        ctx["inst"] = summarize_instance(
+            name=row.name,
+            state=row.state,
+            container_id=row.container_id,
+            reach=row.reach,
+            rank=row.rank,
+            window="all",
+            result=cut,
+        )
+        ctx["strip"] = day_strip(full.summaries, spec, cut.summaries, now_ts)
+        ctx["strip_peak"] = max((d.total for d in ctx["strip"]), default=0)
+        return page()
+
+    @app.get("/instances/{name}/prototype-attempts", response_class=HTMLResponse)
+    async def prototype_attempts(request: Request, name: str) -> Response:
+        """PROTOTYPE: the overview panel's per-instance figures, for the drawer.
+
+        Loaded once when the drawer opens (and on window switches); the
+        drawer's SSE refresh keeps it via hx-preserve, so polling does not
+        add attempt-summary execs.
+        """
+        if prototype_variant(request) == "C":
+            return await prototype_range_card(request, name)
+        window = request.query_params.get("window", DEFAULT_WINDOW)
+        if window not in VALID_WINDOWS:
+            window = "all"
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        row = find_row(rows, name)
+        overview = None
+        if row is not None:
+            overview = await collect_overview(
+                [row],
+                gw,
+                window=window,
+                timeout=cfg.exec_timeout,
+                max_concurrent_execs=1,
+            )
+        inst = overview.rows[0] if overview and overview.rows else None
+        variant = prototype_variant(request) or "A"
+        return templates.TemplateResponse(
+            request,
+            f"prototype/attempts_{variant.lower()}.html",
+            {
+                **context(request),
+                "name": name,
+                "row": row,
+                "inst": inst,
+                "window": window,
+                "chart_keys": list(OUTCOME_ORDER),
+                "chart_labels": dict(OUTCOME_LABELS),
+                "shape_glyphs": dict(SHAPE_GLYPHS),
+                "outcome_shapes": dict(OUTCOME_SHAPES),
+            },
         )
 
     @app.get("/instances/{name}/history", response_class=HTMLResponse)
@@ -998,10 +1278,11 @@ def create_app(
             request, "_fleet_table.html", {**context(request), "rows": rows, "error": error}
         )
 
-    def render_fleet(rows, error) -> str:
+    def render_fleet(rows, error, variant: str | None = None) -> str:
         """Re-render the whole table body; ages are stamped at send time."""
-        template = templates.get_template("_fleet_table.html")
-        return template.render(rows=rows, error=error)
+        name = f"prototype/fleet_{variant.lower()}.html" if variant else "_fleet_table.html"
+        template = templates.get_template(name)
+        return template.render(rows=rows, error=error, variant=variant)
 
     @app.get("/stream")
     async def stream(request: Request) -> StreamingResponse:
@@ -1013,9 +1294,14 @@ def create_app(
         generator, whose `finally` unsubscribes the client.
         """
 
+        variant = prototype_variant(request) if "variant" in request.query_params else None
+
         async def event_generator() -> AsyncIterator[str]:
             async for chunk in fleet_event_stream(
-                fleet, render_fleet, request.is_disconnected, cfg.poll_interval
+                fleet,
+                lambda rows, error: render_fleet(rows, error, variant),
+                request.is_disconnected,
+                cfg.poll_interval,
             ):
                 yield chunk
 

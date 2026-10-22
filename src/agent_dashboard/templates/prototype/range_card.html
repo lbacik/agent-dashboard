@@ -1,0 +1,90 @@
+{# PROTOTYPE: attempt-statistics card with a flexible range; card A/B/C
+   differ only in the range selector. Explicit choices carry r=1; the
+   chosen range is saved to a cookie (prototype.js) so it survives
+   switching instances. #}
+{% import "prototype/_proto.html" as p %}
+{% set slot_id = "proto-attempts-" ~ (name | replace(" ", "-") | replace(".", "-")) %}
+{% set base = "/instances/" ~ (name | urlencode) ~ "/prototype-attempts?variant=C&r=1&" %}
+{% macro opt(label, query, active) -%}
+<a href="#" role="button" class="{% if active %}current{% endif %}" aria-pressed="{{ 'true' if active else 'false' }}"
+   hx-get="{{ base }}{{ query }}" hx-target="#{{ slot_id }}" hx-swap="innerHTML">{{ label }}</a>
+{%- endmacro %}
+{% macro preset_seg() -%}
+<span class="proto-seg">
+  {% for key in presets %}{{ opt(key if key != "all" else "All", "mode=time&preset=" ~ key, spec.mode == "time" and spec.preset == key) }}{% endfor %}
+</span>
+{%- endmacro %}
+<div class="proto-card proto-range-card" data-range-query="{{ spec.query }}">
+  <div class="proto-card-head">
+    <a class="proto-card-title" href="{{ p.history_url(name) }}?window={{ spec.history_window }}">{{ p.logs_icon() }} Attempt history →</a>
+    <span class="proto-range-label">{{ spec.label }}</span>
+  </div>
+
+  <div class="proto-range-controls">
+    {% if card == "A" %}
+    <span class="proto-seg proto-seg-mode">
+      {{ opt("Time", "mode=time&preset=" ~ spec.preset, spec.mode != "count") }}{{ opt("Last N", "mode=count&n=" ~ spec.n, spec.mode == "count") }}
+    </span>
+    {% if spec.mode == "count" %}
+    <span class="proto-seg">
+      {% for key in counts %}{{ opt(key if key != "all" else "All", "mode=count&n=" ~ key, spec.n == key) }}{% endfor %}
+    </span>
+    {% else %}
+    {{ preset_seg() }}
+    {% endif %}
+
+    {% elif card == "B" %}
+    {{ preset_seg() }}
+    <form class="proto-dates" hx-get="{{ base[:-1] }}" hx-target="#{{ slot_id }}" hx-swap="innerHTML">
+      <input type="hidden" name="mode" value="dates">
+      <label><span class="proto-sr">From</span><input type="date" name="from" max="{{ today }}" required
+        value="{{ spec.start.isoformat() if spec.start else '' }}"></label>
+      <span aria-hidden="true">–</span>
+      <label><span class="proto-sr">To</span><input type="date" name="to" max="{{ today }}" required
+        value="{{ spec.end.isoformat() if spec.end else today }}"></label>
+      <button type="submit" class="proto-btn{% if spec.mode == 'dates' %} proto-btn-live{% endif %}">Apply</button>
+    </form>
+
+    {% else %}
+    {{ preset_seg() }}
+    {% endif %}
+  </div>
+
+  {% if card == "C" and strip %}
+  {% set n = strip | length %}
+  <div class="proto-strip" data-base="{{ base }}" data-target="#{{ slot_id }}"
+       data-days="{{ strip | map(attribute='day') | join(',') }}"
+       title="Click a day or drag across days to select them">
+    <svg class="bars" viewBox="0 0 {{ n * 10 }} 48" preserveAspectRatio="none" role="img"
+         aria-label="Attempts per day over the last {{ n }} days; click or drag to choose a range">
+      {% for d in strip %}
+      {% set x = loop.index0 * 10 %}
+      <rect class="proto-strip-day{% if d.selected %} is-sel{% endif %}" data-i="{{ loop.index0 }}" x="{{ x }}" y="0" width="10" height="48">
+        <title>{{ d.day.strftime("%-d %b") }}: {{ d.total }} attempt(s){% for k, c in d.counts %} · {{ chart_labels[k] }} {{ c }}{% endfor %}</title>
+      </rect>
+      {% if d.total and strip_peak %}
+      {% set ns = namespace(base=46) %}
+      {% for k, c in d.counts %}
+      {% set h = (c / strip_peak) * 42 %}
+      <rect class="bar outcome-{{ k }}" x="{{ x + 1.5 }}" y="{{ ns.base - h }}" width="7" height="{{ h }}" pointer-events="none" />
+      {% set ns.base = ns.base - h %}
+      {% endfor %}
+      {% else %}
+      <rect class="proto-strip-empty" x="{{ x + 1.5 }}" y="45" width="7" height="1" pointer-events="none" />
+      {% endif %}
+      {% endfor %}
+    </svg>
+    <div class="proto-strip-axis"><span>{{ strip[0].day.strftime("%-d %b") }}</span><span>{{ strip[n // 2].day.strftime("%-d %b") }}</span><span>today</span></div>
+  </div>
+  {% endif %}
+
+  {% if error %}
+  <p class="hint">{{ error }}</p>
+  {% elif inst %}
+  {{ p.outcome_bar(inst, chart_keys, chart_labels) }}
+  <p class="proto-card-line">
+    <strong>{{ inst.shown }}</strong> of {{ inst.total }} attempts · <strong>{{ inst.cost_text }}</strong>{% if inst.cost_missing %} ({{ inst.cost_missing }} w/o usage){% endif %}{% if inst.unreadable %} · {{ inst.unreadable }} unreadable{% endif %}
+  </p>
+  {% if inst.shown %}{{ p.outcome_legend(inst, chart_keys, chart_labels, shape_glyphs, outcome_shapes) }}{% endif %}
+  {% endif %}
+</div>

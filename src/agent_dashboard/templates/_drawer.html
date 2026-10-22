@@ -3,14 +3,20 @@
    `row` is the FleetRow (None when the instance is unknown or removed);
    `name` is the requested instance name. #}
 {% macro fig(f) -%}
+{% if variant -%}
+{# PROTOTYPE: inline figures (they compose into one sentence); a basis that repeats the text is dropped. #}
+<span class="figure">{{ f.text }}{% if f.basis and f.basis != f.text %} <span class="basis">{{ f.basis }}</span>{% endif %}</span>
+{%- else -%}
 <div class="figure">{{ f.text }}{% if f.basis %} <span class="basis">{{ f.basis }}</span>{% endif %}</div>
+{%- endif %}
 {%- endmacro %}
 {% if row is none %}
 <aside id="drawer" class="drawer"
-       hx-get="/instances/{{ name | urlencode }}"
+       hx-get="/instances/{{ name | urlencode }}{% if variant %}?variant={{ variant }}{% endif %}"
        hx-trigger="sse:fleet"
-       hx-target="#drawer-holder"
-       hx-swap="innerHTML">
+       {% if variant %}hx-target="this" hx-select=".drawer-inner" hx-swap="innerHTML" hx-disinherit="*"{% else %}hx-target="#drawer-holder"
+       hx-swap="innerHTML"{% endif %}>
+  <div class="drawer-inner">
   <div class="drawer-head">
     <div>
       <h2 class="drawer-title">{{ name }}</h2>
@@ -18,14 +24,16 @@
     </div>
     <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
   </div>
+  </div>
 </aside>
 {% else %}
 {% set d = row.drawer %}
 <aside id="drawer" class="drawer"
-       hx-get="/instances/{{ row.name | urlencode }}"
+       hx-get="/instances/{{ row.name | urlencode }}{% if variant %}?variant={{ variant }}{% endif %}"
        hx-trigger="sse:fleet"
-       hx-target="#drawer-holder"
-       hx-swap="innerHTML">
+       {% if variant %}hx-target="this" hx-select=".drawer-inner" hx-swap="innerHTML" hx-disinherit="*"{% else %}hx-target="#drawer-holder"
+       hx-swap="innerHTML"{% endif %}>
+  <div class="drawer-inner">
   <div class="drawer-head">
     <div>
       <h2 class="drawer-title">{{ row.name }}</h2>
@@ -33,7 +41,12 @@
     </div>
     <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
   </div>
+  {% if variant %}
+  {# PROTOTYPE: log links plus the former overview figures, loaded once per open. #}
+  {% include "prototype/_drawer_logs.html" %}
+  {% else %}
   <p class="drawer-history-link"><a href="/instances/{{ row.name | urlencode }}/history">Attempt history</a></p>
+  {% endif %}
   {% if d.unsupported_schema is not none %}
   <section class="drawer-section">
     <h3>Current attempt</h3>
@@ -54,6 +67,20 @@
   {% else %}
   <section class="drawer-section">
     <h3>Current attempt</h3>
+    {% if variant and d.active_started and (d.issue_number is not none or d.active_issue is not none) %}
+    {# PROTOTYPE: activity widget, kept across drawer refreshes and refreshed on its own each poll. #}
+    {% set calls_id = "proto-calls-" ~ (row.name | replace(" ", "-") | replace(".", "-")) %}
+    <div id="{{ calls_id }}" hx-preserve>
+      <details class="proto-calls" open data-proto-group="activity" data-proto-default-open>
+        <summary><span class="proto-now-label">Activity</span> <span id="{{ calls_id }}-sum" class="proto-calls-sum"></span></summary>
+        <div class="proto-calls-body"
+             hx-get="/instances/{{ row.name | urlencode }}/prototype-calls?variant={{ variant }}"
+             hx-trigger="load, sse:fleet" hx-target="this" hx-swap="innerHTML">
+          <p class="hint">Loading activity…</p>
+        </div>
+      </details>
+    </div>
+    {% endif %}
     {% if d.current_state != "active" %}
     <p class="hint">{% if d.current_state == "na" %}No current attempt (n/a){% else %}Current attempt unavailable{% endif %}</p>
     {% else %}
@@ -91,7 +118,12 @@
     <h4>Subagent contexts</h4>
     <dl class="facts">
       {% for sub in d.subagents %}
+      {% if variant %}
+      {# PROTOTYPE: long call ids are shortened (full id in the tooltip); kind and state on their own line. #}
+      <div class="proto-sub"><dt title="{{ sub.slot }}"><span class="proto-sub-id">{{ sub.slot }}</span><span class="proto-sub-kind">{{ sub.kind }}{% if sub.running %} · <strong>running</strong>{% endif %}</span></dt><dd>{{ fig(sub.figure) }}</dd></div>
+      {% else %}
       <div><dt>{{ sub.slot }} ({{ sub.kind }}){% if sub.running %} · running{% endif %}</dt><dd>{{ fig(sub.figure) }}</dd></div>
+      {% endif %}
       {% endfor %}
     </dl>
     {% endif %}
@@ -130,7 +162,21 @@
   </section>
   <section class="drawer-section">
     <h3>Recent events</h3>
-    {% if d.events %}
+    {% if d.events and variant %}
+    {# PROTOTYPE: newest first, last 20 only, then links to the full logs. #}
+    {% import "prototype/_proto.html" as p %}
+    {% set live_url = attempt_log_url(row.name, d.issue_number if d.issue_number is not none else d.active_issue, d.active_started) %}
+    <ul class="events">
+      {% for ev in (d.events | reverse | list)[:20] %}
+      <li><span class="ev-time" title="{{ ev.timestamp }}">{{ ev.timestamp[11:19] if ev.timestamp | length >= 19 else ev.timestamp }}</span> <span class="ev-level">{{ ev.level }}</span> <span class="ev-name">{{ ev.name }}</span> <span class="ev-text">{{ ev.text }}</span></li>
+      {% endfor %}
+    </ul>
+    <p class="proto-drawer-links proto-events-more">
+      {% if d.events | length > 20 %}<span class="hint">Showing the latest 20 of {{ d.events | length }}{% if d.truncated %} (older trimmed){% endif %}.</span>{% endif %}
+      <a class="proto-iconlink" href="/instances/{{ row.name | urlencode }}/history">{{ p.logs_icon() }}<span>Attempt history</span></a>
+      {% if live_url %}<a class="proto-iconlink" href="{{ live_url }}">{{ p.live_icon() }}<span>Current attempt log</span></a>{% endif %}
+    </p>
+    {% elif d.events %}
     <ul class="events">
       {% for ev in d.events %}
       <li><span class="ev-time">{{ ev.timestamp }}</span> <span class="ev-level">{{ ev.level }}</span> <span class="ev-name">{{ ev.name }}</span> <span class="ev-text">{{ ev.text }}</span></li>
@@ -142,5 +188,6 @@
     {% endif %}
   </section>
   {% endif %}
+  </div>
 </aside>
 {% endif %}

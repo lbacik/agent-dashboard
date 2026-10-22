@@ -1,0 +1,16 @@
+{# PROTOTYPE variant A drawer slot: the overview row as plain facts. #}
+{% import "prototype/_proto.html" as p %}
+{% set slot_id = "proto-attempts-" ~ (name | replace(" ", "-") | replace(".", "-")) %}
+<p class="proto-slot-head">{{ p.window_links(name, slot_id, variant, window) }}</p>
+{% if inst is none %}
+<p class="hint">Unknown instance.</p>
+{% elif not inst.ok %}
+<p class="hint">{{ inst.error }}</p>
+{% else %}
+<dl class="facts">
+  <div><dt>Attempts</dt><dd>{{ inst.shown }} of {{ inst.total }}{% if inst.unreadable %} · {{ inst.unreadable }} unreadable{% endif %}</dd></div>
+  <div><dt>Outcomes</dt><dd>{% if inst.outcome_text %}{{ inst.outcome_text }}{% else %}n/a{% endif %}</dd></div>
+  <div><dt>Cost</dt><dd>{{ inst.cost_text }}{% if inst.cost_missing %} · {{ inst.cost_missing }} without usage data excluded{% endif %}</dd></div>
+</dl>
+{{ p.outcome_bar(inst, chart_keys, chart_labels) }}
+{% endif %}
