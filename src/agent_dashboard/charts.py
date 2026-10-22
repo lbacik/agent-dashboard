@@ -157,25 +157,32 @@ def outcomes_per_day(
     *,
     now: float,
     window: str = "all",
+    span: tuple[str, str] | None = None,
 ) -> list[DayBucket]:
     """Bucket dated attempts per UTC day, oldest day first.
 
     ``summaries`` are already window-filtered by :func:`read_history`; this
     fills the day range so gaps render as empty bars: the trailing
-    7/30-day span for those windows, otherwise the earliest-to-latest span.
+    24h/7d/30d/90d-day span for those windows (plus the legacy 7/30-day
+    span), the explicit ``span`` (an inclusive ``(start_day, end_day)``
+    pair of ``YYYY-MM-DD`` days) for a custom date range, otherwise the
+    earliest-to-latest span.
     """
     rows = tuple(summaries)
     dated = _dated(rows)
     if not dated:
         return []
-    days = WINDOW_DAYS.get(window)
-    if days is not None:
-        start_day = _day_of(now - days * 86400)
-        end_day = _day_of(now)
+    if span is not None:
+        start_day, end_day = span
     else:
-        stamps = sorted(s.started_ts for s in dated if s.started_ts is not None)
-        start_day = _day_of(stamps[0])
-        end_day = _day_of(stamps[-1])
+        days = WINDOW_DAYS.get(window)
+        if days is not None:
+            start_day = _day_of(now - days * 86400)
+            end_day = _day_of(now)
+        else:
+            stamps = sorted(s.started_ts for s in dated if s.started_ts is not None)
+            start_day = _day_of(stamps[0])
+            end_day = _day_of(stamps[-1])
     counts: dict[str, dict[str, int]] = {}
     day = start_day
     while day <= end_day:
@@ -436,17 +443,25 @@ def cost_per_attempt(
 
 
 def _cost_day_range(
-    summaries: tuple[AttemptSummary, ...], *, now: float, window: str
+    summaries: tuple[AttemptSummary, ...],
+    *,
+    now: float,
+    window: str,
+    span: tuple[str, str] | None = None,
 ) -> tuple[str, str] | None:
     """The UTC day span for the cost charts, mirroring :func:`outcomes_per_day`.
 
     The span covers every dated attempt (not just attempts with cost data)
-    so the cost charts line up with the outcomes chart: the trailing 7/30-day
-    span for those windows, otherwise the earliest-to-latest span.
+    so the cost charts line up with the outcomes chart: the trailing
+    24h/7d/30d/90d-day span for those windows (plus the legacy 7/30-day
+    span), the explicit ``span`` for a custom date range, otherwise the
+    earliest-to-latest span.
     """
     dated = _dated(summaries)
     if not dated:
         return None
+    if span is not None:
+        return span
     days = WINDOW_DAYS.get(window)
     if days is not None:
         return _day_of(now - days * 86400), _day_of(now)
@@ -469,6 +484,7 @@ def cumulative_cost_per_day(
     *,
     now: float,
     window: str = "all",
+    span: tuple[str, str] | None = None,
 ) -> list[CumulativeDay]:
     """Running USD total per UTC day, oldest day first.
 
@@ -477,7 +493,7 @@ def cumulative_cost_per_day(
     renders a "no cost data" note instead of a flat zero chart.
     """
     rows = tuple(summaries)
-    span = _cost_day_range(rows, now=now, window=window)
+    span = _cost_day_range(rows, now=now, window=window, span=span)
     if span is None:
         return []
     daily: dict[str, float] = dict.fromkeys(_each_day(*span), 0.0)

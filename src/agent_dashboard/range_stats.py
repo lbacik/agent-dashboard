@@ -7,7 +7,7 @@ instead: a card whose range selector offers presets (``24h``/``7d``/``30d``/
 range. This module is the framework-free range model behind the card:
 
 - :class:`RangeSpec`: the active range (a preset or an inclusive UTC date
-  span), with its query encoding, human label and history-page window;
+  span), with its query encoding, human label and history-page query;
 - :func:`parse_range` / :func:`parse_cookie`: explicit query params win,
   otherwise the remembered cookie value, otherwise the default ``30d``;
 - :func:`apply_range`: cut a window-``all`` history result down to the range
@@ -97,10 +97,13 @@ class RangeSpec:
 
     @property
     def history_window(self) -> str:
-        """The closest window the history page understands (extended in #57)."""
-        if not self.is_custom and self.preset in ("7d", "30d"):
-            return self.preset[:-1]
-        return "all"
+        """The history-page query string for exactly this range.
+
+        The history page understands the same encoding as this card
+        (``preset=…`` or ``from=…&to=…``), so the link keeps the exact
+        range instead of falling back to the closest legacy window.
+        """
+        return self.query
 
 
 def _fmt_day_year(day: date) -> str:

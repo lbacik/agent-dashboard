@@ -657,11 +657,84 @@ def test_history_page_window_filter():
     assert "#41" not in body_7
     body_all = client.get("/instances/work/history?window=all").text
     assert "#41" in body_all
+    # Legacy window links keep working.
+    assert "#98" in client.get("/instances/work/history?window=30").text
+    assert "#41" not in client.get("/instances/work/history?window=30").text
     # Filter links and a manual refresh, no live stream on this static page.
-    assert "?window=7" in body_all and "?window=30" in body_all and "?window=all" in body_all
+    assert "?preset=7d" in body_all and "?preset=30d" in body_all
+    assert "?preset=all" in body_all and "?preset=24h" in body_all
+    assert "?preset=90d" in body_all
     assert "Refresh" in body_all
     assert "sse-swap" not in body_all
     assert "sse:fleet" not in body_all
+
+
+def _history_client_with_aged_attempts():
+    now = time.time()
+
+    def aged(days_ago, issue):
+        started = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - days_ago * 86400)
+        )
+        return {
+            "issue": issue,
+            "started": started.replace(":", "-"),
+            "attempt": dict(COMPLETE, started_at=started),
+        }
+
+    payload = _payload(
+        [
+            aged(0.5, 1),
+            aged(3, 2),
+            aged(10, 3),
+            aged(100, 4),
+        ]
+    )
+    client, _, _ = make_history_client([("work", "running")], {"id-work": payload})
+    return client, now
+
+
+def test_history_page_accepts_every_preset():
+    client, _ = _history_client_with_aged_attempts()
+    assert 'href="/instances/work/history?preset=24h" class="current"' in client.get(
+        "/instances/work/history?preset=24h"
+    ).text
+    body_24h = client.get("/instances/work/history?preset=24h").text
+    assert "#1" in body_24h and "#2" not in body_24h
+    body_7d = client.get("/instances/work/history?preset=7d").text
+    assert "#2" in body_7d and "#3" not in body_7d
+    body_30d = client.get("/instances/work/history?preset=30d").text
+    assert "#3" in body_30d and "#4" not in body_30d
+    body_90d = client.get("/instances/work/history?preset=90d").text
+    assert "#3" in body_90d and "#4" not in body_90d
+    body_all = client.get("/instances/work/history?preset=all").text
+    assert "#4" in body_all
+    # The refresh link preserves the selected range.
+    assert "history?preset=7d" in body_7d
+
+
+def test_history_page_accepts_a_custom_date_span():
+    import datetime as _datetime
+
+    client, now = _history_client_with_aged_attempts()
+    today = _datetime.datetime.fromtimestamp(now, tz=_datetime.UTC).date()
+    start = (today - _datetime.timedelta(days=11)).isoformat()
+    end = (today - _datetime.timedelta(days=2)).isoformat()
+    body = client.get(f"/instances/work/history?from={start}&to={end}").text
+    # Only the attempts started inside the inclusive span remain.
+    assert "#2" in body and "#3" in body
+    assert "#1" not in body and "#4" not in body
+    assert f"from={start}&amp;to={end}" in body
+
+
+def test_history_page_charts_follow_the_range():
+    client, _ = _history_client_with_aged_attempts()
+    body_7d = client.get("/instances/work/history?preset=7d").text
+    body_all = client.get("/instances/work/history?preset=all").text
+    # The 30-day-old attempt feeds the all-time charts but not the 7-day ones.
+    assert body_all.count("#3") > body_7d.count("#3")
+    assert "Showing 2 of 4 attempts" in body_7d
+    assert "Showing 4 of 4 attempts" in body_all
 
 
 def test_history_page_stopped_instance():

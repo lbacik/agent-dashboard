@@ -5,11 +5,15 @@
   <p class="subtitle">Managed instance {{ name }}{% if row is not none %} · {{ row.state }}{% endif %}</p>
 </div>
 <div class="history-filters">
-  <span>Window:</span>
-  <a href="/instances/{{ name | urlencode }}/history?window=7"{% if window == "7" %} class="current"{% endif %}>Last 7 days</a>
-  <a href="/instances/{{ name | urlencode }}/history?window=30"{% if window == "30" %} class="current"{% endif %}>Last 30 days</a>
-  <a href="/instances/{{ name | urlencode }}/history?window=all"{% if window == "all" %} class="current"{% endif %}>All</a>
-  <a class="refresh" href="/instances/{{ name | urlencode }}/history?window={{ window }}">Refresh</a>
+  <span>Range:</span>
+  {% for key in presets %}
+  {% set active = (not spec.is_custom and spec.preset == key) %}
+  <a href="/instances/{{ name | urlencode }}/history?preset={{ key }}"{% if active %} class="current"{% endif %}>{{ "All" if key == "all" else key }}</a>
+  {% endfor %}
+  {% if spec.is_custom %}
+  <span class="current-range">{{ spec.label }}</span>
+  {% endif %}
+  <a class="refresh" href="/instances/{{ name | urlencode }}/history?{{ spec.query }}">Refresh</a>
 </div>
 {% if error %}
 <div class="banner" role="alert">{{ error }}</div>

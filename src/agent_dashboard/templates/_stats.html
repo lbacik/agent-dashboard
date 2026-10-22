@@ -8,7 +8,7 @@
    colour with its shape glyph and label. #}
 <div class="stats-card" data-range-query="{{ spec.query }}">
   <div class="stats-head">
-    <a class="stats-title" href="/instances/{{ name | urlencode }}/history?window={{ history_window }}">Attempt history →</a>
+    <a class="stats-title" href="/instances/{{ name | urlencode }}/history?{{ spec.query }}">Attempt history →</a>
     <span class="stats-label">{{ spec.label }}</span>
   </div>
   <div class="stats-presets" role="group" aria-label="Attempt statistics range">

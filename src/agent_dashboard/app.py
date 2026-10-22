@@ -74,7 +74,6 @@ from .gateway import (
 )
 from .history import (
     DEFAULT_WINDOW,
-    VALID_WINDOWS,
     format_cost,
     format_duration,
     read_history,
@@ -459,7 +458,6 @@ def create_app(
             "stats_base": f"/instances/{quote(name, safe='')}/stats?",
             "spec": spec,
             "presets": list(RANGE_PRESETS),
-            "history_window": spec.history_window,
             "chart_keys": list(OUTCOME_ORDER),
             "chart_labels": dict(OUTCOME_LABELS),
             "shape_glyphs": dict(SHAPE_GLYPHS),
@@ -553,6 +551,24 @@ def create_app(
         ctx["legend"] = outcome_legend(cut.summaries)
         return page()
 
+    def _history_spec(params):
+        """The history-page range: explicit preset/from-to wins, else legacy window.
+
+        Legacy ``window=7|30|all`` links keep working by mapping onto the
+        matching preset; anything unknown means ``all``, mirroring the old
+        window fallback.
+        """
+        if "preset" in params or ("from" in params and "to" in params):
+            return parse_range(params)
+        window = params.get("window", DEFAULT_WINDOW)
+        if window in ("7", "7d"):
+            return parse_range({"preset": "7d"})
+        if window in ("30", "30d"):
+            return parse_range({"preset": "30d"})
+        if window in ("24h", "90d", "all"):
+            return parse_range({"preset": window})
+        return parse_range({"preset": "all"})
+
     @app.get("/instances/{name}/history", response_class=HTMLResponse)
     async def instance_history(request: Request, name: str) -> Response:
         """Attempt history page: one row per implementation attempt, newest first.
@@ -560,86 +576,20 @@ def create_app(
         Static with manual refresh (no stream subscription): the summaries
         for all attempts are read on demand with a single gateway exec for
         running instances, or a ``docker cp`` tree copy for stopped ones.
-        An unknown instance, a gone volume, an unreadable log and an
-        unrecognised layout each render a clear message with status 200,
-        never an error.
+        The page accepts the drawer's ranges (``preset=24h|7d|30d|90d|all``
+        or an inclusive UTC ``from``/``to`` date span) plus the legacy
+        ``window=7|30|all`` links; the table and every chart show only the
+        selected range. An unknown instance, a gone volume, an unreadable
+        log and an unrecognised layout each render a clear message with
+        status 200, never an error.
         """
-        window = request.query_params.get("window", DEFAULT_WINDOW)
-        if window not in VALID_WINDOWS:
-            window = "all"
+        spec = _history_spec(request.query_params)
         rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
         row = find_row(rows, name)
-        if row is None:
-            return templates.TemplateResponse(
-                request,
-                "history.html",
-                {
-                    **context(request),
-                    "row": None,
-                    "name": name,
-                    "window": window,
-                    "result": None,
-                    "error": f"Unknown Managed instance {name!r}: "
-                    "it is unknown or was removed.",
-                },
-            )
-        # Stopped containers cannot run ``docker exec``: their Attempt log
-        # list arrives through a ``docker cp`` tree copy parsed on the
-        # dashboard side, with the same tolerance rules as the exec reader.
-        # A missing tree (a gone volume, or an instance that never wrote
-        # logs) renders a clear message, never an error.
-        now_ts = time.time()
-        if row.state == "running":
-            try:
-                exec_result = await gw.attempt_history(row.container_id)
-            except (GatewayError, ValueError) as exc:
-                return templates.TemplateResponse(
-                    request,
-                    "history.html",
-                    {
-                        **context(request),
-                        "row": row,
-                        "name": name,
-                        "window": window,
-                        "result": None,
-                        "error": f"Could not read the Attempt log: {exc}",
-                    },
-                )
-            result = read_history(
-                exec_result.stdout, exec_result.returncode, now=now_ts, window=window
-            )
-        else:
-            try:
-                tree = await gw.copy_logs(row.container_id)
-            except FileNotFoundError:
-                return templates.TemplateResponse(
-                    request,
-                    "history.html",
-                    {
-                        **context(request),
-                        "row": row,
-                        "name": name,
-                        "window": window,
-                        "result": None,
-                        "error": "Attempt logs are unavailable for this instance: "
-                        "its volume is gone or it holds no logs.",
-                    },
-                )
-            except (GatewayError, ValueError) as exc:
-                return templates.TemplateResponse(
-                    request,
-                    "history.html",
-                    {
-                        **context(request),
-                        "row": row,
-                        "name": name,
-                        "window": window,
-                        "result": None,
-                        "error": f"Could not read the Attempt log: {exc}",
-                    },
-                )
-            result = read_stopped_history(tree, now=now_ts, window=window)
-        if not result.ok:
+
+        def history_page(
+            row, result, error: str | None, **extra
+        ) -> Response:
             return templates.TemplateResponse(
                 request,
                 "history.html",
@@ -647,16 +597,73 @@ def create_app(
                     **context(request),
                     "row": row,
                     "name": name,
-                    "window": window,
-                    "result": None,
-                    "error": result.error,
+                    "spec": spec,
+                    "presets": list(RANGE_PRESETS),
+                    "result": result,
+                    "error": error,
+                    **extra,
                 },
             )
+
+        if row is None:
+            return history_page(
+                None,
+                None,
+                f"Unknown Managed instance {name!r}: it is unknown or was removed.",
+            )
+        # Stopped containers cannot run ``docker exec``: their Attempt log
+        # list arrives through a ``docker cp`` tree copy parsed on the
+        # dashboard side, with the same tolerance rules as the exec reader.
+        # A missing tree (a gone volume, or an instance that never wrote
+        # logs) renders a clear message, never an error.
+        # Summaries are always read in full (window ``all``) and cut to the
+        # selected range, so presets and custom spans share one code path.
+        now_ts = time.time()
+        if row.state == "running":
+            try:
+                exec_result = await gw.attempt_history(row.container_id)
+            except (GatewayError, ValueError) as exc:
+                return history_page(
+                    row, None, f"Could not read the Attempt log: {exc}"
+                )
+            full = read_history(
+                exec_result.stdout, exec_result.returncode, now=now_ts, window="all"
+            )
+        else:
+            try:
+                tree = await gw.copy_logs(row.container_id)
+            except FileNotFoundError:
+                return history_page(
+                    row,
+                    None,
+                    "Attempt logs are unavailable for this instance: "
+                    "its volume is gone or it holds no logs.",
+                )
+            except (GatewayError, ValueError) as exc:
+                return history_page(
+                    row, None, f"Could not read the Attempt log: {exc}"
+                )
+            full = read_stopped_history(tree, now=now_ts, window="all")
+        if not full.ok:
+            return history_page(row, None, full.error)
+        result = apply_range(full, spec, now_ts)
         # Charts count only attempts with a usable summary: runs whose
         # attempt.json is missing or unparsable stay in the table (so the
         # Attempt log stays reachable) but never feed the charts.
         charted = tuple(s for s in result.summaries if s.has_summary)
-        buckets = outcomes_per_day(charted, now=now_ts, window=result.window)
+        if spec.is_custom:
+            assert spec.start is not None and spec.end is not None
+            chart_span: tuple[str, str] | None = (
+                spec.start.isoformat(),
+                spec.end.isoformat(),
+            )
+            chart_window = "all"
+        else:
+            chart_span = None
+            chart_window = spec.preset
+        buckets = outcomes_per_day(
+            charted, now=now_ts, window=chart_window, span=chart_span
+        )
         points = timeline_points(charted)
         peak = max((b.total for b in buckets), default=0)
         if peak >= 2:
@@ -669,7 +676,7 @@ def create_app(
         label_every = max(1, -(-len(buckets) // 14))
         cost_points = cost_per_attempt(charted)
         cumulative = cumulative_cost_per_day(
-            charted, now=now_ts, window=result.window
+            charted, now=now_ts, window=chart_window, span=chart_span
         )
         scatter = duration_vs_cost(charted)
         totals = cost_totals(charted)
@@ -735,16 +742,11 @@ def create_app(
         share_ticks = (
             [(0.0, "0%"), (0.5, "50%"), (1.0, "100%")] if share_points else []
         )
-        return templates.TemplateResponse(
-            request,
-            "history.html",
-            {
-                **context(request),
-                "row": row,
-                "name": name,
-                "window": window,
-                "result": result,
-                "error": None,
+        return history_page(
+            row,
+            result,
+            None,
+            **{
                 "buckets": buckets,
                 "bucket_peak": peak,
                 "label_every": label_every,
