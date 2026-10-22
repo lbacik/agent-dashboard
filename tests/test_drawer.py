@@ -10,9 +10,10 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
-from test_web import load_snapshot, make_fleet_client
+from test_web import load_snapshot, make_client, make_fleet_client
 
 from agent_dashboard.collector import run_cycle
+from agent_dashboard.gateway import ManagedInstance
 
 EXAMPLES = [
     "snapshot-attempt-in-progress.json",
@@ -173,8 +174,6 @@ def test_drawer_unknown_instance_is_gone():
 
 
 def test_drawer_removed_instance_is_gone():
-    from agent_dashboard.gateway import ManagedInstance
-
     client, state, gateway = make_fleet_client(
         {"work": load_snapshot(EXAMPLES[0]), "other": load_snapshot(EXAMPLES[0])}
     )
@@ -198,8 +197,6 @@ def test_drawer_empty_fleet_refresh_keeps_drawer():
     one empty discovery cycle flipped a live drawer into "This instance
     is gone" right after new data was read, then back on the next cycle.
     """
-    from agent_dashboard.gateway import ManagedInstance
-
     client, state, gateway = make_fleet_client({"work": load_snapshot(EXAMPLES[0])})
     assert "640,000" in client.get("/instances/work").text
     # A discovery cycle that comes back empty is transient: keep the drawer.
@@ -219,8 +216,6 @@ def test_drawer_empty_fleet_refresh_keeps_drawer():
 
 def test_drawer_startup_empty_fleet_refresh_keeps_drawer():
     """Before the first poll cycle the drawer refresh answers 204."""
-    from test_web import make_client
-
     client, _ = make_client([])
     response = client.get("/instances/work")
     assert response.status_code == 204
@@ -247,13 +242,34 @@ def test_drawer_refresh_updates_every_figure():
     assert 'id="drawer"' in first.text
     snap = load_snapshot(EXAMPLES[0])
     snap["current_attempt"]["budget"]["used"]["value"] = 700000
+    snap["current_attempt"]["issue_title"] = "Refreshed title for the live update"
+    snap["control"]["active_attempt"]["issue_title"] = "Refreshed title for the live update"
     gateway.set_snapshot("id-work", snap)
     asyncio.run(run_cycle(state, gateway, now=time.time()))
     second = client.get("/instances/work")
     assert second.status_code == 200
     assert "700,000" in second.text
     assert "640,000" not in second.text
+    assert "Refreshed title for the live update" in second.text
+    assert "synthetic widget panel" not in second.text
     assert second.text.count('id="drawer"') == 1
+
+
+def test_drawer_failed_poll_keeps_snapshot():
+    """A transient poll failure never turns an open drawer into "gone".
+
+    Only a good poll replaces the snapshot; any other outcome keeps the
+    last good one, so the refresh keeps rendering figures (stale) with
+    status 200 instead of the gone fragment.
+    """
+    client, state, gateway = make_fleet_client({"work": load_snapshot(EXAMPLES[0])})
+    assert "640,000" in client.get("/instances/work").text
+    gateway.set_error_code("id-work", "agent_unreachable", "no socket")
+    asyncio.run(run_cycle(state, gateway, now=time.time()))
+    stale = client.get("/instances/work")
+    assert stale.status_code == 200
+    assert "640,000" in stale.text
+    assert "gone" not in stale.text.lower()
 
 
 def test_drawer_helpers_keep_scroll_and_drop_instance_param():
