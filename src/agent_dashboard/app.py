@@ -13,6 +13,7 @@ import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
@@ -22,6 +23,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from .activity import (
+    call_preview,
+    elapsed_text,
+    find_activity,
+    result_preview,
+)
 from .attempt_log import (
     event_names,
     filter_events,
@@ -279,6 +286,150 @@ def create_app(
         return templates.TemplateResponse(
             request, "_drawer.html", {**context(request), "row": row, "name": name}
         )
+
+    # Evidence files never change once written, so the Activity widget
+    # caches their previews; bounded to keep memory small.
+    ACTIVITY_EVIDENCE_CAP = 16 * 1024
+    activity_cache: dict[tuple[str, int, str, str], tuple[bytes, bool]] = {}
+
+    async def activity_evidence(
+        container_id: str, number: int, dash: str, file: str
+    ) -> tuple[bytes, bool]:
+        key = (container_id, number, dash, file)
+        if key not in activity_cache:
+            result = await gw.read_file(
+                container_id, number, dash, file, cap=ACTIVITY_EVIDENCE_CAP
+            )
+            if len(activity_cache) > 256:
+                activity_cache.clear()
+            activity_cache[key] = (result.content, result.truncated)
+        return activity_cache[key]
+
+    def attempt_log_url(name: str, number: int, dash: str) -> str:
+        return (
+            f"/instances/{quote(name, safe='')}"
+            f"/attempts/{quote(str(number), safe='')}"
+            f"/{quote(dash, safe='')}"
+        )
+
+    @app.get("/instances/{name}/activity", response_class=HTMLResponse)
+    async def instance_activity(request: Request, name: str) -> Response:
+        """Drawer Activity widget: what the agent is doing right now.
+
+        Reads the active attempt's Attempt log (one exec) and at most three
+        Evidence files (cached), then renders ``Now`` (the tool call running
+        after the latest ``model_response``, or the model working otherwise)
+        plus the latest paired call and its response. Refreshed on every
+        poll cycle; the drawer's refresh keeps the loaded widget via
+        ``hx-preserve``, so there is no flicker and no ``Loading…`` again.
+        The reference comes from the control section's active attempt, so
+        the widget stays visible through the publishing and handoff phases
+        when the telemetry ``current_attempt`` section is already ``n/a``.
+        A truncated stream shows a notice with a log link instead of stale
+        data, because the head no longer holds the latest calls.
+        """
+        slot = "activity-" + name.replace(" ", "-").replace(".", "-")
+        summary_id = slot + "-sum"
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        row = find_row(rows, name)
+
+        def page(**extra) -> Response:
+            return templates.TemplateResponse(
+                request,
+                "_activity.html",
+                {
+                    **context(request),
+                    "name": name,
+                    "row": row,
+                    "summary_id": summary_id,
+                    **extra,
+                },
+            )
+
+        drawer = row.drawer if row is not None else None
+        if row is None or row.state != "running" or drawer is None:
+            return page(error="Instance is not running.")
+        issue = (
+            drawer.issue_number
+            if drawer.issue_number is not None
+            else drawer.active_issue
+        )
+        started = drawer.active_started
+        if issue is None or not started:
+            return page(error="No active attempt.")
+        try:
+            number, dash = validate_attempt_ref(issue, started)
+            exec_result = await gw.attempt_log(row.container_id, number, dash)
+        except (GatewayError, ValueError) as exc:
+            return page(error=f"Could not read the Attempt log: {exc}")
+        log = read_attempt_log(
+            exec_result.stdout, exec_result.returncode, issue=number, started=dash
+        )
+        log_url = attempt_log_url(name, number, dash)
+        if not log.ok:
+            return page(error=log.error or "layout not recognised", log_url=log_url)
+        if log.truncated:
+            return page(
+                error="The Attempt log is larger than the read cap "
+                f"({format_file_mb(log.file_size)}); the dashboard reads only its head, "
+                "so the latest calls are not visible.",
+                log_url=log_url,
+            )
+        activity = find_activity(log.events)
+        now = datetime.now(UTC)
+        view: dict = {
+            "activity": activity,
+            "log_url": log_url,
+            "error": None,
+        }
+        try:
+            if activity.state == "tool":
+                current = activity.current[-1]
+                content, _ = await activity_evidence(
+                    row.container_id, number, dash, current.evidence.file
+                )
+                view["cur_head"], view["cur_body"] = call_preview(
+                    current.evidence.tool, content
+                )
+                view["cur_elapsed"] = elapsed_text(
+                    current.timestamp_text, now=now
+                )
+            elif activity.state == "model" and activity.since is not None:
+                view["since_elapsed"] = elapsed_text(
+                    activity.since.timestamp_text, now=now
+                )
+            if activity.last_call is not None and activity.last_result is not None:
+                call_content, _ = await activity_evidence(
+                    row.container_id, number, dash, activity.last_call.evidence.file
+                )
+                res_content, res_truncated = await activity_evidence(
+                    row.container_id, number, dash, activity.last_result.evidence.file
+                )
+                view["call_head"], view["call_body"] = call_preview(
+                    activity.last_call.evidence.tool, call_content
+                )
+                view["res_head"], view["res_body"], view["res_error"] = (
+                    result_preview(
+                        activity.last_call.evidence.tool, res_content, res_truncated
+                    )
+                )
+                view["call_took"] = elapsed_text(
+                    activity.last_call.timestamp_text,
+                    activity.last_result.timestamp_text,
+                )
+                view["call_ago"] = elapsed_text(
+                    activity.last_result.timestamp_text, now=now
+                )
+            if activity.last_message is not None:
+                message, _ = await activity_evidence(
+                    row.container_id, number, dash, activity.last_message.evidence.file
+                )
+                view["message"] = (
+                    message.decode("utf-8", errors="replace").strip()[:400]
+                )
+        except (GatewayError, ValueError, FileNotFoundError) as exc:
+            view["file_error"] = str(exc)
+        return page(**view)
 
     @app.get("/instances/{name}/stats", response_class=HTMLResponse)
     async def instance_stats(request: Request, name: str) -> Response:

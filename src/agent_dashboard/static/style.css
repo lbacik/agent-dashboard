@@ -575,3 +575,64 @@ details.not-running table.fleet { border-top: 0; border-radius: 0 0 6px 6px; }
   .timeline .mark.outcome-other path.cross { stroke: var(--oc-other); }
   .chart-tip { background: #e6edf3; color: #0d1117; }
 }
+
+/* Drawer Activity widget: what the agent is doing right now. A fixed
+   height with inner scrolling keeps the drawer height stable across
+   refreshes; the collapsed summary still shows the live one-line state. */
+details.activity {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  background: var(--card);
+}
+details.activity > summary {
+  cursor: pointer;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.9rem;
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+details.activity > summary .activity-sum { color: var(--muted); font-size: 0.85rem; }
+.activity-body {
+  height: 20rem;
+  min-height: 20rem;
+  max-height: 20rem;
+  overflow-y: auto;
+  padding: 0.1rem 0.75rem 0.75rem;
+  border-top: 1px solid var(--line);
+}
+.activity-label { font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.04em; color: var(--muted); }
+.activity-pulse {
+  display: inline-block;
+  width: 0.55em;
+  height: 0.55em;
+  border-radius: 999px;
+  background: var(--oc-complete);
+  margin-right: 0.35rem;
+}
+.activity-now-model .activity-pulse { background: var(--oc-handoff); }
+.activity-now { margin-bottom: 0.75rem; }
+.activity-now-top { display: flex; gap: 0.5rem; align-items: baseline; }
+.activity-now-main { overflow-wrap: anywhere; }
+.activity-link { margin-left: auto; font-size: 0.85rem; white-space: nowrap; }
+.activity-message { font-style: italic; overflow-wrap: anywhere; color: var(--muted); }
+.activity-last-head { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; margin-bottom: 0.35rem; }
+.activity-io-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 0.75rem; }
+@media (max-width: 48rem) { .activity-io-grid { grid-template-columns: 1fr; } }
+.activity-io-label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.2rem; }
+.activity-io-head { font-size: 0.8rem; color: var(--ink); overflow-wrap: anywhere; font-weight: 600; }
+pre.activity-io {
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  background: #f6f8fa;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+pre.activity-io-error { border-color: var(--danger-ink); }
+@media (prefers-color-scheme: dark) { pre.activity-io { background: #0d1117; } }
