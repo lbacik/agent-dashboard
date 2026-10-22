@@ -70,6 +70,45 @@ function closeDrawer() {
   });
 })();
 
+/* Drawer Activity widget: the collapsed state survives the drawer's live
+   refresh (the widget lives in an hx-preserve slot, so its <details>
+   keeps its open attribute) and reopening/reload via localStorage. The
+   summary line itself refreshes out-of-band on every poll cycle, so the
+   header stays live while collapsed. */
+(function () {
+  var KEY = "drawer-activity-open";
+  var load = function () {
+    try {
+      var raw = localStorage.getItem(KEY);
+      if (raw === null) { return true; }
+      return raw === "1";
+    } catch (e) { return true; }
+  };
+  var save = function (open) {
+    try { localStorage.setItem(KEY, open ? "1" : "0"); } catch (e) { /* ignore */ }
+  };
+  var apply = function () {
+    var open = load();
+    document.querySelectorAll('[data-activity-group="activity"]').forEach(function (el) {
+      if (el.tagName === "DETAILS" && el.open !== open) { el.open = open; }
+    });
+  };
+  document.addEventListener("toggle", function (e) {
+    var el = e.target;
+    if (el && el.dataset && el.dataset.activityGroup === "activity") {
+      save(el.open);
+    }
+  }, true);
+  document.addEventListener("htmx:afterSwap", apply);
+  document.addEventListener("htmx:afterSettle", apply);
+  document.addEventListener("htmx:sseMessage", apply);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", apply);
+  } else {
+    apply();
+  }
+})();
+
 function copyNextAction() {
   var node = document.getElementById("recovery-next-action");
   if (!node) { return; }

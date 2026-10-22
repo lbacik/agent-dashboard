@@ -1,0 +1,57 @@
+{# Activity widget fragment: "Now" plus the last call and its response.
+   Loaded into the drawer's `.activity-body` on every poll cycle; the
+   one-line state travels out-of-band into the (possibly collapsed)
+   summary slot, so the header stays live while collapsed. #}
+<span id="{{ summary_id }}" class="activity-sum" hx-swap-oob="true">{% if error %}unavailable{% elif activity.state == "tool" %}<strong>{{ activity.current[-1].evidence.tool }}</strong> running {{ cur_elapsed }}{% elif activity.state == "model" %}model working · {{ since_elapsed }}{% if activity.last_call %} · last: {{ activity.last_call.evidence.tool }}{% endif %}{% else %}no events yet{% endif %}</span>
+{% if error %}
+<p class="hint">{{ error }}{% if log_url %} <a href="{{ log_url }}">Open the Attempt log</a>{% endif %}</p>
+{% else %}
+{% set a = activity %}
+<div class="activity-now activity-now-{{ a.state }}">
+  <div class="activity-now-top">
+    <span class="activity-label"><span class="activity-pulse" aria-hidden="true"></span>Now</span>
+    {% if a.state == "tool" %}
+    {% set cur = a.current[-1] %}
+    <span class="activity-now-main">
+      <strong>{{ cur.evidence.tool }}</strong>{% if cur.evidence.thread %} <span class="stale-tag">[{{ cur.evidence.thread }}]</span>{% endif %}
+      <span class="age">running {{ cur_elapsed }}{% if a.current | length > 1 %} · {{ a.current | length - 1 }} more in parallel{% endif %}</span>
+    </span>
+    <a class="activity-link" href="{{ log_url }}?q={{ cur.evidence.file | urlencode }}" title="Open in the Attempt log">log</a>
+    {% elif a.state == "model" %}
+    <span class="activity-now-main"><strong>Model is working</strong> <span class="age">{{ since_elapsed }} since the last event</span></span>
+    {% else %}
+    <span class="activity-now-main hint">No events yet.</span>
+    {% endif %}
+  </div>
+  {% if a.state == "tool" %}
+  {% if cur_head %}<div class="activity-io-head" title="{{ cur_head }}">{{ cur_head }}</div>{% endif %}
+  <pre class="activity-io">{{ cur_body }}</pre>
+  {% elif message %}
+  <p class="activity-message" title="{{ message }}">“{{ message }}”</p>
+  {% endif %}
+</div>
+
+{% if a.last_call and a.last_result %}
+<div class="activity-last">
+  <div class="activity-last-head">
+    <span class="activity-label">Last call</span>
+    <strong>{{ a.last_call.evidence.tool }}</strong>{% if a.last_call.evidence.thread %} <span class="stale-tag">[{{ a.last_call.evidence.thread }}]</span>{% endif %}
+    <span class="age">{{ a.last_call.time_text }} · took {{ call_took }} · {{ call_ago }} ago</span>
+    {% if res_error %}<span class="pill pill-unreachable">error</span>{% endif %}
+    <a class="activity-link" href="{{ log_url }}?q={{ a.last_call.evidence.file | urlencode }}" title="Open the call in the Attempt log">call log</a>
+    <a class="activity-link" href="{{ log_url }}?q={{ a.last_result.evidence.file | urlencode }}" title="Open the response in the Attempt log">response log</a>
+  </div>
+  <div class="activity-io-grid">
+    <div>
+      <div class="activity-io-label">call{% if call_head %} · <span class="activity-io-head">{{ call_head }}</span>{% endif %}</div>
+      <pre class="activity-io">{{ call_body }}</pre>
+    </div>
+    <div>
+      <div class="activity-io-label">response{% if res_head %} · <span class="activity-io-head">{{ res_head }}</span>{% endif %}</div>
+      <pre class="activity-io{% if res_error %} activity-io-error{% endif %}">{{ res_body }}</pre>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% if file_error %}<p class="hint">Could not read an Evidence file: {{ file_error }}</p>{% endif %}
+{% endif %}
