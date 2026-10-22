@@ -136,17 +136,17 @@ def test_drawer_recent_events():
     [
         (
             "snapshot-attempt-in-progress.json",
-            ("measured", "estimated", "configured", "sdk_assumed", "unavailable"),
+            ("measured", "estimated", "configured", "sdk_assumed"),
         ),
         (
             "snapshot-soft-threshold-handoff.json",
-            ("measured", "estimated", "configured", "unavailable"),
+            ("measured", "estimated", "configured"),
         ),
         ("snapshot-recovery-hold.json", ("measured", "estimated")),
         ("snapshot-idle-with-last-finished.json", ("measured", "estimated")),
         (
             "snapshot-truncated.json",
-            ("measured", "estimated", "configured", "sdk_assumed", "unavailable"),
+            ("measured", "estimated", "configured", "sdk_assumed"),
         ),
     ],
 )
@@ -391,3 +391,78 @@ def test_drawer_skewed_null_sections():
     assert "Current attempt" in body
     assert "Control" in body
     assert "Recent events" in body
+
+
+def test_drawer_repeated_basis_is_dropped():
+    """A basis that repeats the figure text renders only once.
+
+    The rate-limit headroom is unavailable with an unavailable basis, so
+    the drawer shows one "unavailable", not "unavailable unavailable".
+    """
+    body = open_drawer("snapshot-attempt-in-progress.json")
+    assert "not exposed through the gateway" in body  # the reason still shows
+    assert "unavailable" in body  # the figure text still shows
+    assert '<span class="basis">unavailable</span>' not in body
+
+
+def test_drawer_composite_row_with_dropped_basis():
+    """A composite row keeps reading as one line when a basis is dropped.
+
+    With a missing continuation index the Turns row reads
+    "continuation unavailable of 6 configured": the repeated basis is
+    dropped but the rest of the sentence still composes inline.
+    """
+    snap = load_snapshot("snapshot-attempt-in-progress.json")
+    snap["current_attempt"]["continuation"] = {
+        "index": {"value": None, "basis": "unavailable"},
+        "max": {"value": 6, "basis": "configured"},
+    }
+    client, _, _ = make_fleet_client({"work": snap})
+    body = client.get("/instances/work").text
+    assert "continuation <span class=\"figure\">unavailable</span> of" in body
+    assert "6 <span class=\"basis\">configured</span>" in body
+    assert '<span class="basis">unavailable</span>' not in body
+
+
+def test_drawer_figures_are_inline():
+    """Figures are inline spans, so composite rows read on one line."""
+    body = open_drawer("snapshot-attempt-in-progress.json")
+    assert '<span class="figure">' in body
+    assert '<div class="figure">' not in body
+    # Composite rows still compose into one line when they fit.
+    assert "continuation" in body
+    assert "Main context" in body
+    assert "Compactions" in body
+
+
+def test_drawer_subagent_row_shortens_long_ids():
+    """Long subagent ids shorten with an ellipsis; the full id is a tooltip."""
+    snap = load_snapshot("snapshot-attempt-in-progress.json")
+    long_id = "call_01a163abcdef0123456789abcdef0123456789"
+    snap["current_attempt"]["context"]["subagents"] = [
+        {
+            "id": long_id,
+            "type": "Explore",
+            "context": {"value": 42000, "basis": "estimated"},
+            "running": True,
+        }
+    ]
+    client, _, _ = make_fleet_client({"work": snap})
+    body = client.get("/instances/work").text
+    assert f'title="{long_id}"' in body
+    assert '<span class="sub-id">' in body
+    assert long_id in body  # full id present for copy/tooltip
+    assert "Explore" in body
+    assert "running" in body
+
+
+def test_drawer_wide_layout_rules():
+    """The drawer widens to half the screen with multi-column facts."""
+    client, _, _ = make_fleet_client(
+        {"work": load_snapshot("snapshot-attempt-in-progress.json")}
+    )
+    css = client.get("/static/style.css").text
+    assert "width: min(92vw, max(30rem, 50vw))" in css
+    assert "repeat(auto-fill, minmax(min(100%, 24rem), 1fr))" in css
+    assert "text-overflow: ellipsis" in css
+    assert ".drawer dl.facts dt, .drawer dl.facts dd { min-width: 0;" in css

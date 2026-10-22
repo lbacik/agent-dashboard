@@ -166,7 +166,7 @@ tr.fleet-row:hover td { background: #f2f6fb; }
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(30rem, 92vw);
+  width: min(92vw, max(30rem, 50vw));
   background: #fff;
   border-left: 1px solid var(--line);
   box-shadow: -8px 0 24px rgba(16, 20, 24, 0.12);
@@ -185,7 +185,7 @@ tr.fleet-row:hover td { background: #f2f6fb; }
   margin-bottom: 1rem;
 }
 
-.drawer-title { margin: 0; font-size: 1.15rem; }
+.drawer-title { margin: 0; font-size: 1.15rem; overflow-wrap: anywhere; }
 .drawer-subtitle { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.85rem; }
 
 .drawer-close {
@@ -208,22 +208,53 @@ tr.fleet-row:hover td { background: #f2f6fb; }
 }
 .drawer-section h4 { margin: 1rem 0 0.4rem; font-size: 0.9rem; }
 
-.attempt-head { font-weight: 600; }
+.attempt-head { font-weight: 600; overflow-wrap: anywhere; }
 
 dl.facts { margin: 0; }
+/* Facts flow into columns when the wide drawer has room, instead of one
+   narrow column with empty space beside it. */
+.drawer dl.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr));
+  column-gap: 1.75rem;
+}
 dl.facts > div {
   display: grid;
-  grid-template-columns: 11rem 1fr;
+  grid-template-columns: minmax(8rem, 11rem) 1fr;
   gap: 0.5rem;
   padding: 0.3rem 0;
   border-bottom: 1px dotted var(--line);
   font-size: 0.88rem;
 }
 dl.facts dt { color: var(--muted); }
-dl.facts dd { margin: 0; overflow-wrap: anywhere; }
+dl.facts dd { margin: 0; }
+/* Labels never spill into the value column: long unbroken labels such as
+   subagent ids have no break points, so both cells must be allowed to
+   shrink inside the grid. */
+.drawer dl.facts dt, .drawer dl.facts dd { min-width: 0; overflow-wrap: anywhere; }
+/* Figures compose into one sentence ("14 measured") instead of one block
+   per line, so composite rows read on one line when they fit. */
+.drawer dl.facts dd .figure { display: inline; white-space: nowrap; }
+/* Subagent rows: the id shortens with an ellipsis (the full id stays in
+   the tooltip) with the kind and running state on a second line. */
+.drawer dl.facts dt .sub-id {
+  display: block;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.drawer dl.facts dt .sub-kind { display: block; font-size: 0.78rem; }
 
 ul.events { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
-ul.events li { padding: 0.3rem 0; border-bottom: 1px dotted var(--line); }
+ul.events li {
+  padding: 0.3rem 0;
+  border-bottom: 1px dotted var(--line);
+  overflow-wrap: anywhere;
+}
+.drawer code { overflow-wrap: anywhere; }
 .ev-time { color: var(--muted); }
 .ev-level { font-weight: 600; }
 .ev-name { font-family: ui-monospace, monospace; }
