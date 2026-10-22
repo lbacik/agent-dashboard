@@ -10,10 +10,11 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote
 
 from .collector import GOOD, InstancePoll, run_cycle
 from .drawer import DrawerDetail, read_drawer
-from .gateway import ManagedInstance
+from .gateway import ManagedInstance, validate_attempt_ref
 from .presentation import (
     attention_rank,
     build_row_headline,
@@ -28,6 +29,10 @@ class FleetRow:
     """One rendered fleet row: reach plus the snapshot view model.
 
     Templates consume only these view models; there is no public JSON API.
+    ``live_url`` links the running row's Live button at the current
+    attempt's log (``None`` while no attempt is active or its reference is
+    not a valid log reference); the history link needs no view model since
+    the template builds it from the instance name.
     """
 
     name: str
@@ -41,6 +46,8 @@ class FleetRow:
     rank: int = 6
     detail: SnapshotDetail | None = None
     drawer: DrawerDetail | None = None
+    live_url: str | None = None
+    live_issue: int | None = None
 
 
 @dataclass
@@ -138,6 +145,34 @@ class FleetState:
             return sorted(rows, key=lambda r: (r.rank, r.name)), self.last_error
 
     @staticmethod
+    def _live_link(
+        name: str, drawer: DrawerDetail | None
+    ) -> tuple[str | None, int | None]:
+        """The current attempt's log link: ``(url, issue)`` or ``(None, None)``.
+
+        The issue prefers the current attempt's number and falls back to the
+        control plane's active attempt; the start comes from the control
+        plane. A missing attempt on either side, or a reference the log
+        routes would reject, means no Live button.
+        """
+        if drawer is None:
+            return None, None
+        issue = (
+            drawer.issue_number if drawer.issue_number is not None else drawer.active_issue
+        )
+        started = drawer.active_started
+        if issue is None or not started:
+            return None, None
+        try:
+            number, dash = validate_attempt_ref(issue, started)
+        except ValueError:
+            return None, None
+        return (
+            f"/instances/{quote(name, safe='')}/attempts/{number}/{quote(dash, safe='')}",
+            number,
+        )
+
+    @staticmethod
     def _render(entry: _InstanceEntry, now: float, poll_interval: float) -> FleetRow:
         reach = reach_for_snapshot(entry.container_state, entry.outcome_kind, entry.snapshot)
         has_snapshot = entry.snapshot is not None
@@ -160,6 +195,8 @@ class FleetState:
             detail=detail,
         )
         rank = attention_rank(reach, detail, has_snapshot=has_snapshot)
+        drawer = read_drawer(entry.snapshot, control_stale=detail.control_stale)
+        live_url, live_issue = FleetState._live_link(entry.name, drawer)
         return FleetRow(
             name=entry.name,
             state=entry.container_state,
@@ -171,7 +208,9 @@ class FleetState:
             has_snapshot=has_snapshot,
             rank=rank,
             detail=detail,
-            drawer=read_drawer(entry.snapshot, control_stale=detail.control_stale),
+            drawer=drawer,
+            live_url=live_url,
+            live_issue=live_issue,
         )
 
 

@@ -161,3 +161,58 @@ def test_poll_forever_uses_start_based_scheduling():
     assert len(starts) >= 3
     for first, second in zip(starts, starts[1:]):
         assert 0.09 <= second - first <= 0.2
+
+
+def test_live_url_present_only_for_valid_active_reference():
+    state = FleetState()
+    gateway = FakeGateway([ManagedInstance("w", "id", "running")])
+    gateway.set_snapshot(
+        "id",
+        {
+            "schema_version": 1,
+            "control": {
+                "control_observed_at": "2026-09-30T10:15:00.000000Z",
+                "active_attempt": {
+                    "issue_number": 977,
+                    "started_at": "2026-09-30T09:30:00.123456Z",
+                },
+            },
+            "current_attempt": {"issue_number": 977},
+        },
+    )
+    run(state, gateway)
+    rows, _ = asyncio.run(state.snapshot(now=1000000000.0 + 3600 * 12))
+    assert rows[0].live_url == "/instances/w/attempts/977/2026-09-30T09-30-00.123456Z"
+    assert rows[0].live_issue == 977
+
+
+def test_live_url_absent_when_reference_invalid():
+    state = FleetState()
+    gateway = FakeGateway([ManagedInstance("w", "id", "running")])
+    gateway.set_snapshot(
+        "id",
+        {
+            "schema_version": 1,
+            "control": {
+                "control_observed_at": "2026-09-30T10:15:00.000000Z",
+                "active_attempt": {
+                    "issue_number": 977,
+                    "started_at": "2026-09-30T09:30:00Z",
+                },
+            },
+            "current_attempt": {"issue_number": 977},
+        },
+    )
+    run(state, gateway)
+    rows, _ = asyncio.run(state.snapshot(now=1000000000.0 + 3600 * 12))
+    assert rows[0].live_url is None
+    assert rows[0].live_issue is None
+
+
+def test_live_url_absent_without_active_attempt():
+    state = FleetState()
+    gateway = FakeGateway([ManagedInstance("w", "id", "running")])
+    gateway.set_snapshot("id", {"schema_version": 1})
+    run(state, gateway)
+    rows, _ = asyncio.run(state.snapshot())
+    assert rows[0].live_url is None

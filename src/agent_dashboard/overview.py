@@ -1,10 +1,11 @@
 """Fleet overview: per-instance outcomes and cost over a time window.
 
-The fleet page's overview panel is built from every managed instance's
-attempt summaries (see ``history.read_history``). Instances are read in
-parallel with a bounded timeout; an instance whose summaries cannot be read
-(not running, unreachable, layout not recognised) keeps its reach and is
-excluded from the totals instead of failing the panel.
+Aggregates every managed instance's attempt summaries (see
+``history.read_history``); the fleet page no longer shows this panel and
+its per-instance figures live in the instance drawer instead. Instances
+are read in parallel with a bounded timeout; an instance whose summaries
+cannot be read (not running, unreachable, layout not recognised) keeps its
+reach and is excluded from the totals instead of failing the aggregation.
 
 Charts reuse the history charts' approach and vocabulary (``charts`` outcome
 order, labels, shapes and ``outcome-*`` CSS classes); instance order follows
