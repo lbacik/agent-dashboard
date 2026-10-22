@@ -1,5 +1,8 @@
-/* Variant A prototype layout: narrow column, top header bar, plain table. */
+/* Variant A prototype layout: narrow column, top header bar, plain table.
+   Light theme only for now (see DESIGN.md): every colour is a token on
+   :root and there is deliberately no prefers-color-scheme: dark block. */
 :root {
+  color-scheme: light;
   --oc-complete: #1a7f37;
   --oc-incomplete: #9a6700;
   --oc-handoff: #1f6feb;
@@ -8,12 +11,18 @@
   --oc-other: #8250df;
   --card: #fff;
   --bg: #f6f7f9;
+  --surface-2: #eef1f4;
+  --hover: #f2f6fb;
   --ink: #1a1d21;
   --muted: #5f6b76;
   --line: #dfe3e8;
   --accent: var(--oc-handoff);
+  --accent-soft: #7aa5f0;
+  --link: #0b5cd5;
+  --shadow: rgba(16, 20, 24, 0.12);
   --danger-bg: #fdecec;
   --danger-ink: #8c1d1d;
+  --danger-line: #f3b8b8;
   --ok-bg: #e6f4ea;
   --ok-ink: #137333;
   --off-bg: #eceff1;
@@ -33,9 +42,14 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
 }
 
+a { color: var(--link); }
+a:hover { text-decoration-thickness: 2px; }
+
 .topbar {
-  background: #101418;
-  color: #fff;
+  background: var(--card);
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+  border-top: 3px solid var(--accent);
   padding: 1.25rem 1.5rem;
 }
 
@@ -46,7 +60,7 @@ body {
 
 .topbar .subtitle {
   margin: 0.25rem 0 0;
-  color: #aeb8c2;
+  color: var(--muted);
   font-size: 0.9rem;
 }
 
@@ -59,7 +73,7 @@ body {
 .banner {
   background: var(--danger-bg);
   color: var(--danger-ink);
-  border: 1px solid #f3b8b8;
+  border: 1px solid var(--danger-line);
   border-radius: 6px;
   padding: 0.75rem 1rem;
   margin-bottom: 1rem;
@@ -68,7 +82,7 @@ body {
 table.fleet {
   width: 100%;
   border-collapse: collapse;
-  background: #fff;
+  background: var(--card);
   border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
@@ -82,7 +96,7 @@ table.fleet td {
 }
 
 table.fleet thead th {
-  background: #eef1f4;
+  background: var(--surface-2);
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -131,7 +145,7 @@ table.fleet td { vertical-align: top; font-size: 0.9rem; }
   position: relative;
   height: 0.6rem;
   min-width: 8rem;
-  background: #eef1f4;
+  background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: 4px;
   overflow: hidden;
@@ -145,8 +159,8 @@ table.fleet td { vertical-align: top; font-size: 0.9rem; }
     45deg,
     var(--accent),
     var(--accent) 4px,
-    #7aa5f0 4px,
-    #7aa5f0 8px
+    var(--accent-soft) 4px,
+    var(--accent-soft) 8px
   );
 }
 
@@ -159,7 +173,7 @@ table.fleet td { vertical-align: top; font-size: 0.9rem; }
 }
 
 tr.fleet-row { cursor: pointer; }
-tr.fleet-row:hover td { background: #f2f6fb; }
+tr.fleet-row:hover td { background: var(--hover); }
 
 .drawer {
   position: fixed;
@@ -167,9 +181,9 @@ tr.fleet-row:hover td { background: #f2f6fb; }
   right: 0;
   bottom: 0;
   width: min(92vw, max(30rem, 50vw));
-  background: #fff;
+  background: var(--card);
   border-left: 1px solid var(--line);
-  box-shadow: -8px 0 24px rgba(16, 20, 24, 0.12);
+  box-shadow: -8px 0 24px var(--shadow);
   overflow-y: auto;
   padding: 1.25rem 1.5rem 2rem;
   z-index: 20;
@@ -190,7 +204,8 @@ tr.fleet-row:hover td { background: #f2f6fb; }
 
 .drawer-close {
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--card);
+  color: var(--ink);
   border-radius: 6px;
   font-size: 1.1rem;
   line-height: 1;
@@ -278,7 +293,7 @@ ul.events li {
 .history-filters a.current { font-weight: 700; }
 .history-filters .refresh { margin-left: auto; }
 
-tr.active-row td { background: #f2f6fb; }
+tr.active-row td { background: var(--hover); }
 
 /* Drawer attempt-statistics card: range presets plus a 90-day activity strip.
    The strip and the outcome bar reuse the overview chart colours
@@ -375,10 +390,10 @@ tr.active-row td { background: #f2f6fb; }
 /* Token charts: one fill per token category; the legend names each
    category and every mark's tooltip carries the full token breakdown, so
    nothing relies on colour alone. */
-.bars .bar.tok-input { fill: #1f6feb; }
-.bars .bar.tok-cache-read { fill: #1a7f37; }
-.bars .bar.tok-cache-creation { fill: #9a6700; }
-.bars .bar.tok-output { fill: #8250df; }
+.bars .bar.tok-input { fill: var(--oc-handoff); }
+.bars .bar.tok-cache-read { fill: var(--oc-complete); }
+.bars .bar.tok-cache-creation { fill: var(--oc-incomplete); }
+.bars .bar.tok-output { fill: var(--oc-other); }
 .bars .bar.tok-zero { fill: var(--muted); }
 .token-legend .swatch {
   display: inline-block;
@@ -387,17 +402,17 @@ tr.active-row td { background: #f2f6fb; }
   border-radius: 2px;
   vertical-align: baseline;
 }
-.token-legend .swatch.tok-input { background: #1f6feb; }
-.token-legend .swatch.tok-cache-read { background: #1a7f37; }
-.token-legend .swatch.tok-cache-creation { background: #9a6700; }
-.token-legend .swatch.tok-output { background: #8250df; }
+.token-legend .swatch.tok-input { background: var(--oc-handoff); }
+.token-legend .swatch.tok-cache-read { background: var(--oc-complete); }
+.token-legend .swatch.tok-cache-creation { background: var(--oc-incomplete); }
+.token-legend .swatch.tok-output { background: var(--oc-other); }
 .timeline .threshold {
   stroke: var(--danger-ink);
   stroke-width: 1.5;
   stroke-dasharray: 6 4;
 }
 .timeline .thresh-label { fill: var(--danger-ink); font-size: 11px; }
-.bars .seg-label { fill: #fff; font-size: 11px; font-weight: 600; }
+.bars .seg-label { fill: var(--card); font-size: 11px; font-weight: 600; }
 .bars .seg:focus, .timeline .mark:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .timeline .axis-line { stroke: var(--muted); stroke-width: 1.5; }
@@ -461,12 +476,13 @@ ul.events.handoffs { margin-top: 1rem; }
   z-index: 40;
   max-width: 22rem;
   padding: 0.5rem 0.75rem;
-  background: #101418;
-  color: #fff;
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
   border-radius: 6px;
   font-size: 0.82rem;
   pointer-events: none;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 4px 16px var(--shadow);
 }
 
 /* Row log buttons: labelled links with icons at the end of each fleet row.
@@ -493,16 +509,16 @@ ul.events.handoffs { margin-top: 1rem; }
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 0.25rem 0.6rem;
-  background: #fff;
+  background: var(--card);
   color: var(--ink);
   text-decoration: none;
   font-size: 0.85rem;
   white-space: nowrap;
 }
 
-.btn:hover { background: #f2f6fb; }
+.btn:hover { background: var(--hover); border-color: var(--accent-soft); }
 .btn .icon { width: 1em; height: 1em; }
-.btn-live { border-color: var(--accent); }
+.btn-live { border-color: var(--accent); color: var(--link); }
 
 /* Drawer log links under Recent events: icon buttons like the fleet rows. */
 .drawer-links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0 0; }
@@ -513,71 +529,14 @@ details.not-running { margin-top: 1rem; }
 details.not-running > summary {
   cursor: pointer;
   padding: 0.6rem 0.9rem;
-  background: #fff;
+  background: var(--card);
   border: 1px solid var(--line);
   border-radius: 6px;
   font-size: 0.9rem;
 }
 details.not-running[open] > summary { border-radius: 6px 6px 0 0; }
 details.not-running table.fleet { border-top: 0; border-radius: 0 0 6px 6px; }
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --oc-complete: #3fb950;
-    --oc-incomplete: #d29922;
-    --oc-handoff: #79c0ff;
-    --oc-infra: #ff7b72;
-    --oc-nochanges: #8b949e;
-    --oc-other: #d2a8ff;
-    --bg: #0d1117;
-    --ink: #e6edf3;
-    --muted: var(--oc-nochanges);
-    --line: #30363d;
-    --card: #161b22;
-    --accent: var(--oc-handoff);
-  }
-  table.fleet, .drawer, .chart { background: var(--card); }
-  .btn, details.not-running > summary { background: var(--card); color: var(--ink); }
-  .btn:hover { background: #1c2530; }
-  table.fleet thead th, .budget-bar { background: #21262d; }
-  tr.fleet-row:hover td, tr.active-row td { background: #1c2530; }
-  .drawer-close { background: var(--card); color: var(--ink); }
-  .glyph.outcome-complete { color: var(--oc-complete); }
-  .glyph.outcome-incomplete { color: var(--oc-incomplete); }
-  .glyph.outcome-handoff { color: var(--oc-handoff); }
-  .glyph.outcome-infrastructure_error { color: var(--oc-infra); }
-  .glyph.outcome-no_changes { color: var(--oc-nochanges); }
-  .glyph.outcome-other { color: var(--oc-other); }
-  .bars .bar.outcome-complete { fill: var(--oc-complete); }
-  .bars .bar.outcome-incomplete { fill: var(--oc-incomplete); }
-  .bars .bar.outcome-handoff { fill: var(--oc-handoff); }
-  .bars .bar.outcome-infrastructure_error { fill: var(--oc-infra); }
-  .bars .bar.outcome-no_changes { fill: var(--oc-nochanges); }
-  .bars .bar.outcome-other { fill: var(--oc-other); }
-  .bars .bar.tok-input { fill: var(--oc-handoff); }
-  .bars .bar.tok-cache-read { fill: var(--oc-complete); }
-  .bars .bar.tok-cache-creation { fill: var(--oc-incomplete); }
-  .bars .bar.tok-output { fill: var(--oc-other); }
-  .token-legend .swatch.tok-input { background: var(--oc-handoff); }
-  .token-legend .swatch.tok-cache-read { background: var(--oc-complete); }
-  .token-legend .swatch.tok-cache-creation { background: var(--oc-incomplete); }
-  .token-legend .swatch.tok-output { background: var(--oc-other); }
-  .bars .seg-label { fill: #0d1117; }
-  .timeline .mark.outcome-complete :is(circle, rect, polygon) { fill: var(--oc-complete); }
-  .timeline .mark.outcome-incomplete :is(circle, rect, polygon) { fill: var(--oc-incomplete); }
-  .timeline .mark.outcome-handoff :is(circle, rect, polygon) { fill: var(--oc-handoff); }
-  .timeline .mark.outcome-infrastructure_error :is(circle, rect, polygon) { fill: var(--oc-infra); }
-  .timeline .mark.outcome-no_changes :is(circle, rect, polygon) { fill: var(--oc-nochanges); }
-  .timeline .mark.outcome-other :is(circle, rect, polygon) { fill: var(--oc-other); }
-  .timeline .mark.outcome-no_changes circle.hollow { stroke: var(--oc-nochanges); }
-  .timeline .mark.outcome-complete path.cross { stroke: var(--oc-complete); }
-  .timeline .mark.outcome-incomplete path.cross { stroke: var(--oc-incomplete); }
-  .timeline .mark.outcome-handoff path.cross { stroke: var(--oc-handoff); }
-  .timeline .mark.outcome-infrastructure_error path.cross { stroke: var(--oc-infra); }
-  .timeline .mark.outcome-no_changes path.cross { stroke: var(--oc-nochanges); }
-  .timeline .mark.outcome-other path.cross { stroke: var(--oc-other); }
-  .chart-tip { background: #e6edf3; color: #0d1117; }
-}
+details.not-running table.fleet td { color: var(--muted); }
 
 /* Drawer Activity widget: what the agent is doing right now. A fixed
    height with inner scrolling keeps the drawer height stable across
@@ -596,46 +555,80 @@ details.activity > summary {
   gap: 0.5rem;
   align-items: baseline;
 }
+details.activity[open] > summary { border-bottom: 1px solid var(--line); }
 details.activity > summary .activity-sum { color: var(--muted); font-size: 0.85rem; }
 .activity-body {
   height: 20rem;
   min-height: 20rem;
   max-height: 20rem;
   overflow-y: auto;
-  padding: 0.1rem 0.75rem 0.75rem;
-  border-top: 1px solid var(--line);
+  padding: 0.6rem;
 }
-.activity-label { font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.04em; color: var(--muted); }
+.activity-label { font-weight: 700; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.04em; color: var(--muted); }
+/* "Now" and "Last call" are light cards; the left edge says what is
+   running (accent: a tool, purple: the model, grey: nothing yet) and the
+   label names it, so the state never rests on colour alone. */
+.activity-now, .activity-last {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  background: var(--card);
+  min-width: 0;
+}
+.activity-now { margin-bottom: 0.6rem; border-left: 3px solid var(--off-ink); }
+.activity-now-tool { border-left-color: var(--accent); background: var(--hover); }
+.activity-now-model { border-left-color: var(--oc-other); }
 .activity-pulse {
-  display: inline-block;
-  width: 0.55em;
-  height: 0.55em;
-  border-radius: 999px;
-  background: var(--oc-complete);
+  display: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent);
   margin-right: 0.35rem;
 }
-.activity-now-model .activity-pulse { background: var(--oc-handoff); }
-.activity-now { margin-bottom: 0.75rem; }
+.activity-now-tool .activity-pulse, .activity-now-model .activity-pulse {
+  display: inline-block;
+  animation: activity-pulse 1.4s ease-in-out infinite;
+}
+.activity-now-model .activity-pulse { background: var(--oc-other); }
+@keyframes activity-pulse { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .activity-pulse { animation: none !important; } }
 .activity-now-top { display: flex; gap: 0.5rem; align-items: baseline; }
 .activity-now-main { overflow-wrap: anywhere; }
 .activity-link { margin-left: auto; font-size: 0.85rem; white-space: nowrap; }
-.activity-message { font-style: italic; overflow-wrap: anywhere; color: var(--muted); }
+.activity-last-head .activity-link + .activity-link { margin-left: 0; }
+.activity-message { margin: 0.35rem 0 0; font-size: 0.85rem; font-style: italic; overflow-wrap: anywhere; color: var(--muted); }
 .activity-last-head { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; margin-bottom: 0.35rem; }
-.activity-io-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 0.75rem; }
-@media (max-width: 48rem) { .activity-io-grid { grid-template-columns: 1fr; } }
-.activity-io-label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.2rem; }
+.activity-io-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 0.5rem; }
+.activity-io-grid > div { min-width: 0; }
+.activity-io-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.2rem; }
 .activity-io-head { font-size: 0.8rem; color: var(--ink); overflow-wrap: anywhere; font-weight: 600; }
 pre.activity-io {
-  margin: 0;
-  padding: 0.5rem 0.6rem;
-  background: #f6f8fa;
-  border: 1px solid var(--line);
+  margin: 0.3rem 0 0;
+  padding: 0.45rem 0.55rem;
+  background: var(--surface-2);
   border-radius: 6px;
-  font-size: 0.78rem;
+  font-size: 0.76rem;
+  line-height: 1.35;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 12rem;
   overflow-y: auto;
 }
-pre.activity-io-error { border-color: var(--danger-ink); }
-@media (prefers-color-scheme: dark) { pre.activity-io { background: #0d1117; } }
+pre.activity-io-error { background: var(--danger-bg); color: var(--danger-ink); }
+
+/* Evidence previews: monospace text on a tinted surface, scrolls instead
+   of widening the drawer. */
+.evidence-bar { display: flex; gap: 0.75rem; align-items: baseline; font-size: 0.85rem; }
+.evidence-size { color: var(--muted); }
+.evidence-content {
+  margin: 0.5rem 0 0;
+  padding: 0.6rem 0.75rem;
+  max-height: 24rem;
+  overflow: auto;
+  background: var(--surface-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
