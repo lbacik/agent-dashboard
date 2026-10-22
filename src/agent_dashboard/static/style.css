@@ -65,7 +65,7 @@ a:hover { text-decoration-thickness: 2px; }
 }
 
 .container {
-  max-width: 1280px;
+  max-width: 1600px;
   margin: 1.5rem auto;
   padding: 0 1rem;
 }
@@ -130,6 +130,33 @@ table.fleet td { vertical-align: top; font-size: 0.9rem; }
 
 .figure { white-space: nowrap; }
 .basis { color: var(--muted); font-size: 0.78rem; }
+
+/* Fleet tables scroll inside their own box, so a viewport narrower than
+   the table scrolls the table instead of pushing it past the page edge.
+   The Instance column stays pinned while the rest scrolls. */
+.table-scroll {
+  overflow-x: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.table-scroll > table.fleet { border: 0; border-radius: 0; }
+.table-scroll tbody tr:last-child td { border-bottom: 0; }
+.table-scroll table.fleet th:first-child,
+.table-scroll table.fleet td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--card);
+  box-shadow: inset -1px 0 0 var(--line);
+}
+.table-scroll table.fleet thead th:first-child { background: var(--surface-2); }
+.table-scroll tr.fleet-row:hover td:first-child { background: var(--hover); }
+
+/* Keep fleet rows compact: the basis label goes under its figure and the
+   status headline gets enough width not to wrap word by word. */
+table.fleet .figure .basis { display: block; }
+table.fleet td.headline { min-width: 14rem; }
 
 .stale-tag {
   display: inline-block;
@@ -535,7 +562,7 @@ details.not-running > summary {
   font-size: 0.9rem;
 }
 details.not-running[open] > summary { border-radius: 6px 6px 0 0; }
-details.not-running table.fleet { border-top: 0; border-radius: 0 0 6px 6px; }
+details.not-running .table-scroll { border-top: 0; border-radius: 0 0 6px 6px; }
 details.not-running table.fleet td { color: var(--muted); }
 
 /* Drawer Activity widget: what the agent is doing right now. A fixed
