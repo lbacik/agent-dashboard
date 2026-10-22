@@ -432,7 +432,7 @@ def make_live_log_client(now=None):
     return make_fleet_client({"work": _live_snapshot(now)})
 
 
-def test_index_has_no_overview_panel_and_reads_no_histories():
+def test_index_has_lazy_overview_slot_and_reads_no_histories():
     now = time.time()
     state = FleetState()
     gateway = FakeGateway([ManagedInstance("work", "id-work", "running")])
@@ -447,10 +447,13 @@ def test_index_has_no_overview_panel_and_reads_no_histories():
         start_poller=False,
     )
     body = TestClient(app, base_url="http://localhost").get("/").text
-    assert "Fleet overview" not in body
-    assert 'id="overview"' not in body
-    assert "overview-table" not in body
+    # The panel is an empty slot that fetches /overview once visible.
+    assert 'id="overview-slot"' in body
+    assert 'hx-get="/overview"' in body
+    assert 'hx-trigger="intersect once"' in body
+    assert "overview-charts" not in body
     assert gateway.history_calls == []
+    assert gateway.logs_tree_calls == []
 
 
 def test_running_row_has_logs_and_live_buttons():
@@ -490,7 +493,7 @@ def test_not_running_section_holds_stopped_instances():
     body = client.get("/").text
     assert '<details class="not-running" data-persist="not-running">' in body
     assert "Not running (1)" in body
-    main, _, details = body.partition("<details")
+    main, _, details = body.partition('<details class="not-running"')
     assert '<div class="inst-name">up</div>' in main
     assert '<div class="inst-name">down</div>' not in main
     assert '<div class="inst-name">down</div>' in details
@@ -499,13 +502,13 @@ def test_not_running_section_holds_stopped_instances():
     # Slim rows still open the drawer.
     assert 'hx-get="/instances/down"' in details
     # The section starts collapsed.
-    assert "<details" in body and " open" not in body.split("<details", 1)[1].split(">", 1)[0]
+    assert " open" not in details.split(">", 1)[0]
 
 
 def test_no_not_running_section_without_stopped_instances():
     client, _ = make_client([("up", "running")])
     body = client.get("/").text
-    assert "<details" not in body
+    assert '<details class="not-running"' not in body
     assert "Not running" not in body
 
 
@@ -522,4 +525,4 @@ def test_empty_fleet_message_without_details():
     client, _ = make_client([])
     body = client.get("/").text
     assert "No managed instances found." in body
-    assert "<details" not in body
+    assert '<details class="not-running"' not in body

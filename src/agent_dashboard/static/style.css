@@ -131,6 +131,30 @@ table.fleet td { vertical-align: top; font-size: 0.9rem; }
 .figure { white-space: nowrap; }
 .basis { color: var(--muted); font-size: 0.78rem; }
 
+/* Fleet overview panel above the table: a collapsible card whose body
+   loads from /overview once visible. The two charts sit side by side when
+   there is room. */
+details.overview {
+  margin-bottom: 1rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+details.overview > summary {
+  cursor: pointer;
+  padding: 0.6rem 0.9rem;
+  font-weight: 600;
+}
+details.overview[open] > summary { border-bottom: 1px solid var(--line); }
+#overview-slot { padding: 0.75rem 0.9rem 0.9rem; min-height: 4rem; }
+.overview-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 28rem), 1fr));
+  gap: 0 1.5rem;
+}
+.overview-charts .chart { margin: 0.75rem 0 0; }
+.overview-errors { margin: 0.4rem 0 0; padding-left: 1.1rem; font-size: 0.85rem; color: var(--muted); }
+
 /* Fleet tables scroll inside their own box, so a viewport narrower than
    the table scrolls the table instead of pushing it past the page edge.
    The Instance column stays pinned while the rest scrolls. */

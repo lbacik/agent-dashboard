@@ -1,15 +1,17 @@
-"""Fleet overview: per-instance outcomes and cost over a time window.
+"""Fleet overview: per-instance outcomes and cost over a range.
 
-Aggregates every managed instance's attempt summaries (see
-``history.read_history``); the fleet page no longer shows this panel and
-its per-instance figures live in the instance drawer instead. Instances
-are read in parallel with a bounded timeout; an instance whose summaries
-cannot be read (not running, unreachable, layout not recognised) keeps its
-reach and is excluded from the totals instead of failing the aggregation.
+Aggregates every managed instance's attempt summaries for the fleet page's
+lazily loaded overview panel (``/overview``). The panel takes the instance
+drawer's range model (``range_stats``: presets plus a strip-picked UTC date
+span), and both read through :func:`read_full_history`, so the panel and
+the drawer card count the same attempts. Instances are read in parallel
+with a bounded timeout; an instance whose summaries cannot be read (gone
+volume, unreachable, layout not recognised) keeps its reach and is
+excluded from the totals instead of failing the aggregation.
 
 Charts reuse the history charts' approach and vocabulary (``charts`` outcome
 order, labels, shapes and ``outcome-*`` CSS classes); instance order follows
-the fleet's attention rank. Instances with no attempts in the window are
+the fleet's attention rank. Instances with no attempts in the range are
 shown as such, never as zero cost.
 """
 
@@ -28,20 +30,24 @@ from .charts import (
     normalize_outcome,
 )
 from .fleet import FleetRow
-from .gateway import GatewayError
 from .history import (
     DEFAULT_WINDOW,
     NOT_APPLICABLE,
-    VALID_WINDOWS,
+    AttemptSummary,
     HistoryResult,
     format_cost,
     read_history,
+    read_stopped_history,
 )
+from .range_stats import RangeSpec, apply_range
 
 #: Fallback per-instance read budget when the caller passes no timeout.
 OVERVIEW_TIMEOUT = 5.0
 
-NOT_RUNNING_MESSAGE = "Attempt history is available for running managed instances only."
+LOGS_GONE_MESSAGE = (
+    "Attempt logs are unavailable for this instance: "
+    "its volume is gone or it holds no logs."
+)
 
 NO_ATTEMPTS_YET = "No attempts recorded yet"
 NO_ATTEMPTS_IN_WINDOW = "No attempts in this window"
@@ -84,11 +90,13 @@ class OverviewResult:
     """The panel: one row per instance in attention-rank order, plus totals.
 
     Totals cover only readable instances; unreadable ones are counted in
-    ``unreadable`` and left out.
+    ``unreadable`` and left out. ``summaries`` holds every readable
+    instance's full (uncut) history, which feeds the fleet activity strip.
     """
 
-    window: str
+    spec: RangeSpec = field(default_factory=RangeSpec)
     rows: tuple[InstanceOverview, ...] = ()
+    summaries: tuple[AttemptSummary, ...] = ()
     readable: int = 0
     unreadable: int = 0
     total_cost: float = 0.0
@@ -196,15 +204,49 @@ def overview_legend(result: OverviewResult) -> list[LegendEntry]:
     ]
 
 
+async def read_full_history(
+    row: FleetRow, gateway, *, now: float, timeout: float
+) -> HistoryResult | str:
+    """Every attempt summary of one instance (window ``all``), or why not.
+
+    Running instances read through one gateway exec; stopped ones through a
+    ``docker cp`` tree copy (ADR 0005), with the same tolerance rules. Any
+    failure comes back as a display message, never an exception.
+    """
+    try:
+        if row.state == "running":
+            exec_result = await asyncio.wait_for(
+                gateway.attempt_history(row.container_id), timeout
+            )
+            result = read_history(
+                exec_result.stdout, exec_result.returncode, now=now, window="all"
+            )
+        else:
+            tree = await asyncio.wait_for(gateway.copy_logs(row.container_id), timeout)
+            result = read_stopped_history(tree, now=now, window="all")
+    except FileNotFoundError:
+        return LOGS_GONE_MESSAGE
+    except TimeoutError:
+        return (
+            "Could not read the Attempt log: history read timed out after "
+            f"{timeout:g} s"
+        )
+    except Exception as exc:  # one bad instance never fails the caller
+        return f"Could not read the Attempt log: {exc}"
+    if not result.ok:
+        return result.error or "layout not recognised"
+    return result
+
+
 async def _read_one(
     row: FleetRow,
     gateway,
     semaphore: asyncio.Semaphore,
     *,
-    window: str,
+    spec: RangeSpec,
     now: float,
     timeout: float,
-) -> InstanceOverview:
+) -> tuple[InstanceOverview, HistoryResult | None]:
     """Read and aggregate one instance; any failure becomes an error row."""
     base = {
         "name": row.name,
@@ -212,70 +254,50 @@ async def _read_one(
         "container_id": row.container_id,
         "reach": row.reach,
         "rank": row.rank,
-        "window": window,
+        "window": "all",
     }
-    if row.state != "running":
-        return error_instance(error=NOT_RUNNING_MESSAGE, **base)
-    try:
-        async with semaphore:
-            exec_result = await asyncio.wait_for(
-                gateway.attempt_history(row.container_id), timeout
-            )
-    except TimeoutError:
-        return error_instance(
-            error=f"Could not read the Attempt log: history read timed out after "
-            f"{timeout:g} s",
-            **base,
-        )
-    except (GatewayError, ValueError) as exc:
-        return error_instance(
-            error=f"Could not read the Attempt log: {exc}", **base
-        )
-    except Exception as exc:  # one bad instance never fails the panel
-        return error_instance(
-            error=f"Could not read the Attempt log: {exc}", **base
-        )
-    result = read_history(
-        exec_result.stdout, exec_result.returncode, now=now, window=window
-    )
-    if not result.ok:
-        return error_instance(error=result.error or "layout not recognised", **base)
-    return summarize_instance(result=result, **base)
+    async with semaphore:
+        full = await read_full_history(row, gateway, now=now, timeout=timeout)
+    if isinstance(full, str):
+        return error_instance(error=full, **base), None
+    cut = apply_range(full, spec, now)
+    return summarize_instance(result=cut, **base), full
 
 
 async def collect_overview(
     rows: list[FleetRow],
     gateway,
     *,
-    window: str = DEFAULT_WINDOW,
+    spec: RangeSpec | None = None,
     now: float | None = None,
     timeout: float = OVERVIEW_TIMEOUT,
     max_concurrent_execs: int = 4,
 ) -> OverviewResult:
     """Aggregate the panel rows for fleet rows (already in attention-rank order).
 
-    Every running instance is read in parallel (bounded by
-    ``max_concurrent_execs`` in flight) with ``timeout`` seconds per read, so
-    one slow or failing instance neither delays nor breaks the panel. Row
-    order follows the input order.
+    Every instance is read in parallel (bounded by ``max_concurrent_execs``
+    in flight) with ``timeout`` seconds per read, so one slow or failing
+    instance neither delays nor breaks the panel, then cut to ``spec`` (the
+    default range when omitted). Row order follows the input order.
     """
     if max_concurrent_execs < 1:
         raise ValueError(f"max concurrent execs must be >= 1: {max_concurrent_execs}")
     if timeout <= 0:
         raise ValueError(f"timeout must be positive: {timeout}")
     at = time.time() if now is None else now
-    if window not in VALID_WINDOWS:
-        window = "all"
+    spec = RangeSpec() if spec is None else spec
     semaphore = asyncio.Semaphore(max_concurrent_execs)
     reads = (
-        _read_one(row, gateway, semaphore, window=window, now=at, timeout=timeout)
+        _read_one(row, gateway, semaphore, spec=spec, now=at, timeout=timeout)
         for row in rows
     )
-    parts = await asyncio.gather(*reads)
+    results = await asyncio.gather(*reads)
+    parts = [inst for inst, _ in results]
     total_cost = sum(row.cost_total for row in parts if row.cost_total is not None)
     return OverviewResult(
-        window=window,
+        spec=spec,
         rows=tuple(parts),
+        summaries=tuple(s for _, full in results if full for s in full.summaries),
         readable=sum(1 for row in parts if row.ok),
         unreadable=sum(1 for row in parts if not row.ok),
         total_cost=total_cost,
