@@ -412,3 +412,114 @@ def test_no_public_json_api():
     paths = {route.path for route in client.app.routes if hasattr(route, "path")}
     assert not any(path.startswith("/api") for path in paths)
     assert {"/", "/fleet", "/stream"} <= paths
+
+
+def _live_snapshot(now: float) -> dict:
+    """Attempt-in-progress fixture with a log-referenceable start time.
+
+    The stock fixture's ``started_at`` has no fractional seconds, so it
+    fails ``validate_attempt_ref`` and hides the Live button; stamping a
+    fractional start makes the current attempt's log link valid.
+    """
+    snap = fresh_snapshot(load_snapshot("snapshot-attempt-in-progress.json"), now)
+    snap["control"]["active_attempt"]["started_at"] = "2026-09-30T09:30:00.123456Z"
+    return snap
+
+
+def make_live_log_client(now=None):
+    """One running instance whose current attempt log reference is valid."""
+    now = time.time() if now is None else now
+    return make_fleet_client({"work": _live_snapshot(now)})
+
+
+def test_index_has_no_overview_panel_and_reads_no_histories():
+    now = time.time()
+    state = FleetState()
+    gateway = FakeGateway([ManagedInstance("work", "id-work", "running")])
+    gateway.set_snapshot(
+        "id-work", fresh_snapshot(load_snapshot("snapshot-attempt-in-progress.json"), now)
+    )
+    asyncio.run(run_cycle(state, gateway, max_concurrent_execs=4, now=now))
+    app = create_app(
+        state=state,
+        settings=Settings(poll_interval=5.0),
+        gateway=gateway,
+        start_poller=False,
+    )
+    body = TestClient(app, base_url="http://localhost").get("/").text
+    assert "Fleet overview" not in body
+    assert 'id="overview"' not in body
+    assert "overview-table" not in body
+    assert gateway.history_calls == []
+
+
+def test_running_row_has_logs_and_live_buttons():
+    client, _, _ = make_live_log_client()
+    body = client.get("/").text
+    assert 'href="/instances/work/history"' in body
+    assert "Live #977" in body
+    assert 'href="/instances/work/attempts/977/2026-09-30T09-30-00.123456Z"' in body
+    # Neither button opens the drawer: the row's hx-get must not fire.
+    assert body.count('onclick="event.stopPropagation()"') >= 2
+    # The row itself still opens the drawer.
+    assert 'hx-get="/instances/work"' in body
+
+
+def test_live_button_hidden_when_reference_invalid():
+    # The stock fixture's start has no fractional seconds: not a valid
+    # attempt reference, so only Logs shows while the row still renders.
+    client, _, _ = make_fleet_client(
+        {"work": load_snapshot("snapshot-attempt-in-progress.json")}
+    )
+    body = client.get("/").text
+    assert 'href="/instances/work/history"' in body
+    assert "Live #" not in body
+
+
+def test_live_button_hidden_without_active_attempt():
+    client, _, _ = make_fleet_client(
+        {"idle": load_snapshot("snapshot-idle-with-last-finished.json")}
+    )
+    body = client.get("/").text
+    assert 'href="/instances/idle/history"' in body
+    assert "Live #" not in body
+
+
+def test_not_running_section_holds_stopped_instances():
+    client, _ = make_client([("up", "running"), ("down", "not running")])
+    body = client.get("/").text
+    assert '<details class="not-running" data-persist="not-running">' in body
+    assert "Not running (1)" in body
+    main, _, details = body.partition("<details")
+    assert '<div class="inst-name">up</div>' in main
+    assert '<div class="inst-name">down</div>' not in main
+    assert '<div class="inst-name">down</div>' in details
+    assert "Last finished attempt" in details
+    assert 'href="/instances/down/history"' in details
+    # Slim rows still open the drawer.
+    assert 'hx-get="/instances/down"' in details
+    # The section starts collapsed.
+    assert "<details" in body and " open" not in body.split("<details", 1)[1].split(">", 1)[0]
+
+
+def test_no_not_running_section_without_stopped_instances():
+    client, _ = make_client([("up", "running")])
+    body = client.get("/").text
+    assert "<details" not in body
+    assert "Not running" not in body
+
+
+def test_fleet_script_preserves_section_state():
+    client, _ = make_client([("up", "running"), ("down", "not running")])
+    body = client.get("/").text
+    assert 'src="/static/fleet.js"' in body
+    script = client.get("/static/fleet.js")
+    assert script.status_code == 200
+    assert "sessionStorage" in script.text
+
+
+def test_empty_fleet_message_without_details():
+    client, _ = make_client([])
+    body = client.get("/").text
+    assert "No managed instances found." in body
+    assert "<details" not in body

@@ -469,6 +469,55 @@ ul.events.handoffs { margin-top: 1rem; }
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 
+/* Row log buttons: labelled links with icons at the end of each fleet row.
+   They stop click propagation in the markup so they follow their link
+   instead of opening the instance drawer like the rest of the row. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.row-actions { white-space: nowrap; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.25rem 0.6rem;
+  background: #fff;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.btn:hover { background: #f2f6fb; }
+.btn .icon { width: 1em; height: 1em; }
+.btn-live { border-color: var(--accent); }
+
+/* Stopped instances live in a collapsed section below the main table; the
+   open state survives the live refresh through fleet.js. */
+details.not-running { margin-top: 1rem; }
+details.not-running > summary {
+  cursor: pointer;
+  padding: 0.6rem 0.9rem;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+details.not-running[open] > summary { border-radius: 6px 6px 0 0; }
+details.not-running table.fleet { border-top: 0; border-radius: 0 0 6px 6px; }
+
 @media (prefers-color-scheme: dark) {
   :root {
     --oc-complete: #3fb950;
@@ -485,6 +534,8 @@ ul.events.handoffs { margin-top: 1rem; }
     --accent: var(--oc-handoff);
   }
   table.fleet, .drawer, .chart { background: var(--card); }
+  .btn, details.not-running > summary { background: var(--card); color: var(--ink); }
+  .btn:hover { background: #1c2530; }
   table.fleet thead th, .budget-bar { background: #21262d; }
   tr.fleet-row:hover td, tr.active-row td { background: #1c2530; }
   .drawer-close { background: var(--card); color: var(--ink); }

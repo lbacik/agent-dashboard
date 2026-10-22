@@ -1,13 +1,25 @@
+{# Fleet table: running instances in the main table, each row ending with
+   labelled log buttons; stopped instances in a collapsed details section
+   below it with a slim table. Rows open the instance drawer; the log
+   buttons stop propagation so they follow their link instead. #}
+{% macro logs_icon() -%}
+<svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 1.5h6L13 5v9.5H3.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9.5 1.5V5H13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8h5M5.5 10.5h5M5.5 13h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+{%- endmacro %}
+{% macro live_icon() -%}
+<svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M1 8.5h3l1.8-5 3.4 9 1.8-4H15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+{%- endmacro %}
 {% if error %}
 <div class="banner" role="alert">Discovery failed: {{ error }}</div>
 {% endif %}
-{% if rows %}
+{% set running = rows | selectattr("state", "equalto", "running") | list %}
+{% set stopped = rows | rejectattr("state", "equalto", "running") | list %}
+{% if running %}
 <table class="fleet">
   <thead>
-    <tr><th>Instance</th><th>Status headline</th><th>Reach</th><th>Intake</th><th>Attempt</th><th>Budget</th><th>Main context</th><th>Turns</th><th>Cache hit rate</th><th>Errors</th></tr>
+    <tr><th>Instance</th><th>Status headline</th><th>Reach</th><th>Intake</th><th>Attempt</th><th>Budget</th><th>Main context</th><th>Turns</th><th>Cache hit rate</th><th>Errors</th><th><span class="sr-only">Logs</span></th></tr>
   </thead>
   <tbody>
-    {% for row in rows %}
+    {% for row in running %}
     <tr class="fleet-row"
         hx-get="/instances/{{ row.name | urlencode }}"
         hx-target="#drawer-holder"
@@ -31,10 +43,43 @@
       <td><div class="figure">{{ row.detail.turns_text }}{% if row.detail.turns_basis %} <span class="basis">{{ row.detail.turns_basis }}</span>{% endif %}</div></td>
       <td><div class="figure">{{ row.detail.cache_text }}{% if row.detail.cache_basis %} <span class="basis">{{ row.detail.cache_basis }}</span>{% endif %}</div></td>
       <td>{{ row.detail.errors_text }}{% if row.detail.errors_stale %} <span class="stale-tag">stale</span>{% endif %}</td>
+      <td class="row-actions">
+        <a class="btn" href="/instances/{{ row.name | urlencode }}/history" onclick="event.stopPropagation()">{{ logs_icon() }} Logs</a>
+        {% if row.live_url %}<a class="btn btn-live" href="{{ row.live_url }}" onclick="event.stopPropagation()">{{ live_icon() }} Live #{{ row.live_issue }}</a>{% endif %}
+      </td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+{% elif rows %}
+<p class="empty">No running managed instances.</p>
 {% else %}
 <p class="empty">No managed instances found.</p>
+{% endif %}
+{% if stopped %}
+<details class="not-running" data-persist="not-running">
+  <summary>Not running ({{ stopped | length }})</summary>
+  <table class="fleet">
+    <thead>
+      <tr><th>Instance</th><th>Reach</th><th>Last finished attempt</th><th><span class="sr-only">Logs</span></th></tr>
+    </thead>
+    <tbody>
+      {% for row in stopped %}
+      {% set d = row.drawer %}
+      <tr class="fleet-row"
+          hx-get="/instances/{{ row.name | urlencode }}"
+          hx-target="#drawer-holder"
+          hx-swap="innerHTML"
+          hx-push-url="/?instance={{ row.name | urlencode }}">
+        <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{{ row.detail.repository_display }}</div></td>
+        <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.age_text %} <span class="age">last seen {{ row.age_text }} ago</span>{% endif %}</td>
+        <td>{% if d and d.last_present %}{% if d.last_issue is not none %}#{{ d.last_issue }} · {% endif %}{{ d.last_outcome or "n/a" }}{% if d.last_finished_at %} <span class="age">{{ d.last_finished_at }}</span>{% endif %}{% else %}<span class="hint">n/a</span>{% endif %}</td>
+        <td class="row-actions">
+          <a class="btn" href="/instances/{{ row.name | urlencode }}/history" onclick="event.stopPropagation()">{{ logs_icon() }} Logs</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</details>
 {% endif %}

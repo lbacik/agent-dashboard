@@ -1,8 +1,11 @@
-"""Fleet overview panel: per-instance outcomes and cost over a time window.
+"""Fleet overview aggregation: per-instance outcomes and cost over a window.
 
 Covers aggregation across instances (including a failing instance and an
-empty window), the bounded parallel read, attention-rank order, and the
-panel on the fleet page (static, manual refresh, links to history pages).
+empty window), the bounded parallel read and attention-rank order. The
+overview panel itself is gone from the fleet page (the per-instance figures
+live in the instance drawer); these tests exercise the aggregation
+(``collect_overview``) directly instead of through ``/``. That ``/`` reads
+no attempt summaries on load is covered in ``test_web.py``.
 Vocabulary: Attempt log, Managed instance, Reach, Attention rank.
 """
 
@@ -12,11 +15,8 @@ import asyncio
 import time
 
 from fake_gateway import FakeGateway
-from fastapi.testclient import TestClient
 
-from agent_dashboard.app import create_app
 from agent_dashboard.charts import OUTCOME_ORDER
-from agent_dashboard.config import Settings
 from agent_dashboard.fleet import FleetState
 from agent_dashboard.gateway import GatewayError, ManagedInstance
 from agent_dashboard.history import HISTORY_LAYOUT
@@ -43,35 +43,29 @@ def _payload(entries):
     }
 
 
-def make_overview_client(rows, histories=None, history_errors=None, **settings_kwargs):
-    """A fleet-page client with scripted attempt histories per container ID.
-
-    ``rows`` maps instance names to container states (``running`` or
-    ``not running``); container IDs are ``id-<name>``.
-    """
-    now = time.time()
+def make_rows(names, now=None):
+    """Fleet rows for running instances, without telemetry (no gateway)."""
+    now = time.time() if now is None else now
     state = FleetState()
-    instances = []
-    for name, container_state in rows.items():
-        raw = "running" if container_state == "running" else "exited"
-        instances.append(ManagedInstance(name, f"id-{name}", raw))
-    asyncio.run(state.apply_cycle(instances, {}, now=now))
-    gateway = FakeGateway()
-    for container_id, payload in (histories or {}).items():
-        gateway.set_history(container_id, payload)
-    for container_id, error in (history_errors or {}).items():
-        gateway.set_history_error(container_id, error)
-    kwargs = {"poll_interval": 5.0, "exec_timeout": 5.0}
-    kwargs.update(settings_kwargs)
-    app = create_app(
-        state=state, settings=Settings(**kwargs), gateway=gateway, start_poller=False
+    asyncio.run(
+        state.apply_cycle(
+            [ManagedInstance(name, f"id-{name}", "running") for name in names],
+            {},
+            now=now,
+        )
     )
-    return TestClient(app, base_url="http://localhost"), state, gateway, now
+    rows, _ = asyncio.run(state.snapshot(now=now))
+    return rows, now
 
 
-def _panel(body):
-    """The static overview panel section of the fleet page."""
-    return body.split('id="overview"')[1].split('id="live"')[0]
+def collect(rows, gateway, now, window="all", **kwargs):
+    return asyncio.run(
+        collect_overview(rows, gateway, window=window, now=now, **kwargs)
+    )
+
+
+def by_name(result):
+    return {inst.name: inst for inst in result.rows}
 
 
 # --- aggregation across instances --------------------------------------------
@@ -79,111 +73,114 @@ def _panel(body):
 
 def test_overview_aggregates_outcomes_and_cost_per_instance():
     now = time.time()
-    histories = {
-        "id-alpha": _payload(
+    gateway = FakeGateway()
+    gateway.set_history(
+        "id-alpha",
+        _payload(
             [
                 _attempt(1, _started(1, now), "complete", cost=1.0),
                 _attempt(2, _started(2, now), "complete", cost=2.0),
                 _attempt(3, _started(3, now), "incomplete"),
             ]
         ),
-        "id-beta": _payload([_attempt(9, _started(1, now), "handoff", cost=0.5)]),
-    }
-    client, _, _, _ = make_overview_client(
-        {"alpha": "running", "beta": "running"}, histories
     )
-    panel = _panel(client.get("/?window=all").text)
-    assert "Fleet overview" in panel
-    assert "complete: 2, incomplete: 1" in panel
-    assert "handoff: 1" in panel
-    assert "$3.00" in panel
-    assert "$0.50" in panel
+    gateway.set_history(
+        "id-beta", _payload([_attempt(9, _started(1, now), "handoff", cost=0.5)])
+    )
+    rows, now = make_rows(["alpha", "beta"], now)
+    result = collect(rows, gateway, now)
+    insts = by_name(result)
+    assert insts["alpha"].counts == {"complete": 2, "incomplete": 1}
+    assert insts["alpha"].outcome_text == "complete: 2, incomplete: 1"
+    assert insts["alpha"].cost_total == 3.0
+    assert insts["beta"].counts == {"handoff": 1}
+    assert insts["beta"].cost_total == 0.5
     # Fleet totals cover the readable instances.
-    assert "$3.50" in panel
-    assert "without usage data" in panel
+    assert result.total_cost == 3.5
+    assert result.total_with == 3
+    assert result.total_missing == 1
 
 
-def test_overview_links_each_instance_to_its_history_page():
+def test_overview_reuses_outcome_order_and_legend():
     now = time.time()
-    histories = {
-        "id-alpha": _payload([_attempt(1, _started(1, now), "complete", cost=1.0)]),
-        "id-beta": _payload([_attempt(2, _started(1, now), "complete", cost=2.0)]),
-    }
-    client, _, _, _ = make_overview_client(
-        {"alpha": "running", "beta": "running"}, histories
-    )
-    panel = _panel(client.get("/?window=all").text)
-    assert "/instances/alpha/history?window=all" in panel
-    assert "/instances/beta/history?window=all" in panel
-
-
-def test_overview_reuses_outcome_colours_and_legend():
-    now = time.time()
-    histories = {
-        "id-alpha": _payload(
+    gateway = FakeGateway()
+    gateway.set_history(
+        "id-alpha",
+        _payload(
             [
                 _attempt(1, _started(1, now), "complete", cost=1.0),
                 _attempt(2, _started(2, now), "incomplete", cost=2.0),
                 _attempt(3, _started(3, now), "handoff", cost=0.5),
             ]
         ),
+    )
+    rows, now = make_rows(["alpha"], now)
+    result = collect(rows, gateway, now)
+    assert [entry.key for entry in overview_legend(result)] == [
+        "complete",
+        "incomplete",
+        "handoff",
+    ]
+    assert set(OUTCOME_ORDER) >= {
+        entry.key for entry in overview_legend(result)
     }
-    client, _, _, _ = make_overview_client({"alpha": "running"}, histories)
-    panel = _panel(client.get("/?window=all").text)
-    assert "chart-legend" in panel
-    for key in ("complete", "incomplete", "handoff"):
-        assert f"outcome-{key}" in panel
-    # Glyphs carry the non-colour cue, as on the history page.
-    assert "●" in panel and "■" in panel and "▲" in panel
 
 
 def test_overview_failing_instance_listed_with_reach_excluded_from_totals():
     now = time.time()
-    histories = {
-        "id-good": _payload([_attempt(1, _started(1, now), "complete", cost=1.5)]),
-        "id-broken": {"layout": "unknown", "attempts": []},
-    }
-    client, _, _, _ = make_overview_client(
-        {"good": "running", "bad": "running", "broken": "running"},
-        histories,
-        {"id-bad": GatewayError("docker exec timed out after 5 s")},
+    gateway = FakeGateway()
+    gateway.set_history(
+        "id-good", _payload([_attempt(1, _started(1, now), "complete", cost=1.5)])
     )
-    response = client.get("/?window=all")
-    assert response.status_code == 200
-    panel = _panel(response.text)
+    gateway.set_history("id-broken", {"layout": "unknown", "attempts": []})
+    gateway.set_history_error("id-bad", GatewayError("docker exec timed out after 5 s"))
+    rows, now = make_rows(["good", "bad", "broken"], now)
+    result = collect(rows, gateway, now)
+    insts = by_name(result)
     # Every instance is listed with its reach, readable or not.
-    for name in ("good", "bad", "broken"):
-        assert f"/instances/{name}/history?window=all" in panel
-    assert "Could not read the Attempt log" in panel
-    assert "layout not recognised" in panel
+    assert {inst.name for inst in result.rows} == {"good", "bad", "broken"}
+    assert insts["good"].ok
+    assert not insts["bad"].ok
+    assert not insts["broken"].ok
+    assert "Could not read the Attempt log" in insts["bad"].error
+    assert "layout not recognised" in insts["broken"].error
     # Only the readable instance feeds the totals.
-    assert "$1.50" in panel
-    assert "2 unreadable instance(s) excluded" in panel
+    assert result.readable == 1
+    assert result.unreadable == 2
+    assert result.total_cost == 1.5
 
 
 def test_overview_not_running_instance_listed_without_exec():
-    client, _, gateway, _ = make_overview_client({"down": "not running"})
-    panel = _panel(client.get("/").text)
-    assert "down" in panel
-    assert "not running" in panel
-    assert "running managed instances only" in panel
+    gateway = FakeGateway()
+    state = FleetState()
+    asyncio.run(
+        state.apply_cycle([ManagedInstance("down", "id-down", "exited")], {}, now=1000.0)
+    )
+    rows, _ = asyncio.run(state.snapshot(now=1000.0))
+    assert rows[0].state == "not running"
+    result = asyncio.run(collect_overview(rows, gateway, now=1000.0))
+    assert len(result.rows) == 1
+    assert not result.rows[0].ok
+    assert "running managed instances only" in result.rows[0].error
     assert gateway.history_calls == []
 
 
 def test_overview_unknown_outcomes_count_as_other():
     now = time.time()
-    histories = {
-        "id-work": _payload(
+    gateway = FakeGateway()
+    gateway.set_history(
+        "id-work",
+        _payload(
             [
                 _attempt(1, _started(1, now), "active"),
                 _attempt(2, _started(2, now), "interrupted"),
             ]
         ),
-    }
-    client, _, _, _ = make_overview_client({"work": "running"}, histories)
-    panel = _panel(client.get("/?window=all").text)
-    assert "other: 2" in panel
-    assert "outcome-other" in panel
+    )
+    rows, now = make_rows(["work"], now)
+    result = collect(rows, gateway, now)
+    assert result.rows[0].counts == {"other": 2}
+    assert result.rows[0].outcome_text == "other: 2"
 
 
 # --- empty window and missing usage ------------------------------------------
@@ -191,47 +188,61 @@ def test_overview_unknown_outcomes_count_as_other():
 
 def test_overview_empty_window_shown_not_zero_cost():
     now = time.time()
-    histories = {
-        "id-work": _payload(
+    gateway = FakeGateway()
+    gateway.set_history(
+        "id-work",
+        _payload(
             [
                 _attempt(1, _started(40, now), "complete", cost=1.0),
                 _attempt(2, _started(50, now), "complete", cost=4.0),
             ]
         ),
-    }
-    client, _, _, _ = make_overview_client({"work": "running"}, histories)
-    panel = _panel(client.get("/?window=7").text)
-    assert "No attempts in this window" in panel
-    assert "$0.00" not in panel
-    # Both attempts (and their $5.00) drop out with the window.
-    assert "$1.00" not in panel
-    assert "$4.00" not in panel
-    everything = _panel(client.get("/?window=all").text)
-    assert "$5.00" in everything
+    )
+    rows, now = make_rows(["work"], now)
+    week = collect(rows, gateway, now, window="7")
+    assert week.rows[0].shown == 0
+    assert week.rows[0].cost_text == "No attempts in this window"
+    assert week.total_cost == 0.0
+    everything = collect(rows, gateway, now, window="all")
+    assert everything.rows[0].cost_total == 5.0
 
 
 def test_overview_attempts_without_usage_are_na_never_zero():
     now = time.time()
-    histories = {
-        "id-work": _payload([_attempt(5, _started(1, now), "incomplete")]),
-    }
-    client, _, _, _ = make_overview_client({"work": "running"}, histories)
-    panel = _panel(client.get("/?window=all").text)
-    assert "n/a" in panel
-    assert "without usage data" in panel
-    assert "No cost data in this window." in panel
-    assert "$0.00" not in panel
+    gateway = FakeGateway()
+    gateway.set_history(
+        "id-work", _payload([_attempt(5, _started(1, now), "incomplete")])
+    )
+    rows, now = make_rows(["work"], now)
+    result = collect(rows, gateway, now)
+    assert result.rows[0].cost_total is None
+    assert result.rows[0].cost_text == "n/a"
+    assert result.total_cost == 0.0
+    assert result.total_missing == 1
 
 
-def test_overview_measured_zero_cost_still_charts():
+def test_overview_measured_zero_cost_still_counts():
     now = time.time()
-    histories = {
-        "id-work": _payload([_attempt(5, _started(1, now), "complete", cost=0.0)]),
-    }
-    client, _, _, _ = make_overview_client({"work": "running"}, histories)
-    panel = _panel(client.get("/?window=all").text)
-    assert "$0.00" in panel
-    assert "No cost data in this window." not in panel
+    gateway = FakeGateway()
+    gateway.set_history(
+        "id-work", _payload([_attempt(5, _started(1, now), "complete", cost=0.0)])
+    )
+    rows, now = make_rows(["work"], now)
+    result = collect(rows, gateway, now)
+    assert result.rows[0].cost_total == 0.0
+    assert result.rows[0].cost_text == "$0.00"
+    assert result.total_with == 1
+
+
+def test_overview_invalid_window_means_all():
+    now = time.time()
+    gateway = FakeGateway()
+    gateway.set_history(
+        "id-work", _payload([_attempt(3, _started(40, now), "complete", cost=4.0)])
+    )
+    rows, now = make_rows(["work"], now)
+    result = collect(rows, gateway, now, window="forever")
+    assert result.rows[0].cost_total == 4.0
 
 
 # --- bounded parallel read ---------------------------------------------------
@@ -239,46 +250,50 @@ def test_overview_measured_zero_cost_still_charts():
 
 def test_overview_slow_instance_neither_delays_nor_breaks_panel():
     now = time.time()
-    histories = {
-        "id-fast": _payload([_attempt(1, _started(1, now), "complete", cost=1.0)]),
-        "id-slow": _payload([_attempt(2, _started(1, now), "complete", cost=9.0)]),
-    }
-    client, _, gateway, _ = make_overview_client(
-        {"fast": "running", "slow": "running"}, histories, exec_timeout=0.2
+    gateway = FakeGateway()
+    gateway.set_history(
+        "id-fast", _payload([_attempt(1, _started(1, now), "complete", cost=1.0)])
+    )
+    gateway.set_history(
+        "id-slow", _payload([_attempt(2, _started(1, now), "complete", cost=9.0)])
     )
     gateway.history_delays["id-slow"] = 30.0
+    rows, now = make_rows(["fast", "slow"], now)
     started = time.monotonic()
-    response = client.get("/?window=all")
+    result = asyncio.run(
+        collect_overview(rows, gateway, window="all", now=now, timeout=0.2)
+    )
     elapsed = time.monotonic() - started
-    assert response.status_code == 200
     assert elapsed < 10.0
-    panel = _panel(response.text)
-    assert "/instances/slow/history?window=all" in panel
-    assert "timed out" in panel
+    insts = by_name(result)
+    assert insts["fast"].ok
+    assert not insts["slow"].ok
+    assert "timed out" in insts["slow"].error
     # The slow $9.00 stays out of the totals.
-    assert "$1.00" in panel
-    assert "$9.00" not in panel
-    assert "$10.00" not in panel
+    assert result.total_cost == 1.0
 
 
 def test_overview_reads_instances_in_parallel():
     now = time.time()
-    histories = {
-        "id-a": _payload([_attempt(1, _started(1, now), "complete", cost=1.0)]),
-        "id-b": _payload([_attempt(2, _started(1, now), "complete", cost=2.0)]),
-        "id-c": _payload([_attempt(3, _started(1, now), "complete", cost=3.0)]),
-    }
-    client, _, gateway, _ = make_overview_client(
-        {"a": "running", "b": "running", "c": "running"}, histories
+    gateway = FakeGateway()
+    gateway.set_history(
+        "id-a", _payload([_attempt(1, _started(1, now), "complete", cost=1.0)])
+    )
+    gateway.set_history(
+        "id-b", _payload([_attempt(2, _started(1, now), "complete", cost=2.0)])
+    )
+    gateway.set_history(
+        "id-c", _payload([_attempt(3, _started(1, now), "complete", cost=3.0)])
     )
     gateway.history_delay = 0.3
+    rows, now = make_rows(["a", "b", "c"], now)
     started = time.monotonic()
-    response = client.get("/?window=all")
+    result = collect(rows, gateway, now)
     elapsed = time.monotonic() - started
-    assert response.status_code == 200
     # Sequential reads would take ~0.9 s; parallel reads share one delay.
     assert elapsed < 0.9
     assert sorted(gateway.history_calls) == ["id-a", "id-b", "id-c"]
+    assert result.total_cost == 6.0
 
 
 def test_collect_overview_empty_fleet_reads_nothing():
@@ -303,10 +318,10 @@ def test_collect_overview_rejects_bad_concurrency():
     assert "max concurrent execs" in asyncio.run(scenario())
 
 
-# --- order, window, static panel ----------------------------------------------
+# --- order and legend ----------------------------------------------------------
 
 
-def test_overview_order_follows_attention_rank():
+def test_overview_order_follows_input_attention_rank():
     from test_web import fresh_snapshot, load_snapshot
 
     from agent_dashboard.collector import run_cycle
@@ -328,51 +343,17 @@ def test_overview_order_follows_attention_rank():
     )
     gateway.set_error_code("id-unreach", "agent_unreachable", "no socket")
     asyncio.run(run_cycle(state, gateway, max_concurrent_execs=4, now=now))
+    rows, _ = asyncio.run(state.snapshot(now=now))
+    assert [row.name for row in rows] == ["unreach", "work", "idle"]
     for name in ("work", "idle", "unreach"):
         gateway.set_history(
             f"id-{name}",
             _payload([_attempt(1, _started(1, now), "complete", cost=1.0)]),
         )
     gateway.set_history_error("id-unreach", GatewayError("no socket"))
-    app = create_app(
-        state=state, settings=Settings(poll_interval=5.0), gateway=gateway, start_poller=False
-    )
-    panel = _panel(TestClient(app, base_url="http://localhost").get("/?window=all").text)
-    # Unreachable needs the operator first, then working, then idle.
-    positions = [panel.index(f"/instances/{name}/history") for name in ("unreach", "work", "idle")]
-    assert positions == sorted(positions)
-
-
-def test_overview_window_filter_links_and_refresh():
-    client, _, _, _ = make_overview_client({"work": "running"})
-    panel = _panel(client.get("/?window=7").text)
-    assert "?window=7" in panel and "?window=30" in panel and "?window=all" in panel
-    assert "Refresh" in panel
-    assert panel.count('class="current"') == 1
-
-
-def test_overview_invalid_window_means_all():
-    now = time.time()
-    histories = {
-        "id-work": _payload([_attempt(3, _started(40, now), "complete", cost=4.0)]),
-    }
-    client, _, _, _ = make_overview_client({"work": "running"}, histories)
-    panel = _panel(client.get("/?window=forever").text)
-    assert "$4.00" in panel
-
-
-def test_overview_panel_is_static_no_stream():
-    client, _, _, _ = make_overview_client({"work": "running"})
-    panel = _panel(client.get("/").text)
-    assert "sse-swap" not in panel
-    assert "sse:fleet" not in panel
-    assert 'href="/instances/work/history?window=' in panel
-
-
-def test_overview_empty_fleet():
-    client, _, _, _ = make_overview_client({})
-    panel = _panel(client.get("/").text)
-    assert "No managed instances found." in panel
+    result = asyncio.run(collect_overview(rows, gateway, window="all", now=now))
+    # Row order follows the input (attention-rank) order.
+    assert [inst.name for inst in result.rows] == ["unreach", "work", "idle"]
 
 
 def test_overview_legend_lists_only_outcomes_present_in_stable_order():
