@@ -1,0 +1,74 @@
+{# Drawer attempt-statistics card: per-instance outcomes and cost for a range.
+   Loaded once when the drawer opens (hx-trigger="load") and on every range
+   change; the drawer's SSE refresh keeps it via hx-preserve, so polling
+   never re-reads attempt summaries. `inst` is the overview-style summary for
+   the cut range (None with `error` when unknown, stopped or unreadable).
+   The strip and the bar never rely on colour alone: every day and every bar
+   segment carries a tooltip naming its outcomes, and the legend pairs each
+   colour with its shape glyph and label. #}
+<div class="stats-card" data-range-query="{{ spec.query }}">
+  <div class="stats-head">
+    <a class="stats-title" href="/instances/{{ name | urlencode }}/history?window={{ history_window }}">Attempt history →</a>
+    <span class="stats-label">{{ spec.label }}</span>
+  </div>
+  <div class="stats-presets" role="group" aria-label="Attempt statistics range">
+    {% for key in presets %}
+    {% set active = (not spec.is_custom and spec.preset == key) %}
+    <a href="/instances/{{ name | urlencode }}/stats?preset={{ key }}"
+       hx-get="/instances/{{ name | urlencode }}/stats?preset={{ key }}"
+       hx-target="#{{ slot_id }}" hx-swap="innerHTML"
+       {% if active %}class="current" aria-current="true"{% endif %}>{{ "All" if key == "all" else key }}</a>
+    {% endfor %}
+  </div>
+  {% if error %}
+  <p class="hint">{{ error }}</p>
+  {% else %}
+  {% if strip %}
+  <div class="stats-strip" data-base="{{ stats_base }}" data-target="#{{ slot_id }}"
+       data-days="{{ strip | map(attribute='iso') | join(',') }}"
+       title="Click a day or drag across days to choose a range">
+    <svg class="bars" viewBox="0 0 {{ strip|length * 10 }} 48" preserveAspectRatio="none" role="img"
+         aria-label="Attempts per day over the last {{ strip|length }} days; click or drag to choose a range">
+      {% for d in strip %}
+      {% set x = loop.index0 * 10 %}
+      <rect class="strip-day{% if d.selected %} is-sel{% endif %}" data-i="{{ loop.index0 }}" x="{{ x }}" y="0" width="10" height="48">
+        <title>{{ d.tooltip }}</title>
+      </rect>
+      {% if d.total and strip_peak %}
+      {% set ns = namespace(base=46) %}
+      {% for key in chart_keys %}
+      {% set count = d.counts.get(key, 0) %}
+      {% if count %}
+      {% set h = (count / strip_peak) * 42 %}
+      <rect class="bar outcome-{{ key }}" x="{{ x + 1.5 }}" y="{{ ns.base - h }}" width="7" height="{{ h }}" pointer-events="none" />
+      {% set ns.base = ns.base - h %}
+      {% endif %}
+      {% endfor %}
+      {% else %}
+      <rect class="strip-empty" x="{{ x + 1.5 }}" y="45" width="7" height="1" pointer-events="none" />
+      {% endif %}
+      {% endfor %}
+    </svg>
+    <div class="stats-strip-axis"><span>{{ strip[0].label }}</span><span>{{ strip[(strip|length - 1) // 2].label }}</span><span>today</span></div>
+  </div>
+  {% endif %}
+  {% if inst.shown %}
+  <svg class="bars stats-bar" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="{{ inst.outcome_text }}">
+    {% set ns = namespace(x=0) %}
+    {% for key in chart_keys %}{% set c = inst.counts.get(key, 0) %}{% if c %}{% set w = c / inst.shown * 100 %}
+    <rect x="{{ ns.x }}" y="0" width="{{ w }}" height="10" class="bar outcome-{{ key }}"><title>{{ chart_labels[key] }}: {{ c }}</title></rect>
+    {% set ns.x = ns.x + w %}{% endif %}{% endfor %}
+  </svg>
+  {% endif %}
+  <p class="stats-line">
+    <strong>{{ inst.shown }}</strong> of {{ inst.total }} attempts · <strong>{{ inst.cost_text }}</strong>{% if inst.cost_missing %} ({{ inst.cost_missing }} w/o usage){% endif %}{% if inst.unreadable %} · {{ inst.unreadable }} unreadable{% endif %}
+  </p>
+  {% if inst.shown and legend %}
+  <ul class="chart-legend stats-legend" aria-label="Attempt outcome legend">
+    {% for entry in legend %}
+    <li><span class="glyph outcome-{{ entry.key }}" aria-hidden="true">{{ shape_glyphs[entry.shape] }}</span> {{ entry.label }} {{ inst.counts.get(entry.key, 0) }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% endif %}
+</div>
