@@ -17,6 +17,8 @@ from agent_dashboard.gateway import (
     argv_attempt_events,
     argv_attempt_history,
     argv_attempt_log,
+    argv_copy_logs,
+    argv_copy_run,
     argv_list_instances,
     argv_list_run_files,
     argv_read_file,
@@ -65,6 +67,10 @@ def test_every_argv_producer_is_pinned():
         "argv_list_run_files": argv_list_run_files(
             "abc123", 98, "2026-09-27T16:33:43.385090Z"
         ),
+        "argv_copy_logs": argv_copy_logs("abc123"),
+        "argv_copy_run": argv_copy_run(
+            "abc123", 98, "2026-09-27T16:33:43.385090Z"
+        ),
     }
     assert set(producers) == {
         "argv_list_instances",
@@ -74,6 +80,8 @@ def test_every_argv_producer_is_pinned():
         "argv_attempt_log",
         "argv_read_file",
         "argv_list_run_files",
+        "argv_copy_logs",
+        "argv_copy_run",
     }
     for argv in producers.values():
         assert isinstance(argv, list)

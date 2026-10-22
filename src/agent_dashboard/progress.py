@@ -212,27 +212,15 @@ def _read_limits_from_token_budget(attempt: dict[str, Any]) -> ProgressLimits:
     )
 
 
-def read_progress(
-    stdout: bytes, returncode: int, *, issue: int, started: str
+def _assemble_progress(
+    payload: dict[str, Any], *, issue: int, started: str
 ) -> ProgressResult:
-    """Parse one attempt-events exec's stdout into readings, oldest first.
+    """Assemble readings from an attempt-events-layout payload, oldest first.
 
-    ``issue``/``started`` (the validated URL reference) stay the result's
-    identity; the payload carries the data. ``returncode`` is accepted for
-    signature parity with the other Attempt log readers but does not decide
-    the outcome: a payload with the expected layout is trusted, anything
-    else is ``layout not recognised``. Only main-thread ``limits_checked``
-    readings chart the attempt; subagent-thread readings are dropped. An
-    attempt without an outcome is ``active``; a missing attempt record
-    reads as ``interrupted``.
+    Shared by the running-instance exec reader and the stopped-instance
+    tree-copy reader: both build the same layout, so the tolerance rules
+    apply identically to either source.
     """
-    del returncode
-    try:
-        payload = json.loads(stdout.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return ProgressResult(
-            ok=False, error=LAYOUT_NOT_RECOGNISED, issue=issue, started_at=_restore_started(started)
-        )
     if (
         not isinstance(payload, dict)
         or payload.get("layout") != ATTEMPT_EVENTS_LAYOUT
@@ -333,6 +321,51 @@ def read_progress(
         unreadable=unreadable,
         truncated=payload.get("truncated") is True,
     )
+
+
+def read_progress(
+    stdout: bytes, returncode: int, *, issue: int, started: str
+) -> ProgressResult:
+    """Parse one attempt-events exec's stdout into readings, oldest first.
+
+    ``issue``/``started`` (the validated URL reference) stay the result's
+    identity; the payload carries the data. ``returncode`` is accepted for
+    signature parity with the other Attempt log readers but does not decide
+    the outcome: a payload with the expected layout is trusted, anything
+    else is ``layout not recognised``. Only main-thread ``limits_checked``
+    readings chart the attempt; subagent-thread readings are dropped. An
+    attempt without an outcome is ``active``; a missing attempt record
+    reads as ``interrupted``.
+    """
+    del returncode
+    try:
+        payload = json.loads(stdout.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return ProgressResult(
+            ok=False, error=LAYOUT_NOT_RECOGNISED, issue=issue, started_at=_restore_started(started)
+        )
+    return _assemble_progress(payload, issue=issue, started=started)
+
+
+def read_stopped_progress(
+    data: bytes, *, issue: int, started: str
+) -> ProgressResult:
+    """Parse one stopped-instance run-directory copy into readings.
+
+    The tar archive is shaped into the attempt-events layout (see
+    :func:`stopped.events_payload_from_run_tree`) and assembled with the
+    same tolerance rules as the running-instance exec reader. A non-tar
+    stream reads as ``layout not recognised``, never an error.
+    """
+    from .stopped import events_payload_from_run_tree
+
+    try:
+        payload = events_payload_from_run_tree(data, issue=issue, started=started)
+    except (ValueError, TypeError, AttributeError):
+        return ProgressResult(
+            ok=False, error=LAYOUT_NOT_RECOGNISED, issue=issue, started_at=_restore_started(started)
+        )
+    return _assemble_progress(payload, issue=issue, started=started)
 
 
 @dataclass(frozen=True)

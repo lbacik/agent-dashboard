@@ -309,31 +309,15 @@ def _counts(payload: dict[str, Any], events: tuple[LogEvent, ...]) -> dict[str, 
     }
 
 
-def read_attempt_log(
-    stdout: bytes, returncode: int, *, issue: int, started: str
+def _assemble_attempt_log(
+    payload: dict[str, Any], *, issue: int, started: str
 ) -> AttemptLogResult:
-    """Parse one Attempt log exec's stdout into a header plus ordered rows.
+    """Assemble a header plus ordered rows from an attempt-log-layout payload.
 
-    ``issue``/``started`` (the validated URL reference) stay the result's
-    identity; the payload carries the data. ``returncode`` is accepted for
-    signature parity with the other Attempt log readers but does not decide
-    the outcome: a payload with the expected layout is trusted, anything
-    else is ``layout not recognised``. A payload with the expected layout
-    but zero parsed events is ``layout not recognised`` as well, keeping
-    whatever header data was readable. A missing ``attempt`` record reads
-    as ``attempt_missing`` with the in-progress-or-crashed notice.
+    Shared by the running-instance exec reader and the stopped-instance
+    tree-copy reader: both build the same layout, so the tolerance rules
+    apply identically to either source.
     """
-    del returncode
-    try:
-        payload = json.loads(stdout.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return AttemptLogResult(
-            ok=False,
-            error=LAYOUT_NOT_RECOGNISED,
-            issue=issue,
-            started_at=_restore_started(started),
-            attempt_missing=True,
-        )
     if (
         not isinstance(payload, dict)
         or payload.get("layout") != ATTEMPT_LOG_LAYOUT
@@ -371,6 +355,62 @@ def read_attempt_log(
         events=events,
         **_counts(payload, events),  # type: ignore[arg-type]
     )
+
+
+def read_attempt_log(
+    stdout: bytes, returncode: int, *, issue: int, started: str
+) -> AttemptLogResult:
+    """Parse one Attempt log exec's stdout into a header plus ordered rows.
+
+    ``issue``/``started`` (the validated URL reference) stay the result's
+    identity; the payload carries the data. ``returncode`` is accepted for
+    signature parity with the other Attempt log readers but does not decide
+    the outcome: a payload with the expected layout is trusted, anything
+    else is ``layout not recognised``. A payload with the expected layout
+    but zero parsed events is ``layout not recognised`` as well, keeping
+    whatever header data was readable. A missing ``attempt`` record reads
+    as ``attempt_missing`` with the in-progress-or-crashed notice.
+    """
+    del returncode
+    try:
+        payload = json.loads(stdout.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return AttemptLogResult(
+            ok=False,
+            error=LAYOUT_NOT_RECOGNISED,
+            issue=issue,
+            started_at=_restore_started(started),
+            attempt_missing=True,
+        )
+    return _assemble_attempt_log(payload, issue=issue, started=started)
+
+
+def read_stopped_attempt_log(
+    data: bytes, *, issue: int, started: str
+) -> tuple[AttemptLogResult, tuple[str, ...]]:
+    """Parse one stopped-instance run-directory copy into a log plus file names.
+
+    Returns the parsed header plus ordered rows (with the same tolerance
+    rules as the running-instance exec reader) and every regular file's
+    base name in the run, used for the command-log links. A non-tar stream
+    reads as ``layout not recognised``, never an error.
+    """
+    from .stopped import parse_run_tree
+
+    try:
+        payload, names = parse_run_tree(data, issue=issue, started=started)
+    except (ValueError, TypeError, AttributeError):
+        return (
+            AttemptLogResult(
+                ok=False,
+                error=LAYOUT_NOT_RECOGNISED,
+                issue=issue,
+                started_at=_restore_started(started),
+                attempt_missing=True,
+            ),
+            (),
+        )
+    return _assemble_attempt_log(payload, issue=issue, started=started), tuple(names)
 
 
 def _text(value: Any) -> str:

@@ -4,11 +4,15 @@ All Docker access uses argv lists (no shell). The gateway exposes discovery
 (``list_instances``), one telemetry exec per running container
 (``telemetry``), one Attempt log history exec per running container
 (``attempt_history``), the per-attempt event stream reads, and one Evidence
-file read per file (``read_file``). Exit codes are never raised as errors
-here, except a missing Evidence file (``docker cp`` exit 1 with
-``Could not find the file`` on stderr), which maps to ``FileNotFoundError``:
-the collector classifies each telemetry exec into a poll outcome, and the
-history reader maps its exec output into attempt summaries.
+file read per file (``read_file``). Stopped containers cannot run ``docker
+exec``, so their Attempt logs arrive through ``docker cp`` tree copies
+(``copy_logs`` for the whole list, ``copy_run`` for one attempt), parsed on
+the dashboard side with the same validation and caps. Exit codes are never
+raised as errors here, except a missing Evidence file (``docker cp`` exit 1
+with ``Could not find the file`` on stderr) or a missing copied tree (``no
+such`` path on stderr), which map to ``FileNotFoundError``: the collector
+classifies each telemetry exec into a poll outcome, and the history reader
+maps its exec output into attempt summaries.
 """
 
 from __future__ import annotations
@@ -680,6 +684,46 @@ def argv_read_file(
     ]
 
 
+def argv_copy_logs(container_id: str) -> list[str]:
+    """Argv for one stopped-instance Attempt log list: ``docker cp`` of ``/data/logs``.
+
+    The copy streams a tar archive of the whole logs tree; the dashboard
+    parses it without executing anything inside the container, so this read
+    works on stopped containers where ``docker exec`` fails. Besides the
+    validated container ID the argv carries only the fixed source path and
+    ``-``: no shell, no raw path, and the tar member names are re-validated
+    during parsing, never used in argv.
+    """
+    validate_container_id(container_id)
+    return [
+        "docker",
+        "cp",
+        f"{container_id}:/data/logs",
+        "-",
+    ]
+
+
+def argv_copy_run(container_id: str, issue: int | str, started: str) -> list[str]:
+    """Argv for one stopped-instance attempt read: ``docker cp`` of a run directory.
+
+    The copy streams a tar archive of the single run directory; the dashboard
+    parses ``attempt.json`` and ``agent_output.json`` out of it with the same
+    caps and tolerance as the running-instance exec collectors, so this read
+    works on stopped containers where ``docker exec`` fails. Besides the
+    validated container ID the only variable parts are the validated attempt
+    reference (issue digits plus the dash-form start), joined into the source
+    path inside the gateway, never from the request. Never ``-L``.
+    """
+    validate_container_id(container_id)
+    number, dash_started = validate_attempt_ref(issue, started)
+    return [
+        "docker",
+        "cp",
+        f"{container_id}:/data/logs/{number}/{dash_started}",
+        "-",
+    ]
+
+
 @dataclass(frozen=True)
 class FileResult:
     """One Evidence file read: ``content`` (up to the cap), its header size,
@@ -980,6 +1024,73 @@ class DockerGateway:
                 for line in stdout.decode(errors="replace").splitlines()
                 if line
             ]
+
+    async def _cp_bytes(self, argv: list[str], what: str) -> bytes:
+        """Drain one ``docker cp`` directory-tree copy into raw tar bytes.
+
+        Unlike :meth:`read_file` (exactly one regular-file member, capped),
+        a tree copy holds many members and is parsed by the caller, so the
+        whole stream is returned. The read shares the log semaphore with the
+        other Attempt log reads and is bounded by ``log_timeout``. A non-zero
+        exit naming a missing path (a gone volume, or logs never written)
+        maps to :class:`FileNotFoundError`; any other failure is a
+        :class:`GatewayError`.
+        """
+        async with self._log_semaphore:
+            proc = await self._run(argv)
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), self.log_timeout
+                )
+            except TimeoutError as exc:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
+                raise AttemptLogTimeoutError(
+                    f"docker cp timed out after {self.log_timeout:g} s"
+                ) from exc
+            if proc.returncode != 0:
+                detail = stderr.decode(errors="replace").strip()
+                lowered = detail.lower()
+                if "could not find" in lowered or "no such" in lowered:
+                    raise FileNotFoundError(f"{what} not found: {detail}")
+                reason = detail or f"docker cp exited with status {proc.returncode}"
+                raise GatewayError(reason)
+            return stdout
+
+    async def copy_logs(self, container_id: str) -> bytes:
+        """Copy ``/data/logs`` out of a managed instance as raw tar bytes.
+
+        The stopped-instance read path for the attempt list: ``docker cp``
+        works on stopped containers where ``docker exec`` fails. The argv
+        carries only the validated container ID plus the fixed source path
+        (see :func:`argv_copy_logs`); member names are re-validated while
+        parsing, never used in argv. A missing tree (a gone volume, or an
+        instance that never wrote logs) maps to :class:`FileNotFoundError`.
+        An invalid container ID raises :class:`ValueError` before anything
+        is spawned.
+        """
+        return await self._cp_bytes(argv_copy_logs(container_id), "attempt logs")
+
+    async def copy_run(
+        self, container_id: str, issue: int | str, started: str
+    ) -> bytes:
+        """Copy one attempt's run directory out as raw tar bytes.
+
+        The stopped-instance read path for a single attempt's header, event
+        stream and file listing: ``docker cp`` works on stopped containers
+        where ``docker exec`` fails. The argv carries only the validated
+        container ID plus the validated attempt reference joined into the
+        fixed source path (see :func:`argv_copy_run`). A missing run
+        directory maps to :class:`FileNotFoundError`. An invalid container
+        ID or attempt reference raises :class:`ValueError` before anything
+        is spawned.
+        """
+        argv = argv_copy_run(container_id, issue, started)
+        number, dash_started = validate_attempt_ref(issue, started)
+        return await self._cp_bytes(argv, f"attempt {number}/{dash_started}")
 
     async def read_file(
         self,

@@ -412,6 +412,46 @@ def _read_entry(entry: Any, active_started_at: str | None, now: float) -> Attemp
     )
 
 
+def _assemble_history(
+    payload: dict[str, Any], *, now: float, window: str
+) -> HistoryResult:
+    """Assemble rows from a history-layout payload, newest first.
+
+    Shared by the running-instance exec reader and the stopped-instance
+    tree-copy reader: both build the same layout, so the tolerance rules
+    apply identically to either source.
+    """
+    raw_attempts = payload.get("attempts")
+    if not isinstance(raw_attempts, list):
+        return HistoryResult(ok=False, error=LAYOUT_NOT_RECOGNISED, window=window)
+    active_started_at = _str(payload.get("active_started_at"))
+    unreadable = payload.get("unreadable")
+    if isinstance(unreadable, bool) or not isinstance(unreadable, int) or unreadable < 0:
+        unreadable = 0
+    summaries: list[AttemptSummary] = []
+    for entry in raw_attempts:
+        summary = _read_entry(entry, active_started_at, now)
+        if summary is None:
+            unreadable += 1
+        else:
+            summaries.append(summary)
+    summaries.sort(
+        key=lambda s: (s.started_ts is not None, s.started_ts or 0.0), reverse=True
+    )
+    total = len(summaries)
+    days = WINDOW_DAYS.get(window)
+    if days is not None:
+        cutoff = now - days * 86400
+        summaries = [s for s in summaries if s.started_ts is None or s.started_ts >= cutoff]
+    return HistoryResult(
+        ok=True,
+        summaries=tuple(summaries),
+        total=total,
+        unreadable=unreadable,
+        window=window,
+    )
+
+
 def read_history(
     stdout: bytes, returncode: int, *, now: float | None = None, window: str = "all"
 ) -> HistoryResult:
@@ -433,32 +473,26 @@ def read_history(
         return HistoryResult(ok=False, error=LAYOUT_NOT_RECOGNISED, window=window)
     if not isinstance(payload, dict) or payload.get("layout") != HISTORY_LAYOUT:
         return HistoryResult(ok=False, error=LAYOUT_NOT_RECOGNISED, window=window)
-    raw_attempts = payload.get("attempts")
-    if not isinstance(raw_attempts, list):
+    return _assemble_history(payload, now=at, window=window)
+
+
+def read_stopped_history(
+    data: bytes, *, now: float | None = None, window: str = "all"
+) -> HistoryResult:
+    """Parse one stopped-instance ``/data/logs`` tree copy into rows.
+
+    The tar archive is shaped into the history layout (see
+    :func:`stopped.parse_logs_tree`) and assembled with the same tolerance
+    rules as the running-instance exec reader. A non-tar stream reads as
+    ``layout not recognised``, never an error.
+    """
+    from .stopped import parse_logs_tree
+
+    at = time.time() if now is None else now
+    if window not in VALID_WINDOWS:
+        window = "all"
+    try:
+        payload = parse_logs_tree(data)
+    except (ValueError, TypeError, AttributeError):
         return HistoryResult(ok=False, error=LAYOUT_NOT_RECOGNISED, window=window)
-    active_started_at = _str(payload.get("active_started_at"))
-    unreadable = payload.get("unreadable")
-    if isinstance(unreadable, bool) or not isinstance(unreadable, int) or unreadable < 0:
-        unreadable = 0
-    summaries: list[AttemptSummary] = []
-    for entry in raw_attempts:
-        summary = _read_entry(entry, active_started_at, at)
-        if summary is None:
-            unreadable += 1
-        else:
-            summaries.append(summary)
-    summaries.sort(
-        key=lambda s: (s.started_ts is not None, s.started_ts or 0.0), reverse=True
-    )
-    total = len(summaries)
-    days = WINDOW_DAYS.get(window)
-    if days is not None:
-        cutoff = at - days * 86400
-        summaries = [s for s in summaries if s.started_ts is None or s.started_ts >= cutoff]
-    return HistoryResult(
-        ok=True,
-        summaries=tuple(summaries),
-        total=total,
-        unreadable=unreadable,
-        window=window,
-    )
+    return _assemble_history(payload, now=at, window=window)
