@@ -393,7 +393,6 @@ def test_activity_truncated_tail_still_shows_newest_calls():
     assert "larger than the read cap" not in body
     assert "Bash" in body
     assert "running" in body
-    assert "Open the Attempt log" not in body or "log" in body
 
 
 def test_activity_stays_visible_through_publishing():

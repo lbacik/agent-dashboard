@@ -11,18 +11,14 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fake_gateway import FakeGateway, make_run_tree
-from fastapi.testclient import TestClient
+from fake_gateway import make_run_tree
 
 from agent_dashboard import gateway as gateway_module
 from agent_dashboard.activity import find_activity
-from agent_dashboard.app import create_app
 from agent_dashboard.attempt_log import (
     read_attempt_tail_log,
     read_stopped_attempt_tail_log,
 )
-from agent_dashboard.config import load_settings
-from agent_dashboard.fleet import FleetState
 from agent_dashboard.gateway import (
     AGENT_USER,
     LOG_TAIL_CAP,
@@ -252,7 +248,7 @@ def test_activity_works_on_truncated_tail():
             timestamp="2026-09-27T16:34:09Z",
         ),
     ]
-    payload = {
+    tail = {
         "layout": "attempt-log-tail/v1",
         "issue": 98,
         "started": STARTED_DASH,
@@ -263,19 +259,9 @@ def test_activity_works_on_truncated_tail():
         "truncated": True,
         "file_size": 5 * 1024 * 1024,
     }
-    client, _, _ = make_activity_client(
+    client, _, gateway = make_activity_client(
         snapshot,
-        {
-            "layout": "attempt-log/v1",
-            "issue": 98,
-            "started": STARTED_DASH,
-            "attempt": {"outcome": None},
-            "events": tail_events,
-            "total_events": 2,
-            "unreadable": 0,
-            "truncated": True,
-            "file_size": 5 * 1024 * 1024,
-        },
+        tail,
         {
             "4998_tool_call.json": _file(
                 json.dumps(
@@ -287,13 +273,10 @@ def test_activity_works_on_truncated_tail():
             ),
         },
     )
-    # The helper scripts the tail from the head payload: override with the
-    # truncated tail carrying the full count and correct seq.
-    from fake_gateway import FakeGateway as _FG  # noqa: F401
-
-    assert payload["total_events"] == 5000
     body = client.get("/instances/work/activity").text
     assert "larger than the read cap" not in body
+    assert "Bash" in body
+    assert gateway.tail_calls == [("id-work", "98", STARTED_DASH)]
 
 
 def test_tail_argv_pinned_and_validated():
@@ -354,41 +337,41 @@ def test_tail_uses_log_timeout_and_semaphore(monkeypatch):
 
 
 def test_tail_activity_route_uses_tail_gateway():
-    import asyncio
+    from test_activity import _ev, _file, make_activity_client
+    from test_web import load_snapshot
 
-    from agent_dashboard.gateway import ManagedInstance
-
-    state = FleetState()
-    instances = [ManagedInstance("work", "id-work", "running")]
-    asyncio.run(state.apply_cycle(instances, {}, now=1000.0))
-    gateway = FakeGateway()
+    snapshot = load_snapshot("snapshot-attempt-in-progress.json")
     tail = {
         "layout": "attempt-log-tail/v1",
         "issue": 98,
         "started": STARTED_DASH,
         "attempt": {"outcome": None},
         "events": [
-            {
-                "timestamp": "2026-09-27T16:34:00Z",
-                "level": "INFO",
-                "event": "tool_call",
-                "detail": "Bash [main] -> 4999_tool_call.json",
-            }
+            _ev(
+                "tool_call",
+                "Bash [main] -> 4999_tool_call.json",
+                timestamp="2026-09-27T16:34:00Z",
+            )
         ],
         "total_events": 5000,
         "unreadable": 0,
         "truncated": True,
         "file_size": 5 * 1024 * 1024,
     }
-    gateway.set_tail("id-work", tail)
-    app = create_app(
-        state=state,
-        settings=load_settings([]),
-        gateway=gateway,
-        start_poller=False,
+    client, _, gateway = make_activity_client(
+        snapshot,
+        tail,
+        {
+            "4999_tool_call.json": _file(
+                json.dumps(
+                    {"command": "ls -la", "description": "list files"}
+                ).encode()
+            ),
+        },
     )
-    # The tail call is recorded; the head call is not used by Activity.
-    asyncio.run(gateway.attempt_tail_log("id-work", 98, STARTED_DASH))
+    # The Activity widget reads the tail (not the head) and renders newest.
+    body = client.get("/instances/work/activity").text
+    assert "larger than the read cap" not in body
+    assert "Bash" in body
     assert gateway.tail_calls == [("id-work", "98", STARTED_DASH)]
-    client = TestClient(app, base_url="http://localhost")
-    assert client is not None
+    assert gateway.log_calls == []
