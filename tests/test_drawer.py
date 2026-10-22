@@ -162,8 +162,10 @@ def test_drawer_has_no_usd_and_no_charts():
         body = open_drawer(fixture)
         assert "$" not in body
         assert "USD" not in body
-        assert "<svg" not in body
+        # The log links carry small inline icons; charts stay out.
         assert "<canvas" not in body
+        assert 'class="bars"' not in body
+        assert 'class="timeline"' not in body
 
 
 def test_drawer_unknown_instance_is_gone():
@@ -466,3 +468,88 @@ def test_drawer_wide_layout_rules():
     assert "repeat(auto-fill, minmax(min(100%, 24rem), 1fr))" in css
     assert "text-overflow: ellipsis" in css
     assert ".drawer dl.facts dt, .drawer dl.facts dd { min-width: 0;" in css
+
+
+def _many_events_snapshot(count, *, truncated=False):
+    """An active snapshot with `count` oldest-first events, one per minute.
+
+    The start is stamped with fractional seconds so the current attempt's
+    log reference validates and the drawer shows the live-log link.
+    """
+    snap = load_snapshot("snapshot-attempt-in-progress.json")
+    snap["control"]["active_attempt"]["started_at"] = "2026-09-30T09:30:00.123456Z"
+    snap["recent_events"] = [
+        {
+            "timestamp": f"2026-09-30T09:{i // 60:02d}:{i % 60:02d}Z",
+            "level": "INFO",
+            "event": f"event_{i:02d}",
+            "text": f"event number {i}",
+        }
+        for i in range(count)
+    ]
+    snap["truncated"] = truncated
+    return snap
+
+
+def _open_snapshot_drawer(snap):
+    client, _, _ = make_fleet_client({"work": snap})
+    body = client.get("/instances/work").text
+    assert "Recent events" in body
+    return body
+
+
+def test_drawer_recent_events_newest_first():
+    body = _open_snapshot_drawer(_many_events_snapshot(3))
+    first = body.index("event_02")
+    second = body.index("event_01")
+    third = body.index("event_00")
+    assert first < second < third
+
+
+def test_drawer_recent_events_capped_at_twenty_with_count():
+    body = _open_snapshot_drawer(_many_events_snapshot(25))
+    assert body.count("<li>") == 20
+    assert "Showing the latest 20 of 25" in body
+    # The newest 20 survive; the oldest five are dropped.
+    assert "event_24" in body
+    assert "event_05" in body
+    assert "event_04" not in body
+    assert "event_00" not in body
+    # No trimmed note without a truncated snapshot.
+    assert "older trimmed" not in body
+
+
+def test_drawer_recent_events_count_line_only_above_twenty():
+    body = _open_snapshot_drawer(_many_events_snapshot(20))
+    assert body.count("<li>") == 20
+    assert "Showing the latest 20 of" not in body
+
+
+def test_drawer_recent_events_truncated_snapshot_notes_trimmed():
+    body = _open_snapshot_drawer(_many_events_snapshot(25, truncated=True))
+    assert "Showing the latest 20 of 25" in body
+    assert "older trimmed" in body
+
+
+def test_drawer_recent_events_time_with_full_timestamp_tooltip():
+    body = _open_snapshot_drawer(_many_events_snapshot(3))
+    assert 'title="2026-09-30T09:00:02Z"' in body
+    assert ">09:00:02<" in body
+
+
+def test_drawer_recent_events_links_with_active_attempt():
+    body = _open_snapshot_drawer(_many_events_snapshot(3))
+    assert 'href="/instances/work/history"' in body
+    assert "Attempt history" in body
+    assert "Current attempt log" in body
+    assert 'href="/instances/work/attempts/977/2026-09-30T09-30-00.123456Z"' in body
+    assert "<svg" in body  # links carry icons
+
+
+def test_drawer_recent_events_no_current_log_link_when_idle():
+    snap = load_snapshot("snapshot-idle-with-last-finished.json")
+    client, _, _ = make_fleet_client({"work": snap})
+    body = client.get("/instances/work").text
+    assert "Recent events" in body
+    assert "Attempt history" in body
+    assert "Current attempt log" not in body

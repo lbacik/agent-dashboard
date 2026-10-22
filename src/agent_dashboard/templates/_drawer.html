@@ -11,6 +11,12 @@
 {% macro fig(f) -%}
 <span class="figure">{{ f.text }}{% if f.basis and f.basis != f.text %} <span class="basis">{{ f.basis }}</span>{% endif %}</span>
 {%- endmacro %}
+{% macro logs_icon() -%}
+<svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 1.5h6L13 5v9.5H3.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9.5 1.5V5H13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8h5M5.5 10.5h5M5.5 13h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+{%- endmacro %}
+{% macro live_icon() -%}
+<svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M1 8.5h3l1.8-5 3.4 9 1.8-4H15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+{%- endmacro %}
 {% if row is none %}
 <aside id="drawer" class="drawer"
        hx-get="/instances/{{ name | urlencode }}"
@@ -162,13 +168,19 @@
     {% if d.events %}
     <ul class="events">
       {% for ev in d.events %}
-      <li><span class="ev-time">{{ ev.timestamp }}</span> <span class="ev-level">{{ ev.level }}</span> <span class="ev-name">{{ ev.name }}</span> <span class="ev-text">{{ ev.text }}</span></li>
+      <li><span class="ev-time" title="{{ ev.timestamp }}">{{ ev.short_time }}</span> <span class="ev-level">{{ ev.level }}</span> <span class="ev-name">{{ ev.name }}</span> <span class="ev-text">{{ ev.text }}</span></li>
       {% endfor %}
     </ul>
-    {% if d.truncated %}<p class="hint">Older events were trimmed (truncated snapshot).</p>{% endif %}
+    {% if d.events_total > 20 %}<p class="hint">Showing the latest 20 of {{ d.events_total }}{% if d.truncated %} (older trimmed){% endif %}.</p>
+    {% elif d.truncated %}<p class="hint">Older events were trimmed (truncated snapshot).</p>{% endif %}
     {% else %}
     <p class="hint">No recent events.</p>
+    {% if d.truncated %}<p class="hint">Older events were trimmed (truncated snapshot).</p>{% endif %}
     {% endif %}
+    <p class="drawer-links">
+      <a class="btn" href="/instances/{{ row.name | urlencode }}/history">{{ logs_icon() }}<span>Attempt history</span></a>
+      {% if row.live_url %}<a class="btn btn-live" href="{{ row.live_url }}">{{ live_icon() }}<span>Current attempt log</span></a>{% endif %}
+    </p>
   </section>
   {% endif %}
   </div>
