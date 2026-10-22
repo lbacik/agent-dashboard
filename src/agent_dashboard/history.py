@@ -483,8 +483,8 @@ def read_stopped_history(
 
     The tar archive is shaped into the history layout (see
     :func:`stopped.parse_logs_tree`) and assembled with the same tolerance
-    rules as the running-instance exec reader. A non-tar stream reads as
-    ``layout not recognised``, never an error.
+    rules as the running-instance exec reader. A non-tar stream carries no
+    members and reads as an empty list, never an error.
     """
     from .stopped import parse_logs_tree
 

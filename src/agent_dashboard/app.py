@@ -1170,8 +1170,8 @@ def create_app(
         fetches this into the slot directly under the row; activating it
         again closes the slot. The file name passes the read allow-list here
         and again inside the gateway: a failure returns 404 without any
-        Docker call. Every other problem (unknown instance, stopped
-        instance, invalid reference, gateway error, missing file,
+        Docker call. Every other problem (unknown instance,
+        invalid reference, gateway error, missing file,
         unrecognised tar shape) renders a clear message with status 200,
         never an error. ``?raw=1`` shows the text as read; the default view
         pretty-prints JSON and falls back to raw text past the 256 KiB cap
@@ -1257,8 +1257,8 @@ def create_app(
         The same ``read_file`` gateway operation as the inline preview but
         with no cap, sent to the client as a chunked stream. The file name
         passes the read allow-list first: a failure returns 404 without any
-        Docker call. Every other problem (unknown instance, stopped
-        instance, invalid reference, gateway error, missing file) renders a
+        Docker call. Every other problem (unknown instance,
+        invalid reference, gateway error, missing file) renders a
         clear message with status 200, never an error.
         """
         try:

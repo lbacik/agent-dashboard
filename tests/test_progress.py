@@ -527,7 +527,7 @@ def _progress_payload(events, attempt=None):
     return _payload(events, attempt=attempt)
 
 
-def make_progress_client(rows, events=None, events_error=None):
+def make_progress_client(rows, events=None, events_error=None, run_trees=None):
     import asyncio as _asyncio
 
     from fake_gateway import FakeGateway
@@ -550,6 +550,8 @@ def make_progress_client(rows, events=None, events_error=None):
     if events_error is not None:
         for container_id, error in events_error.items():
             gateway.set_events_error(container_id, error)
+    for key, tree in (run_trees or {}).items():
+        gateway.set_run_tree(*key, tree)
     app = create_app(
         state=state, settings=Settings(poll_interval=5.0), gateway=gateway, start_poller=False
     )
@@ -633,13 +635,39 @@ def test_progress_page_unknown_layout_is_a_message_not_500():
 
 
 def test_progress_page_unknown_and_stopped_instances():
+    import json as _json
+
+    from fake_gateway import make_run_tree
+
     client, _, _ = make_progress_client([("work", "running")])
     unknown = client.get(f"/instances/nope/attempts/98/{STARTED_DASH}/progress")
     assert unknown.status_code == 200
     assert "unknown" in unknown.text.lower()
-    stopped, _, _ = make_progress_client([("down", "not running")])
+    stopped, _, gateway = make_progress_client([("down", "not running")])
     body = stopped.get(f"/instances/down/attempts/98/{STARTED_DASH}/progress").text
-    assert "running managed instances only" in body
+    assert "Attempt not found in this instance" in body
+    assert "its volume is gone or the attempt is no longer stored" in body
+    assert gateway.run_tree_calls == [("id-down", "98", STARTED_DASH)]
+    assert gateway.events_calls == []
+    reading = _reading_event(15, 100, "2026-09-27T16:35:23Z")
+    tree = make_run_tree(
+        {
+            f"{STARTED_DASH}/attempt.json": _json.dumps({"outcome": "complete"}).encode(),
+            f"{STARTED_DASH}/agent_output.json": (
+                _json.dumps(reading) + "\n"
+            ).encode(),
+        }
+    )
+    ok_client, _, ok_gateway = make_progress_client(
+        [("down", "not running")],
+        run_trees={("id-down", "98", STARTED_DASH): tree},
+    )
+    ok_body = ok_client.get(f"/instances/down/attempts/98/{STARTED_DASH}/progress").text
+    assert "<svg" in ok_body
+    assert ok_gateway.run_tree_calls == [("id-down", "98", STARTED_DASH)]
+    traversal = ok_client.get("/instances/down/attempts/%2E%2E/" + STARTED_DASH + "/progress")
+    assert traversal.status_code == 200
+    assert "Invalid attempt reference" in traversal.text
 
 
 def test_progress_page_invalid_reference_and_gateway_error():

@@ -11,7 +11,9 @@ version".
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import tarfile
 
 from agent_dashboard.gateway import (
     EVIDENCE_PREVIEW_CAP,
@@ -22,6 +24,22 @@ from agent_dashboard.gateway import (
 )
 
 DEFAULT_SCRIPT = TelemetryExec(stdout=b"", returncode=2)
+
+
+def make_logs_tree(entries: dict[str, bytes]) -> bytes:
+    """Build a ``docker cp /data/logs`` tar: names like ``logs/98/<started>/attempt.json``."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for name, data in entries.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def make_run_tree(entries: dict[str, bytes]) -> bytes:
+    """Build a ``docker cp`` run-directory tar: names like ``<started>/attempt.json``."""
+    return make_logs_tree(entries)
 
 
 class FakeGateway:

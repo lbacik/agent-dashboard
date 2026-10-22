@@ -40,7 +40,9 @@ def _payload(entries) -> dict:
     }
 
 
-def make_stats_client(rows, histories=None, history_errors=None, **settings_kwargs):
+def make_stats_client(
+    rows, histories=None, history_errors=None, logs_trees=None, **settings_kwargs
+):
     """A client with scripted instance states and attempt histories.
 
     ``rows`` maps names to container states (``running`` or ``not running``);
@@ -58,6 +60,8 @@ def make_stats_client(rows, histories=None, history_errors=None, **settings_kwar
         gateway.set_history(container_id, payload)
     for container_id, error in (history_errors or {}).items():
         gateway.set_history_error(container_id, error)
+    for container_id, tree in (logs_trees or {}).items():
+        gateway.set_logs_tree(container_id, tree)
     kwargs = {"poll_interval": 5.0, "exec_timeout": 5.0}
     kwargs.update(settings_kwargs)
     app = create_app(
@@ -316,12 +320,39 @@ def test_stats_unknown_instance_renders_a_hint():
     assert "$" not in body
 
 
-def test_stats_stopped_instance_renders_a_hint_without_gateway_read():
+def test_stats_stopped_instance_reads_via_copy():
+    import json as _json
+
+    from fake_gateway import make_logs_tree
+
+    started_dash = "2026-09-27T16-33-43.385090Z"
+    started_colon = "2026-09-27T16:33:43.385090Z"
+    attempt = {
+        "outcome": "complete",
+        "started_at": started_colon,
+        "duration_seconds": 60,
+        "model_usage": {"m": {"input_tokens": 10, "cost_usd": 1.5}},
+    }
+    tree = make_logs_tree(
+        {f"logs/1/{started_dash}/attempt.json": _json.dumps(attempt).encode()}
+    )
+    client, _, gateway, _ = make_stats_client(
+        {"down": "not running"}, logs_trees={"id-down": tree}
+    )
+    body = client.get("/instances/down/stats").text
+    assert "stats-bar" in body
+    assert "$1.50" in body
+    assert gateway.logs_tree_calls == ["id-down"]
+    assert gateway.history_calls == []
+
+
+def test_stats_stopped_instance_without_tree_renders_a_hint():
     client, _, gateway, _ = make_stats_client({"down": "not running"})
     body = client.get("/instances/down/stats").text
-    assert "running managed instances only" in body
+    assert "its volume is gone or it holds no logs" in body
     assert "stats-bar" not in body
     assert "$" not in body
+    assert gateway.logs_tree_calls == ["id-down"]
     assert gateway.history_calls == []
 
 

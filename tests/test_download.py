@@ -331,16 +331,25 @@ def test_download_missing_file_is_a_message_not_500():
 
 
 def test_download_unknown_and_stopped_instances_are_200_not_500():
+    content = b'{"tool": "Bash", "ok": true}'
     client, gateway = make_client([("work", "running")])
     unknown = client.get(_download_url("0003_tool_call.json", name="nope"))
     assert unknown.status_code == 200
     assert "Unknown Managed instance" in unknown.text
-    stopped, stopped_gateway = make_client([("down", "not running")])
+    stopped, stopped_gateway = make_client(
+        [("down", "not running")],
+        files={("id-down", "98", STARTED_DASH, "0003_tool_call.json"): _file_result(content)},
+    )
     body = stopped.get(_download_url("0003_tool_call.json", name="down"))
     assert body.status_code == 200
-    assert "running managed instances only" in body.text
+    assert body.content == content
+    assert body.headers["content-type"] == "application/octet-stream"
+    assert stopped_gateway.file_calls == [("id-down", "98", STARTED_DASH, "0003_tool_call.json")]
     assert gateway.file_calls == []
-    assert stopped_gateway.file_calls == []
+    missing, missing_gateway = make_client([("down", "not running")])
+    gone = missing.get(_download_url("0003_tool_call.json", name="down"))
+    assert gone.status_code == 200
+    assert "was not found in this attempt" in gone.text
 
 
 def test_download_invalid_reference_and_gateway_error_make_no_500():

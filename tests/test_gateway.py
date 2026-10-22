@@ -376,3 +376,68 @@ def test_attempt_events_missing_cli(monkeypatch):
                 "abc123", 98, "2026-09-27T16:33:43.385090Z"
             )
         )
+
+
+# --- stopped-instance copies (docker cp tree reads) ------------------------------
+
+
+def test_copy_logs_argv_pinned():
+    assert argv_copy_logs("abc123") == ["docker", "cp", "abc123:/data/logs", "-"]
+
+
+def test_copy_run_argv_pinned():
+    assert argv_copy_run("abc123", 98, "2026-09-27T16:33:43.385090Z") == [
+        "docker",
+        "cp",
+        "abc123:/data/logs/98/2026-09-27T16-33-43.385090Z",
+        "-",
+    ]
+
+
+def test_copy_argv_rejects_bad_ids_and_refs():
+    with pytest.raises(ValueError):
+        argv_copy_logs("not a container!")
+    with pytest.raises(ValueError):
+        argv_copy_run("abc123", "ninety-eight", "2026-09-27T16:33:43.385090Z")
+    with pytest.raises(ValueError):
+        argv_copy_run("abc123", 98, "../state/attempt.json")
+    with pytest.raises(ValueError):
+        argv_copy_run("abc123", 98, "not-a-timestamp")
+    with pytest.raises(ValueError):
+        argv_copy_run("not a container!", 98, "2026-09-27T16:33:43.385090Z")
+
+
+def test_copy_logs_missing_tree_maps_to_not_found(monkeypatch):
+    proc = _FakeProcess(returncode=1, stdout=b"", stderr=b"Error: No such container:path")
+    _patch_create_subprocess(monkeypatch, proc)
+    with pytest.raises(FileNotFoundError):
+        asyncio.run(DockerGateway(timeout=5.0).copy_logs("abc123"))
+
+
+def test_copy_run_missing_tree_maps_to_not_found(monkeypatch):
+    proc = _FakeProcess(
+        returncode=1, stdout=b"", stderr=b"could not find the file"
+    )
+    _patch_create_subprocess(monkeypatch, proc)
+    with pytest.raises(FileNotFoundError):
+        asyncio.run(
+            DockerGateway(timeout=5.0).copy_run(
+                "abc123", 98, "2026-09-27T16:33:43.385090Z"
+            )
+        )
+
+
+def test_copy_logs_daemon_error_maps_to_gateway_error(monkeypatch):
+    proc = _FakeProcess(returncode=1, stdout=b"", stderr=b"boom")
+    _patch_create_subprocess(monkeypatch, proc)
+    with pytest.raises(GatewayError, match="boom"):
+        asyncio.run(DockerGateway(timeout=5.0).copy_logs("abc123"))
+
+
+def test_copy_logs_returns_bytes_and_uses_no_shell(monkeypatch):
+    proc = _FakeProcess(stdout=b"tar-bytes", returncode=0)
+    seen = _patch_create_subprocess(monkeypatch, proc)
+    out = asyncio.run(DockerGateway(timeout=5.0).copy_logs("abc123"))
+    assert out == b"tar-bytes"
+    assert seen["argv"] == argv_copy_logs("abc123")
+    assert "shell" not in seen["kwargs"]

@@ -654,7 +654,7 @@ def test_log_exec_timeout_default_and_env_and_cli(monkeypatch):
 # --- page --------------------------------------------------------------------
 
 
-def make_log_client(rows, logs=None, logs_error=None):
+def make_log_client(rows, logs=None, logs_error=None, run_trees=None):
     state = FleetState()
     instances = []
     for name, container_state in rows:
@@ -667,6 +667,8 @@ def make_log_client(rows, logs=None, logs_error=None):
     if logs_error is not None:
         for container_id, error in logs_error.items():
             gateway.set_log_error(container_id, error)
+    for key, tree in (run_trees or {}).items():
+        gateway.set_run_tree(*key, tree)
     app = create_app(
         state=state,
         settings=load_settings([]),
@@ -822,13 +824,36 @@ def test_log_page_truncated_stream_shows_notice():
 
 
 def test_log_page_unknown_and_stopped_instances():
+    import json as _json
+
+    from fake_gateway import make_run_tree
+
     client, _, _ = make_log_client([("work", "running")])
     unknown = client.get(f"/instances/nope/attempts/98/{STARTED_DASH}")
     assert unknown.status_code == 200
     assert "unknown" in unknown.text.lower()
-    stopped, _, _ = make_log_client([("down", "not running")])
+    stopped, _, gateway = make_log_client([("down", "not running")])
     body = stopped.get(f"/instances/down/attempts/98/{STARTED_DASH}").text
-    assert "running managed instances only" in body
+    assert "Attempt not found in this instance" in body
+    assert "its volume is gone or the attempt is no longer stored" in body
+    assert gateway.run_tree_calls == [("id-down", "98", STARTED_DASH)]
+    assert gateway.log_calls == []
+    tree = make_run_tree(
+        {
+            f"{STARTED_DASH}/attempt.json": _json.dumps(FULL_ATTEMPT).encode(),
+            f"{STARTED_DASH}/agent_output.json": (
+                _json.dumps(TOOL_CALL_NEW) + "\n" + _json.dumps(MODEL_RESPONSE) + "\n"
+            ).encode(),
+        }
+    )
+    ok_client, _, ok_gateway = make_log_client(
+        [("down", "not running")],
+        run_trees={("id-down", "98", STARTED_DASH): tree},
+    )
+    ok_body = ok_client.get(f"/instances/down/attempts/98/{STARTED_DASH}").text
+    assert "tool_call" in ok_body
+    assert ok_gateway.run_tree_calls == [("id-down", "98", STARTED_DASH)]
+    assert ok_gateway.log_calls == []
 
 
 def test_log_page_invalid_reference_and_gateway_error_make_no_500():
