@@ -55,12 +55,34 @@ class SubagentView:
 
 @dataclass(frozen=True)
 class EventView:
-    """One recent-events row: timestamp, level, event name, one-line text."""
+    """One recent-events row: timestamp, level, event name, one-line text.
+
+    ``short_time`` is the ``HH:MM:SS`` clock reading for the glanceable
+    column; the full timestamp stays in ``timestamp`` for the tooltip.
+    """
 
     timestamp: str
     level: str
     name: str
     text: str
+    short_time: str = "—"
+
+
+def _short_time(timestamp: str) -> str:
+    """Extract ``HH:MM:SS`` from an ISO-8601 timestamp.
+
+    Anything without an embedded clock time (skewed or missing values)
+    falls back to the full text, so the column never renders blank.
+    """
+    clock = timestamp[11:19] if len(timestamp) >= 19 and timestamp[10] == "T" else ""
+    if (
+        len(clock) == 8
+        and clock[2] == ":"
+        and clock[5] == ":"
+        and clock.replace(":", "").isdigit()
+    ):
+        return clock
+    return timestamp
 
 
 def _fig(raw: Any, *, missing: str = UNAVAILABLE) -> Figure:
@@ -191,8 +213,10 @@ class DrawerDetail:
     last_finished_at: str | None = None
     last_pr_number: int | None = None
     last_pr_url: str | None = None
-    # Recent events.
+    # Recent events: newest first, at most the latest 20; `events_total`
+    # is the full snapshot count for the "Showing the latest 20 of N" line.
     events: tuple[EventView, ...] = ()
+    events_total: int = 0
 
 
 def _read_budget(current: dict[str, Any] | None, state: str) -> dict[str, Any]:
@@ -559,21 +583,26 @@ def read_drawer(snapshot: dict[str, Any] | None, *, control_stale: bool = False)
             last_pr_number = _int(pr.get("number"))
             last_pr_url = _str(pr.get("url"))
 
-    # Recent events.
+    # Recent events: newest first, showing only the latest 20. The
+    # snapshot lists oldest first, so the tail holds the newest rows.
     events: list[EventView] = []
     recent = snapshot.get("recent_events")
     if isinstance(recent, list):
         for item in recent:
             if not isinstance(item, dict):
                 continue
+            timestamp = _str(item.get("timestamp")) or "—"
             events.append(
                 EventView(
-                    timestamp=_str(item.get("timestamp")) or "—",
+                    timestamp=timestamp,
                     level=_str(item.get("level")) or "—",
                     name=_str(item.get("event")) or "—",
                     text=_str(item.get("text")) or "—",
+                    short_time=_short_time(timestamp),
                 )
             )
+    events_total = len(events)
+    events = list(reversed(events[-20:])) if events else []
 
     truncated = snapshot.get("truncated") is True
 
@@ -661,4 +690,5 @@ def read_drawer(snapshot: dict[str, Any] | None, *, control_stale: bool = False)
         last_pr_number=last_pr_number,
         last_pr_url=last_pr_url,
         events=tuple(events),
+        events_total=events_total,
     )

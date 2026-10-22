@@ -504,6 +504,9 @@ ul.events.handoffs { margin-top: 1rem; }
 .btn .icon { width: 1em; height: 1em; }
 .btn-live { border-color: var(--accent); }
 
+/* Drawer log links under Recent events: icon buttons like the fleet rows. */
+.drawer-links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0 0; }
+
 /* Stopped instances live in a collapsed section below the main table; the
    open state survives the live refresh through fleet.js. */
 details.not-running { margin-top: 1rem; }
