@@ -13,7 +13,7 @@
     {% if a.state == "tool" %}
     {% set cur = a.current[-1] %}
     <span class="activity-now-main">
-      <strong>{{ cur.evidence.tool }}</strong>{% if cur.evidence.thread and cur.evidence.thread != "main" %} <span class="stale-tag">[{{ cur.evidence.thread }}]</span>{% endif %}
+      <strong>{{ cur.evidence.tool }}</strong>{% if cur.evidence.thread %} <span class="stale-tag">[{{ cur.evidence.thread }}]</span>{% endif %}
       <span class="age">running {{ cur_elapsed }}{% if a.current | length > 1 %} · {{ a.current | length - 1 }} more in parallel{% endif %}</span>
     </span>
     <a class="activity-link" href="{{ log_url }}?q={{ cur.evidence.file | urlencode }}" title="Open in the Attempt log">log</a>
@@ -35,10 +35,11 @@
 <div class="activity-last">
   <div class="activity-last-head">
     <span class="activity-label">Last call</span>
-    <strong>{{ a.last_call.evidence.tool }}</strong>{% if a.last_call.evidence.thread and a.last_call.evidence.thread != "main" %} <span class="stale-tag">[{{ a.last_call.evidence.thread }}]</span>{% endif %}
+    <strong>{{ a.last_call.evidence.tool }}</strong>{% if a.last_call.evidence.thread %} <span class="stale-tag">[{{ a.last_call.evidence.thread }}]</span>{% endif %}
     <span class="age">{{ a.last_call.time_text }} · took {{ call_took }} · {{ call_ago }} ago</span>
     {% if res_error %}<span class="pill pill-unreachable">error</span>{% endif %}
-    <a class="activity-link" href="{{ log_url }}?q={{ a.last_call.evidence.file | urlencode }}" title="Open in the Attempt log">log</a>
+    <a class="activity-link" href="{{ log_url }}?q={{ a.last_call.evidence.file | urlencode }}" title="Open the call in the Attempt log">call log</a>
+    <a class="activity-link" href="{{ log_url }}?q={{ a.last_result.evidence.file | urlencode }}" title="Open the response in the Attempt log">response log</a>
   </div>
   <div class="activity-io-grid">
     <div>

@@ -206,6 +206,7 @@ def call_preview(tool: str, content: bytes) -> tuple[str, str]:
     plus the prompt; anything else is compact JSON without ``agent_id``.
     Never raises.
     """
+    del tool
     try:
         raw = content.decode("utf-8", errors="replace")
     except Exception:

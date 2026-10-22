@@ -316,12 +316,14 @@ def test_activity_shows_running_tool_and_last_call():
     body = client.get("/instances/work/activity").text
     assert "Read" in body
     assert "running" in body
+    assert "[main]" in body
     assert "Last call" in body
     assert "Bash" in body
     assert "list files" in body or "ls -la" in body
     assert "log" in body
     assert "?q=0004_tool_call.json" in body
     assert "?q=0001_tool_call.json" in body
+    assert "?q=0002_tool_result.json" in body
 
 
 def test_activity_shows_model_working_with_last_message():
