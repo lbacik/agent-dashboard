@@ -69,8 +69,19 @@ from .history import (
     format_duration,
     read_history,
 )
-from .overview import collect_overview, overview_legend
+from .overview import collect_overview, overview_legend, summarize_instance
 from .progress import progress_series, read_progress
+from .range_stats import (
+    COOKIE_MAX_AGE,
+    COOKIE_NAME,
+    apply_range,
+    day_strip,
+    parse_cookie,
+    parse_range,
+)
+from .range_stats import (
+    PRESETS as RANGE_PRESETS,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -310,6 +321,107 @@ def create_app(
         return templates.TemplateResponse(
             request, "_drawer.html", {**context(request), "row": row, "name": name}
         )
+
+    @app.get("/instances/{name}/stats", response_class=HTMLResponse)
+    async def instance_stats(request: Request, name: str) -> Response:
+        """Drawer card: per-instance attempt statistics for the active range.
+
+        Loaded once when the drawer opens (``hx-trigger="load"``) and again
+        on every range change; the drawer's SSE refresh keeps the loaded
+        card via ``hx-preserve``, so polling never re-reads attempt
+        summaries. An explicit ``preset`` (or ``from``/``to``) wins and is
+        remembered in a cookie; otherwise the cookie names the range, so it
+        survives switching instances and reopening the drawer. Unknown
+        instances, stopped instances and unreadable summaries render a hint
+        instead of figures, never zero figures.
+        """
+        params = request.query_params
+        if "preset" in params or ("from" in params and "to" in params):
+            spec = parse_range(params)
+            remember = True
+        else:
+            spec = parse_cookie(request.cookies.get(COOKIE_NAME))
+            remember = False
+        slot_id = "stats-" + name.replace(" ", "-").replace(".", "-")
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        row = find_row(rows, name)
+        ctx: dict = {
+            **context(request),
+            "name": name,
+            "slot_id": slot_id,
+            "stats_base": f"/instances/{quote(name, safe='')}/stats?",
+            "spec": spec,
+            "presets": list(RANGE_PRESETS),
+            "history_window": spec.history_window,
+            "chart_keys": list(OUTCOME_ORDER),
+            "chart_labels": dict(OUTCOME_LABELS),
+            "shape_glyphs": dict(SHAPE_GLYPHS),
+            "inst": None,
+            "legend": [],
+            "strip": [],
+            "strip_peak": 0,
+            "error": None,
+        }
+
+        def page() -> Response:
+            response = templates.TemplateResponse(request, "_stats.html", ctx)
+            if remember:
+                response.set_cookie(
+                    COOKIE_NAME,
+                    spec.query,
+                    path="/",
+                    samesite="lax",
+                    max_age=COOKIE_MAX_AGE,
+                )
+            return response
+
+        if row is None:
+            ctx["error"] = (
+                f"Unknown Managed instance {name!r}: it is unknown or was removed."
+            )
+            return page()
+        if row.state != "running":
+            ctx["error"] = (
+                "Attempt history is available for running managed instances only."
+            )
+            return page()
+        try:
+            exec_result = await asyncio.wait_for(
+                gw.attempt_history(row.container_id), cfg.exec_timeout
+            )
+        except TimeoutError:
+            ctx["error"] = (
+                "Could not read the Attempt log: history read timed out after "
+                f"{cfg.exec_timeout:g} s"
+            )
+            return page()
+        except (GatewayError, ValueError) as exc:
+            ctx["error"] = f"Could not read the Attempt log: {exc}"
+            return page()
+        except Exception as exc:
+            ctx["error"] = f"Could not read the Attempt log: {exc}"
+            return page()
+        now_ts = time.time()
+        full = read_history(
+            exec_result.stdout, exec_result.returncode, now=now_ts, window="all"
+        )
+        if not full.ok:
+            ctx["error"] = full.error
+            return page()
+        cut = apply_range(full, spec, now_ts)
+        ctx["inst"] = summarize_instance(
+            name=row.name,
+            state=row.state,
+            container_id=row.container_id,
+            reach=row.reach,
+            rank=row.rank,
+            window="all",
+            result=cut,
+        )
+        ctx["strip"] = day_strip(full.summaries, spec, now_ts)
+        ctx["strip_peak"] = max((day.total for day in ctx["strip"]), default=0)
+        ctx["legend"] = outcome_legend(cut.summaries)
+        return page()
 
     @app.get("/instances/{name}/history", response_class=HTMLResponse)
     async def instance_history(request: Request, name: str) -> Response:

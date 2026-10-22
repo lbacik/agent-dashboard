@@ -46,7 +46,11 @@
     </div>
     <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
   </div>
-  <p class="drawer-history-link"><a href="/instances/{{ row.name | urlencode }}/history">Attempt history</a></p>
+  {% set slot_id = "stats-" ~ (row.name | replace(" ", "-") | replace(".", "-")) %}
+  <div id="{{ slot_id }}" hx-preserve
+       hx-get="/instances/{{ row.name | urlencode }}/stats" hx-trigger="load" hx-swap="innerHTML">
+    <p class="hint"><a href="/instances/{{ row.name | urlencode }}/history">Attempt history</a> · Loading…</p>
+  </div>
   {% if d.unsupported_schema is not none %}
   <section class="drawer-section">
     <h3>Current attempt</h3>

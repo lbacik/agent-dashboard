@@ -280,7 +280,36 @@ ul.events li {
 
 tr.active-row td { background: #f2f6fb; }
 
-.drawer-history-link { margin: 0 0 1rem; font-size: 0.88rem; }
+/* Drawer attempt-statistics card: range presets plus a 90-day activity strip.
+   The strip and the outcome bar reuse the overview chart colours
+   (`.bar.outcome-*`); tooltips name every outcome and the legend pairs each
+   colour with its shape glyph, so nothing relies on colour alone. */
+.stats-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.7rem 0.8rem;
+  margin-bottom: 1rem;
+  background: var(--card);
+}
+.stats-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
+.stats-title { font-weight: 600; text-decoration: none; }
+.stats-label { color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
+.stats-presets { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; margin: 0.55rem 0 0.2rem; font-size: 0.85rem; }
+.stats-presets a.current { font-weight: 700; }
+.stats-strip { margin: 0.5rem 0 0.1rem; cursor: crosshair; user-select: none; touch-action: none; }
+.stats-strip svg { display: block; width: 100%; height: 48px; }
+.strip-day { fill: transparent; }
+.strip-day.is-sel { fill: var(--accent); fill-opacity: 0.18; }
+.stats-strip.is-dragging .strip-day.is-sel { fill: transparent; }
+.strip-day.is-drag, .stats-strip.is-dragging .strip-day.is-drag { fill: var(--accent); fill-opacity: 0.3; }
+.strip-day:hover { fill: var(--accent); fill-opacity: 0.15; }
+.strip-empty { fill: var(--line); }
+.stats-strip-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.7rem; margin-top: 0.15rem; }
+.stats-bar { display: block; width: 100%; height: 10px; margin: 0.6rem 0 0.3rem; border-radius: 3px; overflow: hidden; }
+.stats-line { margin: 0.2rem 0 0; font-size: 0.85rem; }
+.stats-legend { margin: 0.3rem 0 0; font-size: 0.8rem; }
+/* The card slot keeps its height while the figures load or the range changes. */
+#drawer [id^="stats-"] { min-height: 8.5rem; }
 
 /* Attempt history charts: server-rendered inline SVG, no dependencies.
    Every outcome has a colour (fill) plus a non-colour cue: the legend's
