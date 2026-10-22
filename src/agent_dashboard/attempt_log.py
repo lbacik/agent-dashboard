@@ -30,7 +30,11 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any
 
-from .gateway import ATTEMPT_LOG_LAYOUT, validate_log_file
+from .gateway import (
+    ATTEMPT_LOG_LAYOUT,
+    ATTEMPT_LOG_TAIL_LAYOUT,
+    validate_log_file,
+)
 from .history import LAYOUT_NOT_RECOGNISED, NOT_APPLICABLE, format_cost, format_duration
 
 #: Rows per page on the Attempt log page.
@@ -411,6 +415,121 @@ def read_stopped_attempt_log(
             (),
         )
     return _assemble_attempt_log(payload, issue=issue, started=started), tuple(names)
+
+
+def _assemble_attempt_tail_log(
+    payload: dict[str, Any], *, issue: int, started: str
+) -> AttemptLogResult:
+    """Assemble a header plus newest rows from a tail-layout payload.
+
+    Shared by the running-instance tail exec reader and the stopped-instance
+    tail tree-copy reader. ``total_events`` is the full stream's non-blank
+    line count, so rows keep the file's line numbers (``seq``): a truncated
+    tail starts at ``total - len(events) + 1``, a whole-file tail starts at
+    1. Tolerance mirrors the head reader: a missing layout or zero rows is
+    ``layout not recognised`` with whatever header was readable.
+    """
+    if (
+        not isinstance(payload, dict)
+        or payload.get("layout") != ATTEMPT_LOG_TAIL_LAYOUT
+        or not isinstance(payload.get("events"), list)
+    ):
+        raw_attempt = payload.get("attempt") if isinstance(payload, dict) else None
+        header = _read_header(
+            raw_attempt, started, attempt_missing=raw_attempt is None
+        )
+        return AttemptLogResult(
+            ok=False,
+            error=LAYOUT_NOT_RECOGNISED,
+            issue=issue,
+            **header,  # type: ignore[arg-type]
+        )
+    raw_attempt = payload.get("attempt")
+    header = _read_header(
+        raw_attempt, started, attempt_missing=raw_attempt is None
+    )
+    raw_events = payload["events"]
+    counts = _counts(payload, ())
+    total = counts["total_events"]
+    if not raw_events:
+        return AttemptLogResult(
+            ok=False,
+            error=LAYOUT_NOT_RECOGNISED,
+            issue=issue,
+            **header,  # type: ignore[arg-type]
+            **counts,  # type: ignore[arg-type]
+        )
+    if counts["truncated"] and total >= len(raw_events):
+        start = total - len(raw_events) + 1
+    else:
+        start = 1
+        if total < len(raw_events):
+            counts = {**counts, "total_events": len(raw_events)}
+    events = tuple(
+        _read_event(entry, seq)
+        for seq, entry in zip(range(start, start + len(raw_events)), raw_events)
+    )
+    return AttemptLogResult(
+        ok=True,
+        issue=issue,
+        **header,  # type: ignore[arg-type]
+        events=events,
+        **counts,  # type: ignore[arg-type]
+    )
+
+
+def read_attempt_tail_log(
+    stdout: bytes, returncode: int, *, issue: int, started: str
+) -> AttemptLogResult:
+    """Parse one Attempt log tail exec's stdout into a header plus newest rows.
+
+    ``issue``/``started`` stay the result's identity; ``returncode`` is
+    accepted for signature parity but does not decide the outcome. Rows keep
+    the file's line numbers (``seq``), so the Activity widget can link into
+    the Attempt log page. A tail-layout payload with zero rows is ``layout
+    not recognised``, like the head reader.
+    """
+    del returncode
+    try:
+        payload = json.loads(stdout.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return AttemptLogResult(
+            ok=False,
+            error=LAYOUT_NOT_RECOGNISED,
+            issue=issue,
+            started_at=_restore_started(started),
+            attempt_missing=True,
+        )
+    return _assemble_attempt_tail_log(payload, issue=issue, started=started)
+
+
+def read_stopped_attempt_tail_log(
+    data: bytes, *, issue: int, started: str
+) -> tuple[AttemptLogResult, tuple[str, ...]]:
+    """Parse one stopped-instance run-directory copy into a tail plus names.
+
+    Returns the parsed header plus newest rows (same tolerance as the
+    running-instance tail exec reader) and every regular file's base name.
+    A non-tar stream reads as ``layout not recognised``, never an error.
+    """
+    from .stopped import parse_run_tree_tail
+
+    try:
+        payload, names = parse_run_tree_tail(data, issue=issue, started=started)
+    except (ValueError, TypeError, AttributeError):
+        return (
+            AttemptLogResult(
+                ok=False,
+                error=LAYOUT_NOT_RECOGNISED,
+                issue=issue,
+                started_at=_restore_started(started),
+                attempt_missing=True,
+            ),
+            (),
+        )
+    return _assemble_attempt_tail_log(
+        payload, issue=issue, started=started
+    ), tuple(names)
 
 
 def _text(value: Any) -> str:

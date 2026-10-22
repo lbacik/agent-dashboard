@@ -120,9 +120,21 @@ ATTEMPT_EVENTS_LAYOUT = "attempt-events/v1"
 #: Layout marker the per-attempt full-log collector stamps on its output.
 ATTEMPT_LOG_LAYOUT = "attempt-log/v1"
 
+#: Layout marker the per-attempt tail collector stamps on its output: the
+#: newest events of the same stream with the full count, so ``seq`` stays
+#: correct past the head cap.
+ATTEMPT_LOG_TAIL_LAYOUT = "attempt-log-tail/v1"
+
 #: Cap on the ``agent_output.json`` bytes the full-log collector reads: the
 #: page shows the first events with a truncation notice past this size.
 LOG_STREAM_CAP = 4 * 1024 * 1024
+
+#: Cap on the ``agent_output.json`` tail bytes the tail collector reads: the
+#: last bytes aligned to whole lines, so the Activity widget sees the newest
+#: events even past the head cap. Counting the full stream's non-blank lines
+#: is a chunked binary scan (no extra memory); the parsed tail stays bounded
+#: by this cap and the read by ``log_timeout`` like the other collectors.
+LOG_TAIL_CAP = 512 * 1024
 
 #: Default bound for one Attempt log read (bigger payloads than telemetry).
 LOG_EXEC_TIMEOUT = 15.0
@@ -252,6 +264,173 @@ print(
     json.dumps(
         {
             "layout": "attempt-log/v1",
+            "issue": int(issue),
+            "started": started,
+            "attempt": attempt,
+            "events": events,
+            "total_events": total_events,
+            "unreadable": unreadable,
+            "truncated": truncated,
+            "file_size": file_size,
+        }
+    )
+)
+"""
+
+
+#: Collector run inside the managed instance by ``argv_attempt_tail_log``.
+#: A fixed script (never interpolated with operator input): the attempt
+#: reference travels as two argv arguments that the script re-validates
+#: with the verified name shapes before joining any path, so the daemon's
+#: ``..`` resolution cannot escape ``/data/logs``. It reads the attempt's
+#: ``attempt.json`` summary (``None`` when missing: in progress or crashed)
+#: and the last :data:`LOG_TAIL_CAP` bytes of the ``agent_output.json``
+#: event stream, aligned to whole lines. The full stream's non-blank line
+#: count is scanned in binary chunks (bounded memory) so the returned rows
+#: carry the file's line numbers in ``total_events``; lines that do not
+#: parse become synthetic ``unparsable_line`` WARNING rows inline. Past the
+#: cap the tail is kept with ``truncated`` set and the true ``file_size``
+#: reported; a small stream returns the whole file untruncated.
+ATTEMPT_LOG_TAIL_SCRIPT = """\
+import json
+import os
+import re
+import sys
+
+BASE = "/data/logs"
+ISSUE_RE = re.compile(r"[0-9]+\\Z")
+STARTED_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}\\.[0-9]+Z\\Z")
+MAX_ATTEMPT_BYTES = 1000000
+MAX_TAIL_BYTES = 524288
+
+
+def read_capped(path, limit):
+    with open(path, "rb") as handle:
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("file too large")
+    return data
+
+
+def unknown(reason):
+    print(json.dumps({"layout": "unknown", "reason": reason}))
+    raise SystemExit(0)
+
+
+def parse_line(line):
+    if not line.strip():
+        return None
+    try:
+        entry = json.loads(line)
+    except ValueError:
+        return {
+            "timestamp": None,
+            "level": "WARNING",
+            "event": "unparsable_line",
+            "detail": line[:200],
+        }
+    if not isinstance(entry, dict):
+        return {
+            "timestamp": None,
+            "level": "WARNING",
+            "event": "unparsable_line",
+            "detail": line[:200],
+        }
+    return {
+        "timestamp": entry.get("timestamp"),
+        "level": entry.get("level"),
+        "event": entry.get("event"),
+        "detail": entry.get("detail"),
+    }
+
+
+args = sys.argv[1:]
+if len(args) != 2:
+    unknown("expected issue and started arguments")
+issue, started = args
+if not ISSUE_RE.match(issue) or not STARTED_RE.match(started):
+    unknown("invalid attempt reference")
+if not os.path.isdir(BASE):
+    unknown("missing /data/logs")
+attempt_dir = os.path.join(BASE, issue, started)
+attempt = None
+unreadable = 0
+try:
+    record = json.loads(
+        read_capped(os.path.join(attempt_dir, "attempt.json"), MAX_ATTEMPT_BYTES).decode(
+            "utf-8"
+        )
+    )
+except OSError:
+    pass
+except ValueError:
+    unreadable += 1
+else:
+    if isinstance(record, dict):
+        attempt = record
+    else:
+        unreadable += 1
+events = []
+total_events = 0
+truncated = False
+file_size = 0
+events_path = os.path.join(attempt_dir, "agent_output.json")
+try:
+    file_size = os.path.getsize(events_path)
+except OSError:
+    pass
+else:
+    try:
+        with open(events_path, "rb") as handle:
+            count = 0
+            for raw_line in handle:
+                if raw_line.strip():
+                    count += 1
+        total_events = count
+    except OSError:
+        unreadable += 1
+        total_events = 0
+    else:
+        if total_events == 0:
+            truncated = False
+        elif file_size <= MAX_TAIL_BYTES:
+            try:
+                with open(events_path, "rb") as handle:
+                    raw = handle.read().decode("utf-8", errors="replace")
+            except OSError:
+                unreadable += 1
+                raw = None
+            if raw is not None:
+                for line in raw.splitlines():
+                    parsed = parse_line(line)
+                    if parsed is not None:
+                        events.append(parsed)
+            truncated = False
+        else:
+            truncated = True
+            try:
+                with open(events_path, "rb") as handle:
+                    handle.seek(file_size - MAX_TAIL_BYTES)
+                    tail = handle.read()
+                with open(events_path, "rb") as handle:
+                    handle.seek(file_size - MAX_TAIL_BYTES - 1)
+                    prev = handle.read(1)
+            except OSError:
+                unreadable += 1
+                tail = None
+                prev = b"\\n"
+            if tail is not None:
+                lines = tail.decode("utf-8", errors="replace").splitlines()
+                if prev != b"\\n" and lines:
+                    lines = lines[1:]
+                for line in lines:
+                    parsed = parse_line(line)
+                    if parsed is not None:
+                        events.append(parsed)
+print(
+    json.dumps(
+        {
+            "layout": "attempt-log-tail/v1",
             "issue": int(issue),
             "started": started,
             "attempt": attempt,
@@ -588,6 +767,32 @@ def argv_attempt_log(container_id: str, issue: int | str, started: str) -> list[
         "python",
         "-c",
         ATTEMPT_LOG_SCRIPT,
+        str(number),
+        dash_started,
+    ]
+
+
+def argv_attempt_tail_log(
+    container_id: str, issue: int | str, started: str
+) -> list[str]:
+    """Argv for one Attempt log tail read: a single attempt's newest events.
+
+    A single ``docker exec`` runs the fixed :data:`ATTEMPT_LOG_TAIL_SCRIPT`
+    with the instance's Python; besides the validated container ID the only
+    variable parts are the validated attempt reference (issue digits plus
+    the dash-form start), passed as plain argv arguments, never a path.
+    """
+    validate_container_id(container_id)
+    number, dash_started = validate_attempt_ref(issue, started)
+    return [
+        "docker",
+        "exec",
+        "--user",
+        AGENT_USER,
+        container_id,
+        "python",
+        "-c",
+        ATTEMPT_LOG_TAIL_SCRIPT,
         str(number),
         dash_started,
     ]
@@ -969,6 +1174,37 @@ class DockerGateway:
         :class:`ValueError` before anything is spawned.
         """
         argv = argv_attempt_log(container_id, issue, started)
+        async with self._log_semaphore:
+            proc = await self._run(argv)
+            try:
+                stdout, _stderr = await asyncio.wait_for(
+                    proc.communicate(), self.log_timeout
+                )
+            except TimeoutError as exc:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
+                raise AttemptLogTimeoutError(
+                    f"docker exec timed out after {self.log_timeout:g} s"
+                ) from exc
+            return TelemetryExec(stdout=stdout, returncode=proc.returncode)
+
+    async def attempt_tail_log(
+        self, container_id: str, issue: int | str, started: str
+    ) -> TelemetryExec:
+        """Run one Attempt log tail read for a single attempt's newest events.
+
+        Like :meth:`attempt_log` the exit code is reported, not raised: the
+        tail reader maps the stdout into the header and the newest ordered
+        event rows with file line numbers (``seq``). The read is bounded by
+        ``log_timeout`` (at most :data:`LOG_TAIL_CAP` parsed bytes plus a
+        chunked line count) and shares the log semaphore with the other
+        Attempt log reads. An invalid container ID or attempt reference raises
+        :class:`ValueError` before anything is spawned.
+        """
+        argv = argv_attempt_tail_log(container_id, issue, started)
         async with self._log_semaphore:
             proc = await self._run(argv)
             try:

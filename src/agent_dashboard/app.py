@@ -39,6 +39,7 @@ from .attempt_log import (
     pair_tool_calls,
     paired_files,
     read_attempt_log,
+    read_attempt_tail_log,
     read_stopped_attempt_log,
 )
 from .charts import (
@@ -318,17 +319,17 @@ def create_app(
     async def instance_activity(request: Request, name: str) -> Response:
         """Drawer Activity widget: what the agent is doing right now.
 
-        Reads the active attempt's Attempt log (one exec) and at most three
-        Evidence files (cached), then renders ``Now`` (the tool call running
-        after the latest ``model_response``, or the model working otherwise)
-        plus the latest paired call and its response. Refreshed on every
-        poll cycle; the drawer's refresh keeps the loaded widget via
-        ``hx-preserve``, so there is no flicker and no ``Loading…`` again.
-        The reference comes from the control section's active attempt, so
-        the widget stays visible through the publishing and handoff phases
-        when the telemetry ``current_attempt`` section is already ``n/a``.
-        A truncated stream shows a notice with a log link instead of stale
-        data, because the head no longer holds the latest calls.
+        Reads the active attempt's Attempt log tail (one exec) and at most
+        three Evidence files (cached), then renders ``Now`` (the tool call
+        running after the latest ``model_response``, or the model working
+        otherwise) plus the latest paired call and its response. The tail
+        holds the newest events with file line numbers, so the widget works
+        even past the head read cap. Refreshed on every poll cycle; the
+        drawer's refresh keeps the loaded widget via ``hx-preserve``, so
+        there is no flicker and no ``Loading…`` again. The reference comes
+        from the control section's active attempt, so the widget stays
+        visible through the publishing and handoff phases when the telemetry
+        ``current_attempt`` section is already ``n/a``.
         """
         slot = "activity-" + name.replace(" ", "-").replace(".", "-")
         summary_id = slot + "-sum"
@@ -361,22 +362,15 @@ def create_app(
             return page(error="No active attempt.")
         try:
             number, dash = validate_attempt_ref(issue, started)
-            exec_result = await gw.attempt_log(row.container_id, number, dash)
+            exec_result = await gw.attempt_tail_log(row.container_id, number, dash)
         except (GatewayError, ValueError) as exc:
             return page(error=f"Could not read the Attempt log: {exc}")
-        log = read_attempt_log(
+        log = read_attempt_tail_log(
             exec_result.stdout, exec_result.returncode, issue=number, started=dash
         )
         log_url = attempt_log_url(name, number, dash)
         if not log.ok:
             return page(error=log.error or "layout not recognised", log_url=log_url)
-        if log.truncated:
-            return page(
-                error="The Attempt log is larger than the read cap "
-                f"({format_file_mb(log.file_size)}); the dashboard reads only its head, "
-                "so the latest calls are not visible.",
-                log_url=log_url,
-            )
         activity = find_activity(log.events)
         now = datetime.now(UTC)
         view: dict = {
