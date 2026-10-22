@@ -771,15 +771,24 @@ def test_fragment_allow_list_checked_before_instance_lookup():
 
 
 def test_fragment_unknown_and_stopped_instances_are_200_not_500():
+    content = b'{"tool": "Bash", "ok": true}'
     client, _, gateway = make_file_client([("work", "running")])
     unknown = client.get(f"/instances/nope/attempts/98/{STARTED_DASH}/files/{FILE_JSON}")
     assert unknown.status_code == 200
     assert "Unknown Managed instance" in unknown.text
-    stopped, _, stopped_gateway = make_file_client([("down", "not running")])
-    body = stopped.get(f"/instances/down/attempts/98/{STARTED_DASH}/files/{FILE_JSON}").text
-    assert "running managed instances only" in body
+    stopped, _, stopped_gateway = make_file_client(
+        [("down", "not running")],
+        files={("id-down", "98", STARTED_DASH, FILE_JSON): _file_result(content)},
+    )
+    response = stopped.get(f"/instances/down/attempts/98/{STARTED_DASH}/files/{FILE_JSON}")
+    assert response.status_code == 200
+    assert "evidence-preview" in response.text
+    assert stopped_gateway.file_calls == [("id-down", "98", STARTED_DASH, FILE_JSON)]
+    missing, _, missing_gateway = make_file_client([("down", "not running")])
+    body = missing.get(f"/instances/down/attempts/98/{STARTED_DASH}/files/{FILE_JSON}").text
+    assert "was not found in this attempt" in body
+    assert missing_gateway.file_calls == [("id-down", "98", STARTED_DASH, FILE_JSON)]
     assert gateway.file_calls == []
-    assert stopped_gateway.file_calls == []
 
 
 def test_fragment_invalid_reference_and_gateway_error_make_no_500():

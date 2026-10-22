@@ -595,7 +595,7 @@ def _history_payload_old_and_recent():
     }
 
 
-def make_history_client(rows, histories=None, error=None):
+def make_history_client(rows, histories=None, error=None, logs_trees=None):
     """A client with fleet rows plus scripted attempt-history payloads per id."""
     state = FleetState()
     instances = []
@@ -608,6 +608,8 @@ def make_history_client(rows, histories=None, error=None):
     gateway = FakeGateway()
     for container_id, payload in (histories or {}).items():
         gateway.set_history(container_id, payload)
+    for container_id, tree in (logs_trees or {}).items():
+        gateway.set_logs_tree(container_id, tree)
     app = create_app(
         state=state, settings=Settings(poll_interval=5.0), gateway=gateway, start_poller=False
     )
@@ -663,10 +665,38 @@ def test_history_page_window_filter():
 
 
 def test_history_page_stopped_instance():
-    client, _, _ = make_history_client([("down", "not running")])
+    import json as _json
+
+    from fake_gateway import make_logs_tree
+
+    started = "2026-09-27T16-33-43.385090Z"
+    attempt = dict(
+        COMPLETE, started_at="2026-09-27T16:33:43.385090Z", duration_seconds=60
+    )
+    tree = make_logs_tree(
+        {
+            f"logs/98/{started}/attempt.json": _json.dumps(attempt).encode(),
+            f"logs/98/{started}/agent_output.json": b"",
+        }
+    )
+    client, _, gateway = make_history_client(
+        [("down", "not running")], logs_trees={"id-down": tree}
+    )
     body = client.get("/instances/down/history").text
-    assert "running managed instances only" in body
+    assert "#98" in body
+    assert "complete" in body
     assert "down" in body
+    assert gateway.logs_tree_calls == ["id-down"]
+    assert gateway.history_calls == []
+
+
+def test_history_page_stopped_instance_without_tree_is_a_hint():
+    client, _, gateway = make_history_client([("down", "not running")])
+    body = client.get("/instances/down/history").text
+    assert "its volume is gone or it holds no logs" in body
+    assert "down" in body
+    assert gateway.logs_tree_calls == ["id-down"]
+    assert gateway.history_calls == []
 
 
 def test_history_page_unknown_instance():

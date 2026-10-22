@@ -381,3 +381,87 @@ def test_attempt_log_against_real_docker(tmp_path):
     finally:
         _run("docker", "rm", "-f", name)
         _run("docker", "rmi", "-f", tag)
+
+
+@docker
+def test_stopped_instance_logs_via_docker_cp(tmp_path):
+    """Stopped containers keep their Attempt logs readable via ``docker cp``.
+
+    Reuses the LOG fixture image: after ``docker stop`` the exec readers
+    fail, but ``copy_logs``/``copy_run`` still stream the trees and the
+    stopped readers parse them (history list plus one attempt header).
+    """
+    from agent_dashboard.attempt_log import read_stopped_attempt_log
+    from agent_dashboard.history import read_stopped_history
+
+    tag = f"agent-dashboard-stopped:{uuid.uuid4().hex[:12]}"
+    name = f"e2e-stopped-{uuid.uuid4().hex[:8]}"
+    try:
+        run_dir = tmp_path / "logs" / str(LOG_ISSUE) / LOG_STARTED_DASH
+        run_dir.mkdir(parents=True)
+        (run_dir / "attempt.json").write_text(
+            json.dumps(
+                {
+                    "outcome": "complete",
+                    "started_at": LOG_STARTED_COLON,
+                    "duration_seconds": 1860,
+                }
+            )
+        )
+        (run_dir / "agent_output.json").write_text(
+            json.dumps(
+                {
+                    "timestamp": LOG_STARTED_COLON,
+                    "level": "INFO",
+                    "event": "tool_call",
+                    "detail": f"read -> {LOG_SMALL_FILE}",
+                }
+            )
+            + "\n"
+        )
+        (run_dir / LOG_SMALL_FILE).write_bytes(LOG_SMALL_CONTENT)
+        (tmp_path / "Dockerfile").write_text(LOG_DOCKERFILE)
+        build = _run("docker", "build", "-q", "-t", tag, str(tmp_path))
+        assert build.returncode == 0, build.stderr
+        started = _run("docker", "run", "-d", "--name", name, tag)
+        assert started.returncode == 0, started.stderr
+
+        import time
+
+        deadline = time.time() + 30
+        container_id = None
+        while time.time() < deadline:
+            found = asyncio.run(DockerGateway(timeout=10.0).list_instances())
+            ids = {inst.name: inst.container_id for inst in found}
+            if name in ids:
+                container_id = ids[name]
+                break
+            time.sleep(1)
+        assert container_id is not None
+
+        stopped = _run("docker", "stop", name)
+        assert stopped.returncode == 0, stopped.stderr
+
+        gateway = DockerGateway(timeout=10.0)
+        tree = asyncio.run(gateway.copy_logs(container_id))
+        history = read_stopped_history(tree, now=NOW)
+        assert history.ok
+        assert history.total == 1
+        assert history.summaries[0].issue == LOG_ISSUE
+
+        run_tree = asyncio.run(
+            gateway.copy_run(container_id, LOG_ISSUE, LOG_STARTED_DASH)
+        )
+        result, names = read_stopped_attempt_log(
+            run_tree, issue=LOG_ISSUE, started=LOG_STARTED_DASH
+        )
+        assert result.ok
+        assert LOG_SMALL_FILE in names
+
+        small = asyncio.run(
+            gateway.read_file(container_id, LOG_ISSUE, LOG_STARTED_DASH, LOG_SMALL_FILE)
+        )
+        assert small.content == LOG_SMALL_CONTENT
+    finally:
+        _run("docker", "rm", "-f", name)
+        _run("docker", "rmi", "-f", tag)

@@ -39,6 +39,7 @@ from .attempt_log import (
     pair_tool_calls,
     paired_files,
     read_attempt_log,
+    read_stopped_attempt_log,
 )
 from .charts import (
     CACHE_READ_SHARE_DEFINITION,
@@ -76,9 +77,10 @@ from .history import (
     format_cost,
     format_duration,
     read_history,
+    read_stopped_history,
 )
 from .overview import summarize_instance
-from .progress import progress_series, read_progress
+from .progress import progress_series, read_progress, read_stopped_progress
 from .range_stats import (
     COOKIE_MAX_AGE,
     COOKIE_NAME,
@@ -441,8 +443,10 @@ def create_app(
         summaries. An explicit ``preset`` (or ``from``/``to``) wins and is
         remembered in a cookie; otherwise the cookie names the range, so it
         survives switching instances and reopening the drawer. Unknown
-        instances, stopped instances and unreadable summaries render a hint
-        instead of figures, never zero figures.
+        instances, gone volumes and unreadable summaries render a hint
+        instead of figures, never zero figures. Stopped instances read
+        their summaries through a ``docker cp`` tree copy, like the
+        history page.
         """
         params = request.query_params
         if "preset" in params or ("from" in params and "to" in params):
@@ -489,31 +493,54 @@ def create_app(
                 f"Unknown Managed instance {name!r}: it is unknown or was removed."
             )
             return page()
-        if row.state != "running":
-            ctx["error"] = (
-                "Attempt history is available for running managed instances only."
-            )
-            return page()
-        try:
-            exec_result = await asyncio.wait_for(
-                gw.attempt_history(row.container_id), cfg.exec_timeout
-            )
-        except TimeoutError:
-            ctx["error"] = (
-                "Could not read the Attempt log: history read timed out after "
-                f"{cfg.exec_timeout:g} s"
-            )
-            return page()
-        except (GatewayError, ValueError) as exc:
-            ctx["error"] = f"Could not read the Attempt log: {exc}"
-            return page()
-        except Exception as exc:
-            ctx["error"] = f"Could not read the Attempt log: {exc}"
-            return page()
+        # Stopped containers cannot run ``docker exec``: their Attempt log
+        # list arrives through a ``docker cp`` tree copy parsed on the
+        # dashboard side, with the same tolerance rules as the exec reader.
         now_ts = time.time()
-        full = read_history(
-            exec_result.stdout, exec_result.returncode, now=now_ts, window="all"
-        )
+        if row.state == "running":
+            try:
+                exec_result = await asyncio.wait_for(
+                    gw.attempt_history(row.container_id), cfg.exec_timeout
+                )
+            except TimeoutError:
+                ctx["error"] = (
+                    "Could not read the Attempt log: history read timed out after "
+                    f"{cfg.exec_timeout:g} s"
+                )
+                return page()
+            except (GatewayError, ValueError) as exc:
+                ctx["error"] = f"Could not read the Attempt log: {exc}"
+                return page()
+            except Exception as exc:
+                ctx["error"] = f"Could not read the Attempt log: {exc}"
+                return page()
+            full = read_history(
+                exec_result.stdout, exec_result.returncode, now=now_ts, window="all"
+            )
+        else:
+            try:
+                tree = await asyncio.wait_for(
+                    gw.copy_logs(row.container_id), cfg.exec_timeout
+                )
+            except FileNotFoundError:
+                ctx["error"] = (
+                    "Attempt logs are unavailable for this instance: "
+                    "its volume is gone or it holds no logs."
+                )
+                return page()
+            except TimeoutError:
+                ctx["error"] = (
+                    "Could not read the Attempt log: history read timed out after "
+                    f"{cfg.exec_timeout:g} s"
+                )
+                return page()
+            except (GatewayError, ValueError) as exc:
+                ctx["error"] = f"Could not read the Attempt log: {exc}"
+                return page()
+            except Exception as exc:
+                ctx["error"] = f"Could not read the Attempt log: {exc}"
+                return page()
+            full = read_stopped_history(tree, now=now_ts, window="all")
         if not full.ok:
             ctx["error"] = full.error
             return page()
@@ -537,10 +564,11 @@ def create_app(
         """Attempt history page: one row per implementation attempt, newest first.
 
         Static with manual refresh (no stream subscription): the summaries
-        for all attempts are read on demand with a single gateway exec,
-        running managed instances only. An unknown instance, a stopped
-        instance, an unreadable log and an unrecognised layout each render a
-        clear message with status 200, never an error.
+        for all attempts are read on demand with a single gateway exec for
+        running instances, or a ``docker cp`` tree copy for stopped ones.
+        An unknown instance, a gone volume, an unreadable log and an
+        unrecognised layout each render a clear message with status 200,
+        never an error.
         """
         window = request.query_params.get("window", DEFAULT_WINDOW)
         if window not in VALID_WINDOWS:
@@ -561,39 +589,62 @@ def create_app(
                     "it is unknown or was removed.",
                 },
             )
-        if row.state != "running":
-            return templates.TemplateResponse(
-                request,
-                "history.html",
-                {
-                    **context(request),
-                    "row": row,
-                    "name": name,
-                    "window": window,
-                    "result": None,
-                    "error": "Attempt history is available for running "
-                    "managed instances only.",
-                },
-            )
-        try:
-            exec_result = await gw.attempt_history(row.container_id)
-        except (GatewayError, ValueError) as exc:
-            return templates.TemplateResponse(
-                request,
-                "history.html",
-                {
-                    **context(request),
-                    "row": row,
-                    "name": name,
-                    "window": window,
-                    "result": None,
-                    "error": f"Could not read the Attempt log: {exc}",
-                },
-            )
+        # Stopped containers cannot run ``docker exec``: their Attempt log
+        # list arrives through a ``docker cp`` tree copy parsed on the
+        # dashboard side, with the same tolerance rules as the exec reader.
+        # A missing tree (a gone volume, or an instance that never wrote
+        # logs) renders a clear message, never an error.
         now_ts = time.time()
-        result = read_history(
-            exec_result.stdout, exec_result.returncode, now=now_ts, window=window
-        )
+        if row.state == "running":
+            try:
+                exec_result = await gw.attempt_history(row.container_id)
+            except (GatewayError, ValueError) as exc:
+                return templates.TemplateResponse(
+                    request,
+                    "history.html",
+                    {
+                        **context(request),
+                        "row": row,
+                        "name": name,
+                        "window": window,
+                        "result": None,
+                        "error": f"Could not read the Attempt log: {exc}",
+                    },
+                )
+            result = read_history(
+                exec_result.stdout, exec_result.returncode, now=now_ts, window=window
+            )
+        else:
+            try:
+                tree = await gw.copy_logs(row.container_id)
+            except FileNotFoundError:
+                return templates.TemplateResponse(
+                    request,
+                    "history.html",
+                    {
+                        **context(request),
+                        "row": row,
+                        "name": name,
+                        "window": window,
+                        "result": None,
+                        "error": "Attempt logs are unavailable for this instance: "
+                        "its volume is gone or it holds no logs.",
+                    },
+                )
+            except (GatewayError, ValueError) as exc:
+                return templates.TemplateResponse(
+                    request,
+                    "history.html",
+                    {
+                        **context(request),
+                        "row": row,
+                        "name": name,
+                        "window": window,
+                        "result": None,
+                        "error": f"Could not read the Attempt log: {exc}",
+                    },
+                )
+            result = read_stopped_history(tree, now=now_ts, window=window)
         if not result.ok:
             return templates.TemplateResponse(
                 request,
@@ -749,12 +800,13 @@ def create_app(
 
         Static with manual refresh (no stream subscription): the kept
         events for one attempt are read on demand with a single gateway
-        exec, running managed instances only. An unknown instance, a
-        stopped instance, an invalid reference, an unreadable log and an
-        unrecognised layout each render a clear message with status 200,
-        never an error. An attempt without limit readings renders a
-        "no progress data" note; an active attempt renders its partial
-        chart with a still-running note.
+        exec for running instances, or a ``docker cp`` run copy for
+        stopped ones. An unknown instance, a gone volume, an invalid
+        reference, an unreadable log and an unrecognised layout each
+        render a clear message with status 200, never an error. An
+        attempt without limit readings renders a "no progress data" note;
+        an active attempt renders its partial chart with a still-running
+        note.
         """
 
         def progress_page(
@@ -783,27 +835,40 @@ def create_app(
                 None,
                 f"Unknown Managed instance {name!r}: it is unknown or was removed.",
             )
-        if row.state != "running":
-            return progress_page(
-                row,
-                "Attempt progress is available for running managed instances only.",
-            )
         try:
             number, dash_started = validate_attempt_ref(issue, started)
         except ValueError as exc:
             return progress_page(row, f"Invalid attempt reference: {exc}")
-        try:
-            exec_result = await gw.attempt_events(
-                row.container_id, number, dash_started
+        # Stopped containers cannot run ``docker exec``: their events
+        # arrive through a ``docker cp`` run copy parsed on the dashboard
+        # side, with the same tolerance rules as the exec reader.
+        if row.state == "running":
+            try:
+                exec_result = await gw.attempt_events(
+                    row.container_id, number, dash_started
+                )
+            except (GatewayError, ValueError) as exc:
+                return progress_page(row, f"Could not read the Attempt log: {exc}")
+            result = read_progress(
+                exec_result.stdout,
+                exec_result.returncode,
+                issue=number,
+                started=dash_started,
             )
-        except (GatewayError, ValueError) as exc:
-            return progress_page(row, f"Could not read the Attempt log: {exc}")
-        result = read_progress(
-            exec_result.stdout,
-            exec_result.returncode,
-            issue=number,
-            started=dash_started,
-        )
+        else:
+            try:
+                tree = await gw.copy_run(row.container_id, number, dash_started)
+            except FileNotFoundError:
+                return progress_page(
+                    row,
+                    "Attempt not found in this instance: "
+                    "its volume is gone or the attempt is no longer stored.",
+                )
+            except (GatewayError, ValueError) as exc:
+                return progress_page(row, f"Could not read the Attempt log: {exc}")
+            result = read_stopped_progress(
+                tree, issue=number, started=dash_started
+            )
         if not result.ok:
             return progress_page(row, result.error, result=result)
         series = progress_series(result)
@@ -859,11 +924,12 @@ def create_app(
         """Attempt log page: header plus the full ordered event stream.
 
         Static with manual refresh (no stream subscription): one attempt's
-        summary and events are read on demand with a single gateway exec,
-        running managed instances only. An unknown instance, a stopped
-        instance, an invalid reference, an unreadable log and an unrecognised
-        layout each render a clear message with status 200, never an error.
-        The stream is server-paged at 200 rows.
+        summary and events are read on demand with a single gateway exec
+        for running instances, or a ``docker cp`` run copy for stopped
+        ones. An unknown instance, a gone volume, an invalid reference, an
+        unreadable log and an unrecognised layout each render a clear
+        message with status 200, never an error. The stream is server-paged
+        at 200 rows.
         """
 
         def log_page(
@@ -944,15 +1010,6 @@ def create_app(
                 reset_url=base_url,
                 refresh_url=base_url,
             )
-        if row.state != "running":
-            base_url = attempt_base_url("")
-            return log_page(
-                row,
-                "Attempt logs are available for running managed instances only.",
-                attempt_url=base_url,
-                reset_url=base_url,
-                refresh_url=base_url,
-            )
         try:
             number, dash = validate_attempt_ref(issue, started)
         except ValueError as exc:
@@ -965,33 +1022,64 @@ def create_app(
                 refresh_url=base_url,
             )
         base_url = attempt_base_url(dash)
-        try:
-            exec_result = await gw.attempt_log(row.container_id, number, dash)
-        except (GatewayError, ValueError) as exc:
-            return log_page(
-                row,
-                f"Could not read the Attempt log: {exc}",
-                dash_started=dash,
-                attempt_url=base_url,
-                reset_url=base_url,
-                refresh_url=base_url,
+        # Stopped containers cannot run ``docker exec``: the header, the
+        # event stream and the file listing arrive through a ``docker cp``
+        # run copy parsed on the dashboard side, with the same tolerance
+        # rules as the exec readers. A missing run directory (a gone
+        # volume, or an attempt no longer stored) renders a clear message.
+        if row.state == "running":
+            try:
+                exec_result = await gw.attempt_log(row.container_id, number, dash)
+            except (GatewayError, ValueError) as exc:
+                return log_page(
+                    row,
+                    f"Could not read the Attempt log: {exc}",
+                    dash_started=dash,
+                    attempt_url=base_url,
+                    reset_url=base_url,
+                    refresh_url=base_url,
+                )
+            try:
+                run_files = await gw.list_run_files(row.container_id, number, dash)
+            except (GatewayError, ValueError, FileNotFoundError):
+                run_files = []
+            result = read_attempt_log(
+                exec_result.stdout,
+                exec_result.returncode,
+                issue=number,
+                started=dash,
             )
-        try:
-            run_files = await gw.list_run_files(row.container_id, number, dash)
-        except (GatewayError, ValueError, FileNotFoundError):
-            run_files = []
+        else:
+            try:
+                tree = await gw.copy_run(row.container_id, number, dash)
+            except FileNotFoundError:
+                return log_page(
+                    row,
+                    "Attempt not found in this instance: "
+                    "its volume is gone or the attempt is no longer stored.",
+                    dash_started=dash,
+                    attempt_url=base_url,
+                    reset_url=base_url,
+                    refresh_url=base_url,
+                )
+            except (GatewayError, ValueError) as exc:
+                return log_page(
+                    row,
+                    f"Could not read the Attempt log: {exc}",
+                    dash_started=dash,
+                    attempt_url=base_url,
+                    reset_url=base_url,
+                    refresh_url=base_url,
+                )
+            result, run_files = read_stopped_attempt_log(
+                tree, issue=number, started=dash
+            )
         command_logs = tuple(
             sorted(
                 name
                 for name in run_files
                 if isinstance(name, str) and COMMAND_LOG_RE.fullmatch(name) is not None
             )
-        )
-        result = read_attempt_log(
-            exec_result.stdout,
-            exec_result.returncode,
-            issue=number,
-            started=dash,
         )
         if not result.ok:
             return log_page(
@@ -1082,8 +1170,8 @@ def create_app(
         fetches this into the slot directly under the row; activating it
         again closes the slot. The file name passes the read allow-list here
         and again inside the gateway: a failure returns 404 without any
-        Docker call. Every other problem (unknown instance, stopped
-        instance, invalid reference, gateway error, missing file,
+        Docker call. Every other problem (unknown instance,
+        invalid reference, gateway error, missing file,
         unrecognised tar shape) renders a clear message with status 200,
         never an error. ``?raw=1`` shows the text as read; the default view
         pretty-prints JSON and falls back to raw text past the 256 KiB cap
@@ -1125,10 +1213,8 @@ def create_app(
             return fragment(
                 f"Unknown Managed instance {name!r}: it is unknown or was removed."
             )
-        if row.state != "running":
-            return fragment(
-                "Attempt logs are available for running managed instances only."
-            )
+        # Evidence files arrive via ``docker cp``, which works on stopped
+        # containers too, so no running-instance guard is needed here.
         try:
             number, dash = validate_attempt_ref(issue, started)
         except ValueError as exc:
@@ -1171,8 +1257,8 @@ def create_app(
         The same ``read_file`` gateway operation as the inline preview but
         with no cap, sent to the client as a chunked stream. The file name
         passes the read allow-list first: a failure returns 404 without any
-        Docker call. Every other problem (unknown instance, stopped
-        instance, invalid reference, gateway error, missing file) renders a
+        Docker call. Every other problem (unknown instance,
+        invalid reference, gateway error, missing file) renders a
         clear message with status 200, never an error.
         """
         try:
@@ -1187,10 +1273,8 @@ def create_app(
             return PlainTextResponse(
                 f"Unknown Managed instance {name!r}: it is unknown or was removed."
             )
-        if row.state != "running":
-            return PlainTextResponse(
-                "Attempt logs are available for running managed instances only."
-            )
+        # Evidence files arrive via ``docker cp``, which works on stopped
+        # containers too, so no running-instance guard is needed here.
         try:
             number, dash = validate_attempt_ref(issue, started)
         except ValueError as exc:

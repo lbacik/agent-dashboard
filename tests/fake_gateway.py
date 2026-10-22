@@ -11,7 +11,9 @@ version".
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import tarfile
 
 from agent_dashboard.gateway import (
     EVIDENCE_PREVIEW_CAP,
@@ -24,6 +26,22 @@ from agent_dashboard.gateway import (
 DEFAULT_SCRIPT = TelemetryExec(stdout=b"", returncode=2)
 
 
+def make_logs_tree(entries: dict[str, bytes]) -> bytes:
+    """Build a ``docker cp /data/logs`` tar: names like ``logs/98/<started>/attempt.json``."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for name, data in entries.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def make_run_tree(entries: dict[str, bytes]) -> bytes:
+    """Build a ``docker cp`` run-directory tar: names like ``<started>/attempt.json``."""
+    return make_logs_tree(entries)
+
+
 class FakeGateway:
     def __init__(self, rows=None, error=None):
         self._rows = list(rows or [])
@@ -34,6 +52,8 @@ class FakeGateway:
         self._logs: dict[str, TelemetryExec | Exception] = {}
         self._run_files: dict[tuple[str, str, str], list[str] | Exception] = {}
         self._files: dict[tuple[str, str, str, str], FileResult | Exception] = {}
+        self._logs_trees: dict[str, bytes | Exception] = {}
+        self._run_trees: dict[tuple[str, str, str], bytes | Exception] = {}
         self.delay = 0.0
         self.history_delay = 0.0
         self.history_delays: dict[str, float] = {}
@@ -44,6 +64,8 @@ class FakeGateway:
         self.log_calls: list[tuple[str, str, str]] = []
         self.run_files_calls: list[tuple[str, str, str]] = []
         self.file_calls: list[tuple[str, str, str, str]] = []
+        self.logs_tree_calls: list[str] = []
+        self.run_tree_calls: list[tuple[str, str, str]] = []
         self.in_flight = 0
         self.peak_in_flight = 0
         self.per_id_in_flight: dict[str, int] = {}
@@ -221,6 +243,45 @@ class FakeGateway:
         if isinstance(scripted, Exception):
             raise scripted
         return list(scripted)
+
+    def set_logs_tree(
+        self, container_id: str, data: bytes | Exception
+    ) -> None:
+        self._logs_trees[container_id] = data
+
+    def set_run_tree(
+        self,
+        container_id: str,
+        issue: int | str,
+        started: str,
+        data: bytes | Exception,
+    ) -> None:
+        self._run_trees[(container_id, str(issue), started)] = data
+
+    async def copy_logs(self, container_id: str) -> bytes:
+        """One scripted logs-tree copy; unscripted trees report not found."""
+        self.logs_tree_calls.append(container_id)
+        scripted = self._logs_trees.get(
+            container_id, FileNotFoundError("attempt logs not found")
+        )
+        if isinstance(scripted, Exception):
+            raise scripted
+        assert isinstance(scripted, bytes)
+        return scripted
+
+    async def copy_run(
+        self, container_id: str, issue: int | str, started: str
+    ) -> bytes:
+        """One scripted run-directory copy; unscripted runs report not found."""
+        self.run_tree_calls.append((container_id, str(issue), started))
+        scripted = self._run_trees.get(
+            (container_id, str(issue), started),
+            FileNotFoundError(f"attempt not found: {issue}/{started}"),
+        )
+        if isinstance(scripted, Exception):
+            raise scripted
+        assert isinstance(scripted, bytes)
+        return scripted
 
     def set_file(
         self,

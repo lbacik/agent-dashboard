@@ -22,15 +22,21 @@ that point at an Evidence file offer an inline preview under the row
 order and say so), with a formatted/raw toggle and a download link for the
 whole file.
 
-Running instances only: `docker exec` fails on stopped containers, so a
-stopped instance renders "Attempt logs are available for running managed
-instances only" instead of its log.
+Stopped instances stay readable: `docker exec` fails on stopped containers,
+so the attempt list and the per-attempt event stream arrive via `docker cp`
+tree copies parsed dashboard-side ([ADR
+0005](docs/adr/0005-stopped-instance-logs-via-docker-cp.md)). A stopped
+instance whose volume is gone renders "its volume is gone or it holds no
+logs" instead of its log.
 
 Read paths (all on `/data/logs`, all built by the gateway, the only module
-that assembles Docker argv): `docker exec` runs fixed collectors — one exec
-for the whole attempts list, one for a single attempt's event stream, and
-`ls -1` for a run's file names — while single files arrive via `docker cp`
-(a tar stream the reader untars, expecting exactly one regular file).
+that assembles Docker argv): `docker exec` runs fixed collectors on running
+instances — one exec for the whole attempts list, one for a single attempt's
+event stream, and `ls -1` for a run's file names — while stopped instances
+read the same bytes via `docker cp` tree copies (`/data/logs` for the list,
+one run directory for a single attempt), and single files arrive via
+`docker cp` (a tar stream the reader untars, expecting exactly one regular
+file).
 Previews show the first 256 KiB with a visible truncation marker and the
 true total; downloads stream the whole file. File names pass a read
 allow-list in the route layer and again inside the gateway, so traversal
