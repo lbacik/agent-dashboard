@@ -1,7 +1,13 @@
 {# Instance drawer fragment: also rendered inside index.html when
    ?instance=<name> is present, so the open drawer survives a reload.
    `row` is the FleetRow (None when the instance is unknown or removed);
-   `name` is the requested instance name. #}
+   `name` is the requested instance name.
+   The `<aside>` is the scroll container, so it stays in place across the
+   `sse:fleet` refresh: the refresh swaps only the inner content
+   (`hx-target="this"` with `hx-select=".drawer-inner"`), keeping the
+   scroll position. `hx-disinherit="*"` keeps children that fetch on their
+   own (load-once widgets with `hx-preserve`) from inheriting the drawer's
+   own fetch attributes. #}
 {% macro fig(f) -%}
 <div class="figure">{{ f.text }}{% if f.basis %} <span class="basis">{{ f.basis }}</span>{% endif %}</div>
 {%- endmacro %}
@@ -9,8 +15,11 @@
 <aside id="drawer" class="drawer"
        hx-get="/instances/{{ name | urlencode }}"
        hx-trigger="sse:fleet"
-       hx-target="#drawer-holder"
-       hx-swap="innerHTML">
+       hx-target="this"
+       hx-select=".drawer-inner"
+       hx-swap="innerHTML"
+       hx-disinherit="*">
+  <div class="drawer-inner">
   <div class="drawer-head">
     <div>
       <h2 class="drawer-title">{{ name }}</h2>
@@ -18,14 +27,18 @@
     </div>
     <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
   </div>
+  </div>
 </aside>
 {% else %}
 {% set d = row.drawer %}
 <aside id="drawer" class="drawer"
        hx-get="/instances/{{ row.name | urlencode }}"
        hx-trigger="sse:fleet"
-       hx-target="#drawer-holder"
-       hx-swap="innerHTML">
+       hx-target="this"
+       hx-select=".drawer-inner"
+       hx-swap="innerHTML"
+       hx-disinherit="*">
+  <div class="drawer-inner">
   <div class="drawer-head">
     <div>
       <h2 class="drawer-title">{{ row.name }}</h2>
@@ -142,5 +155,6 @@
     {% endif %}
   </section>
   {% endif %}
+  </div>
 </aside>
 {% endif %}

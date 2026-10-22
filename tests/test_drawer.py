@@ -10,9 +10,10 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
-from test_web import load_snapshot, make_fleet_client
+from test_web import load_snapshot, make_client, make_fleet_client
 
 from agent_dashboard.collector import run_cycle
+from agent_dashboard.gateway import ManagedInstance
 
 EXAMPLES = [
     "snapshot-attempt-in-progress.json",
@@ -173,11 +174,115 @@ def test_drawer_unknown_instance_is_gone():
 
 
 def test_drawer_removed_instance_is_gone():
+    client, state, gateway = make_fleet_client(
+        {"work": load_snapshot(EXAMPLES[0]), "other": load_snapshot(EXAMPLES[0])}
+    )
+    assert "640,000" in client.get("/instances/work").text
+    # Only "work" disappears; the fleet itself is still polled, so the
+    # drawer for a really removed instance renders the gone fragment.
+    gateway.set_rows([ManagedInstance("other", "id-other", "running")])
+    asyncio.run(run_cycle(state, gateway, now=time.time()))
+    gone = client.get("/instances/work")
+    assert gone.status_code == 200
+    assert "gone" in gone.text.lower()
+    assert "640,000" in client.get("/instances/other").text
+
+
+def test_drawer_empty_fleet_refresh_keeps_drawer():
+    """An empty fleet never turns an open drawer into "gone".
+
+    Before the first poll cycle (and whenever a discovery cycle comes
+    back empty) the refresh answers 204, so htmx performs no swap and
+    the open drawer keeps its last snapshot. This was the self-closing:
+    one empty discovery cycle flipped a live drawer into "This instance
+    is gone" right after new data was read, then back on the next cycle.
+    """
     client, state, gateway = make_fleet_client({"work": load_snapshot(EXAMPLES[0])})
     assert "640,000" in client.get("/instances/work").text
+    # A discovery cycle that comes back empty is transient: keep the drawer.
     gateway.set_rows([])
     asyncio.run(run_cycle(state, gateway, now=time.time()))
-    assert "gone" in client.get("/instances/work").text.lower()
+    kept = client.get("/instances/work")
+    assert kept.status_code == 204
+    assert kept.text == ""
+    # The drawer heals on its own when discovery reports the instance again.
+    gateway.set_rows([ManagedInstance("work", "id-work", "running")])
+    gateway.set_snapshot("id-work", load_snapshot(EXAMPLES[0]))
+    asyncio.run(run_cycle(state, gateway, now=time.time()))
+    healed = client.get("/instances/work")
+    assert healed.status_code == 200
+    assert "640,000" in healed.text
+
+
+def test_drawer_startup_empty_fleet_refresh_keeps_drawer():
+    """Before the first poll cycle the drawer refresh answers 204."""
+    client, _ = make_client([])
+    response = client.get("/instances/work")
+    assert response.status_code == 204
+    assert response.text == ""
+
+
+def test_drawer_refresh_swaps_inner_content_only():
+    """The aside stays in place: inner swap keeps the scroll container."""
+    body = open_drawer("snapshot-attempt-in-progress.json")
+    assert 'hx-target="this"' in body
+    assert 'hx-select=".drawer-inner"' in body
+    assert 'hx-disinherit="*"' in body
+    assert 'hx-target="#drawer-holder"' not in body
+    assert body.count('id="drawer"') == 1
+    assert body.count('class="drawer-inner"') == 1
+
+
+def test_drawer_refresh_updates_every_figure():
+    """A live refresh re-renders the drawer from the newest snapshot."""
+    client, state, gateway = make_fleet_client({"work": load_snapshot(EXAMPLES[0])})
+    first = client.get("/instances/work")
+    assert first.status_code == 200
+    assert "640,000" in first.text
+    assert 'id="drawer"' in first.text
+    snap = load_snapshot(EXAMPLES[0])
+    snap["current_attempt"]["budget"]["used"]["value"] = 700000
+    snap["current_attempt"]["issue_title"] = "Refreshed title for the live update"
+    snap["control"]["active_attempt"]["issue_title"] = "Refreshed title for the live update"
+    gateway.set_snapshot("id-work", snap)
+    asyncio.run(run_cycle(state, gateway, now=time.time()))
+    second = client.get("/instances/work")
+    assert second.status_code == 200
+    assert "700,000" in second.text
+    assert "640,000" not in second.text
+    assert "Refreshed title for the live update" in second.text
+    assert "synthetic widget panel" not in second.text
+    assert second.text.count('id="drawer"') == 1
+
+
+def test_drawer_failed_poll_keeps_snapshot():
+    """A transient poll failure never turns an open drawer into "gone".
+
+    Only a good poll replaces the snapshot; any other outcome keeps the
+    last good one, so the refresh keeps rendering figures (stale) with
+    status 200 instead of the gone fragment.
+    """
+    client, state, gateway = make_fleet_client({"work": load_snapshot(EXAMPLES[0])})
+    assert "640,000" in client.get("/instances/work").text
+    gateway.set_error_code("id-work", "agent_unreachable", "no socket")
+    asyncio.run(run_cycle(state, gateway, now=time.time()))
+    stale = client.get("/instances/work")
+    assert stale.status_code == 200
+    assert "640,000" in stale.text
+    assert "gone" not in stale.text.lower()
+
+
+def test_drawer_helpers_keep_scroll_and_drop_instance_param():
+    client, _, _ = make_fleet_client({"work": load_snapshot(EXAMPLES[0])})
+    static = client.get("/static/drawer.js")
+    assert static.status_code == 200
+    # Closing the drawer empties the holder and drops ?instance=, so a
+    # reload does not reopen it.
+    assert 'searchParams.delete("instance")' in static.text
+    # The in-place refresh keeps the aside's scroll position.
+    assert "scrollTop" in static.text
+    assert "htmx:beforeSwap" in static.text
+    assert "htmx:afterSwap" in static.text
 
 
 def test_drawer_skewed_snapshot_renders():
