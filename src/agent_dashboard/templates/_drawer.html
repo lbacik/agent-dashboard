@@ -53,6 +53,15 @@
     </div>
     <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
   </div>
+  <section class="drawer-section ctl" id="control-console-{{ ctl_slug }}" hx-preserve>
+    <h3>Control console</h3>
+    <div class="ctl-body"
+         hx-get="/instances/{{ row.name | urlencode }}/control"
+         hx-trigger="load, sse:fleet[!this.querySelector('.ctl-confirm') && !this.contains(document.activeElement)]"
+         hx-swap="innerHTML">
+      <p class="hint">Loading control…</p>
+    </div>
+  </section>
   {% set slot_id = "stats-" ~ (row.name | replace(" ", "-") | replace(".", "-")) %}
   <div id="{{ slot_id }}" hx-preserve
        hx-get="/instances/{{ row.name | urlencode }}/stats" hx-trigger="load" hx-swap="innerHTML">

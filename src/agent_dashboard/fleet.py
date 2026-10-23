@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -48,6 +49,11 @@ class FleetRow:
     drawer: DrawerDetail | None = None
     live_url: str | None = None
     live_issue: int | None = None
+    # Raw control section for the Control console availability: the value
+    # plus whether the snapshot key was absent (missing vs null matters).
+    control_raw: Any = None
+    control_raw_missing: bool = False
+    control_age_text: str | None = None
 
 
 @dataclass
@@ -197,6 +203,21 @@ class FleetState:
         rank = attention_rank(reach, detail, has_snapshot=has_snapshot)
         drawer = read_drawer(entry.snapshot, control_stale=detail.control_stale)
         live_url, live_issue = FleetState._live_link(entry.name, drawer)
+        control_raw: Any = None
+        control_raw_missing = False
+        control_age_text: str | None = None
+        if isinstance(entry.snapshot, dict):
+            if "control" not in entry.snapshot:
+                control_raw_missing = True
+            else:
+                control_raw = entry.snapshot.get("control")
+            section = entry.snapshot.get("control")
+            if isinstance(section, dict):
+                observed = section.get("control_observed_at")
+                if isinstance(observed, str) and observed.strip():
+                    control_age_text = format_age(
+                        max(0.0, now - _parse_control_time(observed, now))
+                    )
         return FleetRow(
             name=entry.name,
             state=entry.container_state,
@@ -211,7 +232,24 @@ class FleetState:
             drawer=drawer,
             live_url=live_url,
             live_issue=live_issue,
+            control_raw=control_raw,
+            control_raw_missing=control_raw_missing,
+            control_age_text=control_age_text,
         )
+
+
+def _parse_control_time(raw: str, now: float) -> float:
+    """Parse ``control_observed_at``; unparseable reads as now (age zero)."""
+    try:
+        text = raw.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        moment = datetime.fromisoformat(text)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        return moment.timestamp()
+    except ValueError:
+        return now
 
 
 async def poll_forever(

@@ -250,6 +250,19 @@ table.fleet td.headline { min-width: 14rem; }
   white-space: nowrap;
 }
 
+/* Control console composer: one stacked radio per action. A disabled
+   action stays visible, greyed and struck through, with its reason under
+   the label; the state never relies on colour alone. Light theme only,
+   tokens from :root. */
+.ctl-unavailable, .ctl-stale { color: var(--muted); font-size: 0.88rem; }
+.ctl-actions { display: flex; flex-direction: column; gap: 0.35rem; }
+.ctl-opt { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem; }
+.ctl-opt.is-disabled { color: var(--muted); }
+.ctl-opt.is-disabled .ctl-label { text-decoration: line-through; }
+.ctl-reason, .ctl-note { font-size: 0.82rem; color: var(--muted); }
+.ctl-preview { font-family: monospace; font-size: 0.85rem; }
+.ctl-preview .ctl-prompt { color: var(--muted); }
+
 .budget-bar {
   position: relative;
   height: 0.6rem;
