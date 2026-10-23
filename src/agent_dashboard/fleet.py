@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import quote
 
 from .collector import GOOD, InstancePoll, run_cycle
+from .control import fleet_chips
 from .drawer import DrawerDetail, read_drawer
 from .gateway import ManagedInstance, validate_attempt_ref
 from .presentation import (
@@ -54,6 +55,9 @@ class FleetRow:
     control_raw: Any = None
     control_raw_missing: bool = False
     control_age_text: str | None = None
+    # Command-state chips for the Intake cell, from the latest good
+    # snapshot's ``control`` section only (spec 8.1).
+    control_chips: tuple[str, ...] = ()
 
 
 @dataclass
@@ -206,6 +210,7 @@ class FleetState:
         control_raw: Any = None
         control_raw_missing = False
         control_age_text: str | None = None
+        control_chips: tuple[str, ...] = ()
         if isinstance(entry.snapshot, dict):
             if "control" not in entry.snapshot:
                 control_raw_missing = True
@@ -213,6 +218,7 @@ class FleetState:
                 control_raw = entry.snapshot.get("control")
             section = entry.snapshot.get("control")
             if isinstance(section, dict):
+                control_chips = fleet_chips(section)
                 observed = section.get("control_observed_at")
                 if isinstance(observed, str) and observed.strip():
                     control_age_text = format_age(
@@ -235,6 +241,7 @@ class FleetState:
             control_raw=control_raw,
             control_raw_missing=control_raw_missing,
             control_age_text=control_age_text,
+            control_chips=control_chips,
         )
 
 

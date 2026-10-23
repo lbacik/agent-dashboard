@@ -27,4 +27,13 @@
   <p class="ctl-preview"><span class="ctl-prompt">$</span> <code>agentctl <span data-preview>{% if first %}{{ first.command }}{% else %}(choose an action){% endif %}</span></code></p>
   <button type="submit" class="btn ctl-review"{% if not first %} disabled{% endif %}>Review…</button>
 </form>
+<details class="ctl-timeline" data-persist="control-timeline" open>
+  <summary>Commands (last 10 from telemetry){% if commands_summary is defined %} <span id="ctl-timeline-summary-{{ slug }}" class="ctl-timeline-sum">{{ commands_summary }}</span>{% endif %}</summary>
+  <div class="ctl-timeline-list"
+       hx-get="{{ commands_url }}"
+       hx-trigger="sse:fleet"
+       hx-swap="innerHTML">
+    {% include "_control_commands_list.html" %}
+  </div>
+</details>
 {% endif %}

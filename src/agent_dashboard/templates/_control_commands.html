@@ -1,0 +1,5 @@
+{# Timeline refresh fragment (spec 8.5): the entries plus the collapsed
+   summary out of band, so a refresh never opens or closes the `<details>`.
+   This fragment holds no `<details>` of its own. #}
+<span id="ctl-timeline-summary-{{ slug }}" hx-swap-oob="true">{{ commands_summary }}</span>
+{% include "_control_commands_list.html" %}

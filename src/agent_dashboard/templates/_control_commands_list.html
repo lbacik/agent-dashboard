@@ -1,0 +1,25 @@
+{# Command timeline entries (spec 8.5): the list half of the timeline.
+   Shared by the console body (initial render) and the `/control/commands`
+   refresh fragment (which adds the out-of-band summary on top). Agent text
+   (`detail`) renders through autoescape, never `|safe`. #}
+{% if not commands %}
+<p class="hint">No commands recorded.</p>
+{% else %}
+<ol class="ctl-entries">
+  {% for c in commands %}
+  <li class="ctl-entry">
+    <span class="ctl-seq">#{{ c.sequence if c.sequence is not none else "—" }}</span>
+    <span class="ctl-kind">{{ c.kind_label }}</span>
+    <span class="ctl-origin">{{ c.origin }}</span>
+    <code class="ctl-req">{{ c.request_id }}</code>
+    <span class="ctl-time">{{ c.short_time }}</span>
+    <ol class="ctl-steps">
+      {% for s in c.steps %}
+      <li class="ctl-step is-{{ s.state }}">{{ s.label }}</li>
+      {% endfor %}
+    </ol>
+    {% if c.detail %}<p class="ctl-detail">{{ c.detail }}</p>{% endif %}
+  </li>
+  {% endfor %}
+</ol>
+{% endif %}

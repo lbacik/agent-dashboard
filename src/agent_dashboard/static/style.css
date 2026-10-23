@@ -263,6 +263,55 @@ table.fleet td.headline { min-width: 14rem; }
 .ctl-preview { font-family: monospace; font-size: 0.85rem; }
 .ctl-preview .ctl-prompt { color: var(--muted); }
 
+/* Fleet Intake command-state chips (spec 8.1): text, never colour alone.
+   They take the Intake cell's stale styling when the control state is
+   stale. */
+.ctl-chip {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.ctl-chip.is-stale {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  border-color: var(--warn-bg);
+}
+
+/* Command timeline under the composer (spec 8.5): a collapsible list of
+   the last 10 commands with a lifecycle stepper per entry. Steps are
+   text, never colour alone. */
+.ctl-timeline { margin-top: 1rem; }
+.ctl-timeline > summary { cursor: pointer; font-size: 0.9rem; }
+.ctl-timeline-sum { color: var(--muted); font-size: 0.82rem; }
+.ctl-entries { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+.ctl-entry {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+.ctl-seq { font-weight: 700; }
+.ctl-kind { font-weight: 600; }
+.ctl-origin {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+.ctl-req { overflow-wrap: anywhere; }
+.ctl-time { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+.ctl-steps { list-style: none; display: flex; flex-wrap: wrap; gap: 0.25rem 0.6rem; margin: 0.35rem 0 0; padding: 0; font-size: 0.8rem; }
+.ctl-step { color: var(--muted); }
+.ctl-step.is-done { color: var(--ink); }
+.ctl-step.is-done::before { content: "✓ "; }
+.ctl-step.is-current { color: var(--ink); font-weight: 700; text-decoration: underline; }
+.ctl-detail { margin: 0.35rem 0 0; overflow-wrap: anywhere; }
+
 .budget-bar {
   position: relative;
   height: 0.6rem;
