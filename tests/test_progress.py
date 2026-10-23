@@ -750,11 +750,11 @@ def test_progress_page_has_sticky_breadcrumb_topbar():
         f"#98 · {STARTED_COLON}</a>"
     ) in nav
     assert '<span aria-current="page">Progress</span>' in body
-    # The on-demand note and Refresh live in the sticky bar.
-    subnav = body.split('<div class="subnav">', 1)[1].split("</div>", 1)[0]
-    assert "data is read on demand" in subnav
-    assert ">Refresh</a>" in subnav
-    assert f"/instances/work/attempts/98/{STARTED_DASH}/progress" in subnav.replace(
+    # The on-demand note and Refresh live in the pinned header.
+    actions = body.split('<div class="topbar-actions">', 1)[1].split("</div>", 1)[0]
+    assert "data is read on demand" in actions
+    assert ">Refresh</a>" in actions
+    assert f"/instances/work/attempts/98/{STARTED_DASH}/progress" in actions.replace(
         "&amp;", "&"
     )
     # The bottom escape hatches are gone.

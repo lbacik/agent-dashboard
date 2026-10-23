@@ -10,9 +10,28 @@
   <script src="/static/sse.js" defer></script>
 </head>
 <body>
-  <header class="topbar">
-    <h1>Agent fleet dashboard</h1>
-    <p class="subtitle">Managed instances on this Docker host</p>
+  {# Pages below the fleet view pass a breadcrumb trail; their header pins
+     and carries the trail plus the page's on-demand note and Refresh. #}
+  <header class="topbar{% if breadcrumbs is defined %} pinned{% endif %}">
+    <div class="topbar-title">
+      <h1>Agent fleet dashboard</h1>
+      {% if breadcrumbs is defined %}
+      <nav aria-label="Breadcrumb">
+        <ol class="crumbs">
+          {% for crumb in breadcrumbs %}
+          {% if crumb.url is not none %}
+          <li><a href="{{ crumb.url }}">{{ crumb.label }}</a></li>
+          {% else %}
+          <li><span aria-current="page">{{ crumb.label }}</span></li>
+          {% endif %}
+          {% endfor %}
+        </ol>
+      </nav>
+      {% else %}
+      <p class="subtitle">Managed instances on this Docker host</p>
+      {% endif %}
+    </div>
+    {% block topbar_actions %}{% endblock %}
   </header>
   <main class="container">
     {% block content %}{% endblock %}

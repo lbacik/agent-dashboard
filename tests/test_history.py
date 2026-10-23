@@ -1192,10 +1192,10 @@ def test_history_page_has_sticky_breadcrumb_topbar():
     assert '<span aria-current="page">work</span>' in body
     # The current crumb is text, never a link.
     assert 'href="/instances/work/history"' not in body.split("Breadcrumb")[1].split("</nav>")[0]
-    # The on-demand note and Refresh live in the sticky bar.
-    subnav = body.split('<div class="subnav">', 1)[1].split("</div>", 1)[0]
-    assert "data is read on demand" in subnav
-    assert ">Refresh</a>" in subnav
+    # The on-demand note and Refresh live in the pinned header.
+    actions = body.split('<div class="topbar-actions">', 1)[1].split("</div>", 1)[0]
+    assert "data is read on demand" in actions
+    assert ">Refresh</a>" in actions
     # The bottom "Back to the fleet" escape hatch is gone.
     assert "Back to the fleet" not in body
 
@@ -1203,8 +1203,8 @@ def test_history_page_has_sticky_breadcrumb_topbar():
 def test_history_refresh_keeps_the_selected_range():
     client, _ = _history_client_with_aged_attempts()
     body = client.get("/instances/work/history?preset=7d").text
-    subnav = body.split('<div class="subnav">', 1)[1].split("</div>", 1)[0]
-    assert "/instances/work/history?preset=7d" in subnav.replace("&amp;", "&")
+    actions = body.split('<div class="topbar-actions">', 1)[1].split("</div>", 1)[0]
+    assert "/instances/work/history?preset=7d" in actions.replace("&amp;", "&")
 
 
 def test_history_breadcrumb_renders_for_unknown_instance_and_errors():
@@ -1239,21 +1239,39 @@ def test_fleet_view_has_no_breadcrumb_and_header_is_not_sticky():
     client, _ = make_client([("worker-a", "running")])
     body = client.get("/").text
     assert 'aria-label="Breadcrumb"' not in body
-    assert 'class="subnav"' not in body
     assert 'class="crumbs"' not in body
+    assert '<header class="topbar">' in body
+    assert "topbar-actions" not in body
+    assert "Managed instances on this Docker host" in body
     css = client.get("/static/style.css").text
-    # The history bar pins; the fleet header stays static.
-    assert "position: sticky" in css.split(".subnav", 1)[1].split("}", 1)[0]
+    # Subpage headers pin; the fleet header stays static.
+    assert "position: sticky" in css.split(".topbar.pinned {", 1)[1].split("}", 1)[0]
     topbar = css.split(".topbar {", 1)[1].split("}", 1)[0]
     assert "sticky" not in topbar
 
 
-def test_subnav_wraps_without_horizontal_scroll_and_uses_tokens():
+def test_subpage_header_is_the_only_bar_and_pins():
+    client, _, _ = make_history_client(
+        [("work", "running")], {"id-work": _history_payload_old_and_recent()}
+    )
+    body = client.get("/instances/work/history").text
+    # One header carries the breadcrumb and Refresh; no second bar below it.
+    assert '<header class="topbar pinned">' in body
+    header = body.split("<header", 1)[1].split("</header>", 1)[0]
+    assert '<nav aria-label="Breadcrumb">' in header
+    assert ">Refresh</a>" in header
+    assert body.count('<nav aria-label="Breadcrumb">') == 1
+    assert "subnav" not in body
+    # The breadcrumb takes the fleet subtitle's place.
+    assert "Managed instances on this Docker host" not in body
+
+
+def test_pinned_header_wraps_without_horizontal_scroll_and_uses_tokens():
     from test_web import make_client
 
     client, _ = make_client([("worker-a", "running")])
     css = client.get("/static/style.css").text
-    block = css.split(".subnav {", 1)[1].split("}", 1)[0]
+    block = css.split(".topbar.pinned {", 1)[1].split("}", 1)[0]
     assert "flex-wrap: wrap" in block
     assert "max-width: 100%" in block
     crumbs = css.split(".crumbs li {", 1)[1].split("}", 1)[0]
