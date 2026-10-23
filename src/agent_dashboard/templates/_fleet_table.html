@@ -34,7 +34,7 @@
       <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{{ row.detail.repository_display }}</div></td>
       <td class="headline">{{ row.headline }}</td>
       <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.reach != "live" and row.age_text %} <span class="age">{{ row.age_text }} ago</span>{% endif %}</td>
-      <td>{{ row.detail.intake_text }}{% if row.detail.intake_stale %} <span class="stale-tag">stale</span>{% endif %}{% for chip in row.control_chips %} <span class="ctl-chip{% if row.detail.intake_stale %} is-stale{% endif %}">{{ chip }}</span>{% endfor %}</td>
+      <td>{{ row.detail.intake_text }}{% if row.detail.intake_stale %} <span class="stale-tag">stale</span>{% endif %}{% for chip in row.control_chips %} <span class="ctl-chip{% if row.detail.control_stale %} is-stale{% endif %}">{{ chip }}</span>{% endfor %}</td>
       <td>{{ row.detail.attempt_text }}{% if row.detail.attempt_stale %} <span class="stale-tag">stale</span>{% endif %}</td>
       <td>
         {% if row.detail.budget_has_bar %}

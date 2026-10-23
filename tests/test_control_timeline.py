@@ -171,6 +171,17 @@ def test_timeline_handoff_without_match_has_no_extra_steps():
     assert body.count("model work") == 0
 
 
+def test_timeline_terminal_ack_wins_over_stale_handoff_phase():
+    """A finished handoff reads as finished, not delivering/model work."""
+    control = rich_control()
+    control["handoff"]["phase"] = "model_work"
+    control["commands"]["dash-aaaaaaaaaaaaaaaa"]["acknowledgement"] = "completed"
+    client, _, _ = client_with_control(control)
+    body = control_body(client).text
+    assert '<li class="ctl-step is-current">completed</li>' in body
+    assert '<li class="ctl-step is-current">model work</li>' not in body
+
+
 def test_timeline_empty_renders_message():
     client, _, _ = make_control_client(
         {"work": load_snapshot("snapshot-attempt-in-progress.json")}

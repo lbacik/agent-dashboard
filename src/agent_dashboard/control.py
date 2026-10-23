@@ -391,14 +391,29 @@ class CommandEntry:
     current_step: str = "submitted"
 
 
+def _terminal_label(acknowledgement: str | None) -> str:
+    """Terminal stepper label: a known acknowledgement, else ``completed``."""
+    if isinstance(acknowledgement, str) and acknowledgement in TERMINAL_ACKS:
+        return acknowledgement
+    return "completed"
+
+
+def _make_steps(labels: list[str], current: int) -> tuple[CommandStep, ...]:
+    """Build the stepper stages around the current step's index."""
+    return tuple(
+        CommandStep(
+            label=label,
+            state=(
+                "done" if index < current else "current" if index == current else "todo"
+            ),
+        )
+        for index, label in enumerate(labels)
+    )
+
+
 def _stepper_labels(acknowledgement: str | None) -> list[str]:
     """Base stepper: submitted → accepted → terminal acknowledgement."""
-    terminal = (
-        acknowledgement
-        if isinstance(acknowledgement, str) and acknowledgement in TERMINAL_ACKS
-        else "completed"
-    )
-    return ["submitted", "accepted", terminal]
+    return ["submitted", "accepted", _terminal_label(acknowledgement)]
 
 
 def _current_index(labels: list[str], acknowledgement: str | None) -> int:
@@ -420,43 +435,29 @@ def _build_steps(
     ``handoff.phase``; every other command uses the base stepper.
     """
     if handoff_phase is not None:
-        terminal = (
-            acknowledgement
-            if isinstance(acknowledgement, str) and acknowledgement in TERMINAL_ACKS
-            else "completed"
-        )
-        labels = ["submitted", "accepted", "delivering", "model work", terminal]
-        normalized = handoff_phase.replace("_", " ").strip().lower()
-        if normalized == "model work":
-            current = 3
-        elif normalized == "delivering":
-            current = 2
+        labels = [
+            "submitted",
+            "accepted",
+            "delivering",
+            "model work",
+            _terminal_label(acknowledgement),
+        ]
+        if isinstance(acknowledgement, str) and acknowledgement in TERMINAL_ACKS:
+            # A terminal acknowledgement wins over a stale handoff phase:
+            # a finished handoff reads as finished, not delivering/model work.
+            current = len(labels) - 1
         else:
-            current = _current_index(labels, acknowledgement)
-            if acknowledgement == "accepted":
-                current = 1
-        steps = tuple(
-            CommandStep(
-                label=label,
-                state=(
-                    "done" if index < current else "current" if index == current else "todo"
-                ),
-            )
-            for index, label in enumerate(labels)
-        )
-        return steps, labels[current]
+            normalized = handoff_phase.replace("_", " ").strip().lower()
+            if normalized == "model work":
+                current = 3
+            elif normalized == "delivering":
+                current = 2
+            else:
+                current = _current_index(labels, acknowledgement)
+        return _make_steps(labels, current), labels[current]
     labels = _stepper_labels(acknowledgement)
     current = _current_index(labels, acknowledgement)
-    steps = tuple(
-        CommandStep(
-            label=label,
-            state=(
-                "done" if index < current else "current" if index == current else "todo"
-            ),
-        )
-        for index, label in enumerate(labels)
-    )
-    return steps, labels[current]
+    return _make_steps(labels, current), labels[current]
 
 
 def command_timeline(control: Any) -> tuple[CommandEntry, ...]:
