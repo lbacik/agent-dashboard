@@ -197,6 +197,16 @@ def test_htmx_vendored_no_cdn():
     assert len(static.content) > 1000
 
 
+def test_static_files_revalidate_on_every_load():
+    client, _ = make_client()
+    static = client.get("/static/style.css")
+    assert static.headers["cache-control"] == "no-cache"
+    etag = static.headers["etag"]
+    again = client.get("/static/style.css", headers={"if-none-match": etag})
+    assert again.status_code == 304
+    assert again.headers["cache-control"] == "no-cache"
+
+
 def test_templates_are_server_rendered():
     client, _ = make_client([("worker-a", "running")])
     body = client.get("/").text
