@@ -40,6 +40,19 @@ ACTION_COMMANDS = {
     "next_issue": "next issue {issue}",
 }
 
+#: Display labels for ``control.commands`` kinds (action keys use
+#: underscores; the timeline reads "stop after" and "next issue").
+KIND_LABELS = {
+    "stop": "stop",
+    "stop_after": "stop after",
+    "resume": "resume",
+    "handoff": "handoff",
+    "next_issue": "next issue",
+}
+
+#: Terminal acknowledgements for the lifecycle stepper (spec section 8.5).
+TERMINAL_ACKS = ("completed", "superseded", "not fulfilled")
+
 #: "Controls unavailable" reasons for a non-live Reach (spec section 5.1).
 REACH_REASONS = {
     "stale": "the snapshot is stale (newer polls failed)",
@@ -300,18 +313,258 @@ def format_control_age(observed_at: str | None, *, now: float) -> str | None:
     return f"{minutes // 60} h"
 
 
+def fleet_chips(control: Any) -> tuple[str, ...]:
+    """Command-state chips for the fleet table's Intake cell (spec 8.1).
+
+    Derived from the latest good snapshot's ``control`` section only, in
+    this order: ``handoff · <phase>`` when a handoff is accepted,
+    ``stop pending``, ``stops after <remaining> more`` and ``next #<n>``.
+    A missing or unreadable section yields no chips; a missing field
+    inside it simply yields no chip for that slot (tolerant reader).
+    """
+    if not isinstance(control, dict):
+        return ()
+    chips: list[str] = []
+    handoff = control.get("handoff")
+    if isinstance(handoff, dict) and handoff.get("acknowledgement") == "accepted":
+        phase = handoff.get("phase")
+        chips.append(
+            f"handoff · {phase}" if isinstance(phase, str) and phase else "handoff"
+        )
+    pending = control.get("pending_command")
+    if isinstance(pending, dict) and pending.get("kind") == "stop":
+        chips.append("stop pending")
+    stop_plan = control.get("stop_plan") if "stop_plan" in control else None
+    if isinstance(stop_plan, dict):
+        remaining = stop_plan.get("remaining")
+        if _is_int(remaining):
+            chips.append(f"stops after {remaining} more")
+        else:
+            chips.append("stops after more")
+    upcoming = control.get("pending_next_issue")
+    if isinstance(upcoming, dict):
+        number = upcoming.get("issue_number")
+        if _is_int(number):
+            chips.append(f"next #{number}")
+        else:
+            chips.append("next")
+    return tuple(chips)
+
+
+def _short_clock(value: Any) -> str:
+    """Extract ``HH:MM:SS`` from an ISO-8601 timestamp, else the raw text."""
+    if not isinstance(value, str) or not value:
+        return "—"
+    clock = value[11:19] if len(value) >= 19 and value[10] == "T" else ""
+    if (
+        len(clock) == 8
+        and clock[2] == ":"
+        and clock[5] == ":"
+        and clock.replace(":", "").isdigit()
+    ):
+        return clock
+    return value
+
+
+@dataclass(frozen=True)
+class CommandStep:
+    """One lifecycle stepper stage: its label and done/current/todo state."""
+
+    label: str
+    state: str  # "done" | "current" | "todo"
+
+
+@dataclass(frozen=True)
+class CommandEntry:
+    """One ``control.commands`` record for the timeline (spec 8.5)."""
+
+    request_id: str
+    sequence: int | None
+    kind: str
+    kind_label: str
+    acknowledgement: str | None
+    detail: str
+    updated_at: str | None
+    short_time: str
+    origin: str  # "dashboard" | "CLI"
+    steps: tuple[CommandStep, ...] = ()
+    current_step: str = "submitted"
+
+
+def _terminal_label(acknowledgement: str | None) -> str:
+    """Terminal stepper label: a known acknowledgement, else ``completed``."""
+    if isinstance(acknowledgement, str) and acknowledgement in TERMINAL_ACKS:
+        return acknowledgement
+    return "completed"
+
+
+def _make_steps(labels: list[str], current: int) -> tuple[CommandStep, ...]:
+    """Build the stepper stages around the current step's index."""
+    return tuple(
+        CommandStep(
+            label=label,
+            state=(
+                "done" if index < current else "current" if index == current else "todo"
+            ),
+        )
+        for index, label in enumerate(labels)
+    )
+
+
+def _stepper_labels(acknowledgement: str | None) -> list[str]:
+    """Base stepper: submitted → accepted → terminal acknowledgement."""
+    return ["submitted", "accepted", _terminal_label(acknowledgement)]
+
+
+def _current_index(labels: list[str], acknowledgement: str | None) -> int:
+    """Index of the current step for an acknowledgement (tolerant reader)."""
+    if isinstance(acknowledgement, str) and acknowledgement in TERMINAL_ACKS:
+        return len(labels) - 1
+    if acknowledgement == "accepted":
+        return 1
+    return 0
+
+
+def _build_steps(
+    acknowledgement: str | None, *, handoff_phase: str | None = None
+) -> tuple[tuple[CommandStep, ...], str]:
+    """Lifecycle stepper plus the current step's label.
+
+    A handoff whose request ID matches ``handoff.request_id`` inserts
+    ``delivering → model work`` and takes its current step from
+    ``handoff.phase``; every other command uses the base stepper.
+    """
+    if handoff_phase is not None:
+        labels = [
+            "submitted",
+            "accepted",
+            "delivering",
+            "model work",
+            _terminal_label(acknowledgement),
+        ]
+        if isinstance(acknowledgement, str) and acknowledgement in TERMINAL_ACKS:
+            # A terminal acknowledgement wins over a stale handoff phase:
+            # a finished handoff reads as finished, not delivering/model work.
+            current = len(labels) - 1
+        else:
+            normalized = handoff_phase.replace("_", " ").strip().lower()
+            if normalized == "model work":
+                current = 3
+            elif normalized == "delivering":
+                current = 2
+            else:
+                current = _current_index(labels, acknowledgement)
+        return _make_steps(labels, current), labels[current]
+    labels = _stepper_labels(acknowledgement)
+    current = _current_index(labels, acknowledgement)
+    return _make_steps(labels, current), labels[current]
+
+
+def command_timeline(control: Any) -> tuple[CommandEntry, ...]:
+    """The ``control.commands`` timeline, newest first by sequence (spec 8.5).
+
+    Reads the latest good snapshot's ``control`` section only. At most the
+    last 10 commands are returned; records without an integer sequence sort
+    last. A missing or unreadable section yields no entries.
+    """
+    if not isinstance(control, dict):
+        return ()
+    raw = control.get("commands")
+    if isinstance(raw, dict):
+        records = list(raw.values())
+    elif isinstance(raw, list):
+        records = list(raw)
+    else:
+        return ()
+    handoff = control.get("handoff")
+    handoff = handoff if isinstance(handoff, dict) else {}
+    handoff_request = handoff.get("request_id")
+    parsed: list[tuple[int, int, CommandEntry]] = []
+    for order, record in enumerate(records):
+        if not isinstance(record, dict):
+            continue
+        request_id = record.get("request_id")
+        if not isinstance(request_id, str) or not request_id:
+            continue
+        sequence = record.get("sequence")
+        sequence = sequence if _is_int(sequence) else None
+        kind = record.get("kind")
+        kind = kind if isinstance(kind, str) and kind else "unknown"
+        acknowledgement = record.get("acknowledgement")
+        acknowledgement = (
+            acknowledgement
+            if isinstance(acknowledgement, str) and acknowledgement
+            else None
+        )
+        detail = record.get("detail")
+        detail = detail if isinstance(detail, str) else ""
+        updated = record.get("updated_at")
+        updated = updated if isinstance(updated, str) and updated else None
+        created = record.get("created_at")
+        created = created if isinstance(created, str) and created else None
+        clock_source = updated or created
+        origin = "dashboard" if request_id.startswith("dash-") else "CLI"
+        follows_handoff = (
+            kind == "handoff"
+            and isinstance(handoff_request, str)
+            and handoff_request
+            and request_id == handoff_request
+        )
+        phase = handoff.get("phase") if follows_handoff else None
+        phase_arg = (
+            phase if follows_handoff and isinstance(phase, str) and phase else None
+        )
+        steps, current = _build_steps(acknowledgement, handoff_phase=phase_arg)
+        entry = CommandEntry(
+            request_id=request_id,
+            sequence=sequence,
+            kind=kind,
+            kind_label=KIND_LABELS.get(kind, kind),
+            acknowledgement=acknowledgement,
+            detail=detail,
+            updated_at=updated,
+            short_time=_short_clock(clock_source) if clock_source else "—",
+            origin=origin,
+            steps=steps,
+            current_step=current,
+        )
+        parsed.append((sequence if sequence is not None else -1, order, entry))
+    parsed.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+    return tuple(entry for _, _, entry in parsed[:10])
+
+
+def timeline_summary(entries: tuple[CommandEntry, ...] | list[CommandEntry]) -> str:
+    """Collapsed-summary text: the count plus the latest command and its step."""
+    items = list(entries)
+    if not items:
+        return "0 commands"
+    latest = items[0]
+    if latest.sequence is not None:
+        head = f"#{latest.sequence} {latest.kind_label}"
+    else:
+        head = f"{latest.kind_label} {latest.request_id}"
+    return f"{len(items)} commands · latest {head} ({latest.current_step})"
+
+
 __all__ = [
     "ACTION_COMMANDS",
     "ACTION_LABELS",
     "ACTION_ORDER",
+    "KIND_LABELS",
     "MISSING",
     "REACH_REASONS",
+    "TERMINAL_ACKS",
+    "CommandEntry",
+    "CommandStep",
     "ControlAction",
     "ControlAvailability",
     "ControlMode",
+    "command_timeline",
     "compute_control_mode",
     "control_availability",
     "control_slug",
+    "fleet_chips",
     "format_control_age",
     "host_guard_disabled_from_env",
+    "timeline_summary",
 ]
