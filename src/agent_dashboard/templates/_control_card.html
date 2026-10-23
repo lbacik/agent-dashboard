@@ -1,0 +1,40 @@
+{# One Control submit feedback card (spec section 8.4).
+
+   Returned by the submit route into the feedback slot above the composer
+   (`hx-target="#ctl-feedback-<slug>" hx-swap="afterbegin"`), so the newest
+   card lands first; a Retry response replaces its own card
+   (`hx-target="closest .ctl-card"`). `tone` is info (Accepted), ok
+   (Completed) or error (every other card). Agent text (`body`) renders
+   through autoescape only. #}
+<article class="ctl-card ctl-tone-{{ tone }}" data-request-id="{{ request_id or '' }}">
+  <button type="button" class="ctl-card-dismiss" aria-label="Dismiss" onclick="this.closest('.ctl-card').remove()">×</button>
+  <p class="ctl-card-head"><code>agentctl {{ command }}</code></p>
+  <p class="ctl-card-title">{{ title }}</p>
+  <p class="ctl-card-body">{{ body }}</p>
+  {% if note %}<p class="ctl-card-note">{{ note }}</p>{% endif %}
+  {% if outcome_note %}<p class="ctl-card-note">{{ outcome_note }}</p>{% endif %}
+  <p class="ctl-card-meta">Request ID <code>{{ request_id or "—" }}</code>{% if sequence is not none %} · seq {{ sequence }}{% endif %}</p>
+  {% if retry_fields %}
+  <form class="ctl-card-retry" hx-post="{{ retry_fields.submit_url }}" hx-target="closest .ctl-card" hx-swap="outerHTML">
+    <input type="hidden" name="action" value="{{ retry_fields.action }}">
+    {% if retry_fields.n_value is not none %}<input type="hidden" name="n" value="{{ retry_fields.n_value }}">{% endif %}
+    {% if retry_fields.issue_value is not none %}<input type="hidden" name="issue" value="{{ retry_fields.issue_value }}">{% endif %}
+    <input type="hidden" name="container_id" value="{{ retry_fields.container_id }}">
+    <input type="hidden" name="repository" value="{{ retry_fields.repository }}">
+    <input type="hidden" name="request_id" value="{{ retry_fields.request_id }}">
+    <input type="hidden" name="retry" value="1">
+    <button type="submit" class="btn">Retry with the same request ID</button>
+  </form>
+  {% endif %}
+  {% if status_fields %}
+  <form class="ctl-card-status" hx-post="{{ status_fields.status_url }}" hx-target="closest .ctl-card" hx-swap="outerHTML">
+    <input type="hidden" name="action" value="{{ status_fields.action }}">
+    {% if status_fields.n_value is not none %}<input type="hidden" name="n" value="{{ status_fields.n_value }}">{% endif %}
+    {% if status_fields.issue_value is not none %}<input type="hidden" name="issue" value="{{ status_fields.issue_value }}">{% endif %}
+    <input type="hidden" name="container_id" value="{{ status_fields.container_id }}">
+    <input type="hidden" name="repository" value="{{ status_fields.repository }}">
+    <input type="hidden" name="request_id" value="{{ status_fields.request_id }}">
+    <button type="submit" class="btn">Check status</button>
+  </form>
+  {% endif %}
+</article>

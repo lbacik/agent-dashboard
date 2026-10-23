@@ -55,7 +55,8 @@
   </div>
   <section class="drawer-section ctl" id="control-console-{{ ctl_slug }}" hx-preserve>
     <h3>Control console</h3>
-    <div class="ctl-body"
+    <div class="ctl-feedback" id="ctl-feedback-{{ ctl_slug }}"></div>
+    <div class="ctl-body" id="ctl-body-{{ ctl_slug }}"
          hx-get="/instances/{{ row.name | urlencode }}/control"
          hx-trigger="load, sse:fleet[!this.querySelector('.ctl-confirm') && !this.contains(document.activeElement)]"
          hx-swap="innerHTML">

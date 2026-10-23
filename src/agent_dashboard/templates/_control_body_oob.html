@@ -1,0 +1,13 @@
+{# Console body out-of-band refresh for submit responses (spec 8.4).
+
+   Every submit response carries the card as its main swap plus this body
+   refresh: the composer comes back (replacing the confirmation) and the
+   timeline summary updates, without disturbing the feedback slot. The
+   stable `ctl-body-<slug>` ID is the swap target (`hx-swap-oob="true"`
+   swaps it by ID). #}
+<div class="ctl-body" id="ctl-body-{{ slug }}" hx-swap-oob="true"
+     hx-get="/instances/{{ name | urlencode }}/control"
+     hx-trigger="load, sse:fleet[!this.querySelector('.ctl-confirm') && !this.contains(document.activeElement)]"
+     hx-swap="innerHTML">
+{% include "_control.html" %}
+</div>
