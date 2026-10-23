@@ -50,6 +50,37 @@ KIND_LABELS = {
     "next_issue": "next issue",
 }
 
+#: Card titles per terminal acknowledgement (spec section 8.4).
+TERMINAL_TITLES = {
+    "completed": "Completed",
+    "superseded": "Superseded",
+    "not fulfilled": "Not fulfilled",
+}
+
+#: Card tones per terminal acknowledgement (spec section 8.4): Completed
+#: ok, Superseded muted, Not fulfilled warn. Every card also has a text
+#: title, so its state never relies on colour alone.
+TERMINAL_TONES = {
+    "completed": "ok",
+    "superseded": "muted",
+    "not fulfilled": "warn",
+}
+
+#: Body when the tracked container is gone or was recreated (spec 8.4).
+GONE_BODY = (
+    "Instance replaced or unavailable; the agent's record of this command "
+    "is on its /data volume."
+)
+
+#: Body when the command fell out of the last 10 recorded commands.
+EVICTED_BODY = "No longer in the last 10 commands"
+
+#: Body while the command is not yet in the latest good snapshot.
+WAITING_BODY = "waiting for the next snapshot"
+
+#: Progress while a next-issue command waits for its claim.
+NEXT_ISSUE_WAITING = "waiting for the next permitted claim"
+
 #: Terminal acknowledgements for the lifecycle stepper (spec section 8.5).
 TERMINAL_ACKS = ("completed", "superseded", "not fulfilled")
 
@@ -546,24 +577,245 @@ def timeline_summary(entries: tuple[CommandEntry, ...] | list[CommandEntry]) -> 
     return f"{len(items)} commands · latest {head} ({latest.current_step})"
 
 
+def _command_records(control: Any) -> list[dict[str, Any]]:
+    """The ``control.commands`` records as a list of mappings (tolerant)."""
+    if not isinstance(control, dict):
+        return []
+    raw = control.get("commands")
+    if isinstance(raw, dict):
+        candidates = list(raw.values())
+    elif isinstance(raw, list):
+        candidates = list(raw)
+    else:
+        return []
+    return [record for record in candidates if isinstance(record, dict)]
+
+
+def _find_record(control: Any, request_id: str) -> dict[str, Any] | None:
+    """The ``control.commands`` record for one request ID, or none."""
+    for record in _command_records(control):
+        if record.get("request_id") == request_id:
+            return record
+    return None
+
+
+def _record_sequences(control: Any) -> list[int]:
+    """Every integer sequence in ``control.commands`` (tolerant reader)."""
+    sequences: list[int] = []
+    for record in _command_records(control):
+        sequence = record.get("sequence")
+        if _is_int(sequence):
+            sequences.append(sequence)
+    return sequences
+
+
+def _follow_progress(
+    *, action: str, request_id: str, control: Any
+) -> str | None:
+    """The progress line for a tracked command (spec section 8.4).
+
+    From the related section when its ``request_id`` matches the card's:
+    handoff ``phase <phase>``, stop after ``<remaining> of <requested>
+    attempt(s) left``, next issue "waiting for the next permitted claim".
+    A section without a ``request_id`` field matches by action (an older
+    agent); a mismatched ID or a missing section means no progress line.
+    """
+    if not isinstance(control, dict):
+        return None
+    if action == "handoff":
+        handoff = control.get("handoff")
+        if not isinstance(handoff, dict):
+            return None
+        if "request_id" in handoff and handoff.get("request_id") != request_id:
+            return None
+        phase = handoff.get("phase")
+        if isinstance(phase, str) and phase.strip():
+            return f"phase {phase.strip()}"
+        return None
+    if action == "stop_after":
+        stop_plan = control.get("stop_plan")
+        if not isinstance(stop_plan, dict):
+            return None
+        if "request_id" in stop_plan and stop_plan.get("request_id") != request_id:
+            return None
+        remaining = stop_plan.get("remaining")
+        if not _is_int(remaining):
+            return None
+        requested = stop_plan.get("requested")
+        if not _is_int(requested):
+            requested = stop_plan.get("total")
+        if _is_int(requested):
+            return f"{remaining} of {requested} attempt(s) left"
+        return f"{remaining} attempt(s) left"
+    if action == "next_issue":
+        pending = control.get("pending_next_issue")
+        if not isinstance(pending, dict):
+            return None
+        if "request_id" in pending and pending.get("request_id") != request_id:
+            return None
+        return NEXT_ISSUE_WAITING
+    return None
+
+
+@dataclass(frozen=True)
+class FollowResult:
+    """Where one tracked command stands (spec section 8.4 "Following").
+
+    ``outcome`` is ``following`` (an accepted card that keeps tracking),
+    ``terminal`` (completed, superseded or not fulfilled: tracking stops),
+    ``paused`` (Reach is not live: the message names the reach reason and
+    the card keeps following), ``waiting`` (the ID is not in the latest
+    good snapshot yet: the card keeps following), ``evicted`` (the ID
+    fell out of the last 10: the card stops and offers Check status) or
+    ``gone`` (the container was replaced or the instance is gone: the
+    card stops). ``following`` mirrors whether the card keeps its
+    ``sse:fleet`` track trigger; ``check_status`` whether it offers the
+    Check status button.
+    """
+
+    outcome: str
+    acknowledgement: str | None = None
+    title: str = "Accepted"
+    tone: str = "info"
+    body: str = ""
+    progress: str | None = None
+    following: bool = False
+    check_status: bool = False
+
+
+def follow_command(
+    *,
+    action: str,
+    request_id: str,
+    sequence: int | None,
+    card_container_id: str,
+    control: Any,
+    reach: str,
+    row_container_id: str | None,
+    row_exists: bool,
+) -> FollowResult:
+    """Locate one accepted command in the latest good snapshot (pure).
+
+    Reads only the given ``control`` section and the row's Reach and
+    container ID: never Docker, never the Control audit. A missing
+    ``request_id`` field match, a non-integer card sequence and an
+    unreadable section all read as "waiting for the next snapshot"
+    (tolerant reader); only an integer card sequence below every recorded
+    sequence reads as evicted.
+    """
+    if not row_exists or row_container_id != card_container_id:
+        return FollowResult(
+            outcome="gone",
+            title="Accepted",
+            tone="info",
+            body=GONE_BODY,
+            following=False,
+        )
+    if reach != "live":
+        reason = REACH_REASONS.get(reach, f"the snapshot is {reach}")
+        record = _find_record(control, request_id)
+        detail = ""
+        acknowledgement: str | None = None
+        progress: str | None = None
+        if record is not None:
+            raw_ack = record.get("acknowledgement")
+            acknowledgement = (
+                raw_ack if isinstance(raw_ack, str) and raw_ack else None
+            )
+            raw_detail = record.get("detail")
+            detail = raw_detail if isinstance(raw_detail, str) and raw_detail else ""
+            progress = _follow_progress(
+                action=action, request_id=request_id, control=control
+            )
+        paused = f"following paused: {reason}"
+        progress = paused if progress is None else f"{progress} · {paused}"
+        return FollowResult(
+            outcome="paused",
+            acknowledgement=acknowledgement,
+            title="Accepted",
+            tone="info",
+            body=detail or WAITING_BODY,
+            progress=progress,
+            following=True,
+        )
+    record = _find_record(control, request_id)
+    if record is not None:
+        raw_ack = record.get("acknowledgement")
+        acknowledgement = raw_ack if isinstance(raw_ack, str) and raw_ack else None
+        raw_detail = record.get("detail")
+        detail = raw_detail if isinstance(raw_detail, str) and raw_detail else ""
+        body = detail or "—"
+        progress = _follow_progress(
+            action=action, request_id=request_id, control=control
+        )
+        if isinstance(acknowledgement, str) and acknowledgement in TERMINAL_ACKS:
+            return FollowResult(
+                outcome="terminal",
+                acknowledgement=acknowledgement,
+                title=TERMINAL_TITLES[acknowledgement],
+                tone=TERMINAL_TONES[acknowledgement],
+                body=body,
+                progress=None,
+                following=False,
+            )
+        return FollowResult(
+            outcome="following",
+            acknowledgement=acknowledgement,
+            title="Accepted",
+            tone="info",
+            body=body,
+            progress=progress,
+            following=True,
+        )
+    sequences = _record_sequences(control)
+    if (
+        sequence is not None
+        and sequences
+        and all(card_seq > sequence for card_seq in sequences)
+    ):
+        return FollowResult(
+            outcome="evicted",
+            title="Accepted",
+            tone="info",
+            body=EVICTED_BODY,
+            following=False,
+            check_status=True,
+        )
+    return FollowResult(
+        outcome="waiting",
+        title="Accepted",
+        tone="info",
+        body=WAITING_BODY,
+        following=True,
+    )
+
+
 __all__ = [
     "ACTION_COMMANDS",
     "ACTION_LABELS",
     "ACTION_ORDER",
+    "EVICTED_BODY",
+    "GONE_BODY",
     "KIND_LABELS",
     "MISSING",
+    "NEXT_ISSUE_WAITING",
     "REACH_REASONS",
     "TERMINAL_ACKS",
+    "TERMINAL_TITLES",
+    "TERMINAL_TONES",
+    "WAITING_BODY",
     "CommandEntry",
     "CommandStep",
     "ControlAction",
     "ControlAvailability",
     "ControlMode",
+    "FollowResult",
     "command_timeline",
     "compute_control_mode",
     "control_availability",
     "control_slug",
     "fleet_chips",
+    "follow_command",
     "format_control_age",
     "host_guard_disabled_from_env",
     "timeline_summary",
