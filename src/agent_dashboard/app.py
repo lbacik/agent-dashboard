@@ -43,7 +43,7 @@ from .attempt_log import (
     read_attempt_tail_log,
     read_stopped_attempt_log,
 )
-from .breadcrumbs import history_trail
+from .breadcrumbs import attempt_progress_trail, attempt_trail, history_trail
 from .charts import (
     CACHE_READ_SHARE_DEFINITION,
     OUTCOME_LABELS,
@@ -871,6 +871,25 @@ def create_app(
         def progress_page(
             row, error: str | None, result=None, series=None, **extra
         ) -> Response:
+            if result is not None and result.started_at:
+                label_issue: int | str = result.issue
+                label_started = result.started_at
+            else:
+                label_issue = issue
+                label_started = started
+            try:
+                number, dash_started = validate_attempt_ref(issue, started)
+                attempt_url = (
+                    f"/instances/{quote(name, safe='')}"
+                    f"/attempts/{quote(str(number), safe='')}"
+                    f"/{quote(dash_started, safe='')}"
+                )
+            except ValueError:
+                attempt_url = (
+                    f"/instances/{quote(name, safe='')}"
+                    f"/attempts/{quote(str(issue), safe='')}"
+                    f"/{quote(str(started), safe='')}"
+                )
             return templates.TemplateResponse(
                 request,
                 "progress.html",
@@ -883,6 +902,9 @@ def create_app(
                     "result": result,
                     "series": series,
                     "error": error,
+                    "breadcrumbs": attempt_progress_trail(
+                        name, label_issue, label_started, attempt_url
+                    ),
                     **extra,
                 },
             )
@@ -1015,6 +1037,12 @@ def create_app(
             pair_files: dict | None = None,
             command_logs: tuple[str, ...] = (),
         ) -> Response:
+            if result is not None:
+                label_issue: int | str = result.issue
+                label_started = result.started_at
+            else:
+                label_issue = issue
+                label_started = started
             return templates.TemplateResponse(
                 request,
                 "attempt_log.html",
@@ -1027,6 +1055,9 @@ def create_app(
                     "dash_started": dash_started,
                     "result": result,
                     "error": error,
+                    "breadcrumbs": attempt_trail(
+                        name, label_issue, label_started
+                    ),
                     "command_logs": command_logs,
                     "page_events": page_events,
                     "page_num": page_num,

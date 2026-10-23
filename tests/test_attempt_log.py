@@ -918,4 +918,96 @@ def test_progress_page_links_to_the_attempt_log_page():
     )
     body = client.get(f"/instances/work/attempts/98/{STARTED_DASH}/progress").text
     assert f"/instances/work/attempts/98/{STARTED_DASH}" in body
-    assert "Attempt log" in body
+    nav = body.split("Breadcrumb")[1].split("</nav>")[0]
+    assert f'<a href="/instances/work/attempts/98/{STARTED_DASH}">' in nav
+
+
+# --- sticky breadcrumb top bar ------------------------------------------------
+
+
+def test_log_page_has_sticky_breadcrumb_topbar():
+    client, _, _ = make_log_client(
+        [("work", "running")],
+        {
+            "id-work": _payload(
+                [TOOL_CALL_NEW, TOOL_RESULT_SUBAGENT, MODEL_RESPONSE]
+            )
+        },
+    )
+    body = client.get(f"/instances/work/attempts/98/{STARTED_DASH}").text
+    # Breadcrumb trail: Fleet links home, the instance links to its history,
+    # the attempt is plain current text.
+    assert '<nav aria-label="Breadcrumb">' in body
+    assert '<a href="/">Fleet</a>' in body
+    nav = body.split("Breadcrumb")[1].split("</nav>")[0]
+    assert '<a href="/instances/work/history">work</a>' in nav
+    assert f"<span aria-current=\"page\">#98 · {STARTED_COLON}</span>" in body
+    # The current crumb is text, never a link.
+    assert f"/attempts/98/{STARTED_DASH}" not in nav
+    # The on-demand note and Refresh live in the sticky bar.
+    subnav = body.split('<div class="subnav">', 1)[1].split("</div>", 1)[0]
+    assert "data is read on demand" in subnav
+    assert ">Refresh</a>" in subnav
+    # The bottom escape hatches and the pseudo-breadcrumb subtitle are gone.
+    assert "Back to attempt history" not in body
+    assert "Back to the fleet" not in body
+    assert "instances /" not in body
+    # The Progress chart link keeps working.
+    assert "Progress chart" in body
+    assert f"/instances/work/attempts/98/{STARTED_DASH}/progress" in body
+
+
+def test_log_refresh_keeps_filters_and_page():
+    events = [
+        _ev("tool_call", f"Bash [main] -> {i:04d}_tool_call.json")
+        for i in range(450)
+    ]
+    client, _, _ = make_log_client(
+        [("work", "running")], {"id-work": _payload(events)}
+    )
+    body = client.get(
+        f"/instances/work/attempts/98/{STARTED_DASH}?level=INFO&page=2"
+    ).text
+    assert "page 2/3, 450 events" in body
+    subnav = body.split('<div class="subnav">', 1)[1].split("</div>", 1)[0]
+    refresh = subnav.replace("&amp;", "&")
+    assert "level=INFO" in refresh
+    assert "page=2" in refresh
+
+
+def test_log_breadcrumb_renders_for_unknown_instance_and_errors():
+    client, _, _ = make_log_client(
+        [("work", "running")], {"id-work": _payload([TOOL_CALL_NEW])}
+    )
+    unknown = client.get(f"/instances/nope/attempts/98/{STARTED_DASH}").text
+    assert '<nav aria-label="Breadcrumb">' in unknown
+    assert '<a href="/">Fleet</a>' in unknown
+    assert '<a href="/instances/nope/history">nope</a>' in unknown
+    assert "Back to attempt history" not in unknown
+    assert "Back to the fleet" not in unknown
+
+    invalid = client.get("/instances/work/attempts/98/not-a-timestamp").text
+    assert '<nav aria-label="Breadcrumb">' in invalid
+    assert '<a href="/instances/work/history">work</a>' in invalid
+    assert "Invalid attempt reference" in invalid
+    assert "Back to attempt history" not in invalid
+
+    err_client, _, _ = make_log_client(
+        [("work", "running")],
+        logs_error={"id-work": GatewayError("docker exec timed out after 15 s")},
+    )
+    gateway_body = err_client.get(
+        f"/instances/work/attempts/98/{STARTED_DASH}"
+    ).text
+    assert '<nav aria-label="Breadcrumb">' in gateway_body
+    assert '<a href="/instances/work/history">work</a>' in gateway_body
+    assert "Could not read" in gateway_body
+
+    empty_client, _, _ = make_log_client(
+        [("work", "running")], {"id-work": _payload([])}
+    )
+    empty = empty_client.get(f"/instances/work/attempts/98/{STARTED_DASH}").text
+    assert '<nav aria-label="Breadcrumb">' in empty
+    assert f"<span aria-current=\"page\">#98 · {STARTED_COLON}</span>" in empty
+    assert "layout not recognised" in empty
+    assert "Back to attempt history" not in empty
