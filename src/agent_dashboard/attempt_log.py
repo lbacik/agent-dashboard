@@ -36,6 +36,9 @@ from .gateway import (
     validate_log_file,
 )
 from .history import LAYOUT_NOT_RECOGNISED, NOT_APPLICABLE, format_cost, format_duration
+from .usage import BUDGET_COST_KEYS as _SHARED_BUDGET_COST_KEYS
+from .usage import MODEL_COST_KEYS as _SHARED_MODEL_COST_KEYS
+from .usage import read_cost_value as _shared_read_cost_value
 
 #: Rows per page on the Attempt log page.
 LOG_PAGE_SIZE = 200
@@ -47,25 +50,13 @@ KNOWN_LEVELS = ("INFO", "WARNING", "ERROR")
 NO_ATTEMPT_JSON = "no attempt.json: in progress or crashed"
 
 #: ``token_budget`` cost keys accepted for the header cost, in preference order.
-BUDGET_COST_KEYS = (
-    "total_cost_usd",
-    "totalCostUsd",
-    "cost_usd",
-    "costUSD",
-    "cost",
-    "total_cost",
-)
+#: Shared with the attempt summaries (see :mod:`agent_dashboard.usage`).
+BUDGET_COST_KEYS = _SHARED_BUDGET_COST_KEYS
 
 #: Per-model cost keys accepted for the header cost, in preference order.
 #: The agent writes camelCase ``costUSD``; snake_case stays accepted for
-#: older or divergent payloads.
-MODEL_COST_KEYS = (
-    "costUSD",
-    "cost_usd",
-    "total_cost_usd",
-    "cost",
-    "total_cost",
-)
+#: older or divergent payloads. Shared with the attempt summaries.
+MODEL_COST_KEYS = _SHARED_MODEL_COST_KEYS
 
 
 #: Events whose detail may name an Evidence file. Skill events carry their
@@ -184,27 +175,17 @@ def _hms(raw: Any) -> str:
 
 
 def _read_cost(attempt: dict[str, Any]) -> str:
-    """Header cost: ``token_budget`` total first, else summed model costs."""
-    budget = attempt.get("token_budget")
-    if isinstance(budget, dict):
-        for key in BUDGET_COST_KEYS:
-            value = _num(budget.get(key))
-            if value is not None:
-                return format_cost(value)
-    usage = attempt.get("model_usage")
-    if isinstance(usage, dict):
-        total: int | float | None = None
-        for model in usage.values():
-            if not isinstance(model, dict):
-                continue
-            for key in MODEL_COST_KEYS:
-                value = _num(model.get(key))
-                if value is not None:
-                    total = (total or 0) + value
-                    break
-        if total is not None:
-            return format_cost(total)
-    return NOT_APPLICABLE
+    """Header cost: ``token_budget`` total first, else summed model costs.
+
+    Reads through the shared usage reader so the header and the attempt
+    summaries agree on the same record.
+    """
+    if not isinstance(attempt, dict):
+        return NOT_APPLICABLE
+    value = _shared_read_cost_value(attempt)
+    if value is None:
+        return NOT_APPLICABLE
+    return format_cost(value)
 
 
 def _read_header(

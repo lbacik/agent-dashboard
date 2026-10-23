@@ -53,13 +53,15 @@ COMPLETE = {
     "duration_seconds": 1712.5,
     "model_usage": {
         "claude-x": {
-            "input_tokens": 120000,
-            "cache_read_input_tokens": 350000,
-            "cache_creation_input_tokens": 12000,
-            "output_tokens": 42000,
-            "cost_usd": 1.23456,
+            "inputTokens": 120000,
+            "cacheReadInputTokens": 350000,
+            "cacheCreationInputTokens": 12000,
+            "outputTokens": 42000,
+            "costUSD": 1.23456,
+            "costBasis": "managed",
         }
     },
+    "token_budget": {"total_cost_usd": 1.23456},
     "model_stop_reason": "end_turn",
     "issue_title": "Add a widget",
 }
@@ -361,6 +363,103 @@ def test_stop_reason_dict_is_joined():
     stdout, code = _stdout(_payload([_entry(1, "2026-09-27T16-33-43.385090Z", attempt)]))
     (summary,) = read_history(stdout, code, now=NOW).summaries
     assert summary.stop_reason_text == "end_turn"
+
+
+def test_real_camel_shape_reads_cost_tokens_and_stop_reason():
+    attempt = {
+        "outcome": "complete",
+        "started_at": "2026-09-27T16:33:43.385090Z",
+        "duration_seconds": 60,
+        "model_usage": {
+            "claude-opus": {
+                "costUSD": 0.00997,
+                "inputTokens": 54315,
+                "outputTokens": 13397,
+                "cacheReadInputTokens": 929929,
+                "cacheCreationInputTokens": 0,
+                "costBasis": "managed",
+            }
+        },
+        "token_budget": {"total_cost_usd": 0.00997},
+        "model_stop_reason": "end_turn",
+    }
+    stdout, code = _stdout(_payload([_entry(1, "2026-09-27T16-33-43.385090Z", attempt)]))
+    (summary,) = read_history(stdout, code, now=NOW).summaries
+    assert summary.has_usage is True
+    assert summary.cost_value == 0.00997
+    assert summary.cost_text == "$0.0100"
+    assert summary.input_text == "54,315"
+    assert summary.cache_read_text == "929,929"
+    assert summary.cache_creation_text == "0"
+    assert summary.output_text == "13,397"
+    assert summary.input_value == 54315
+    assert summary.cache_read_value == 929929
+    assert summary.cache_creation_value == 0
+    assert summary.output_value == 13397
+    assert summary.stop_reason_text == "end_turn"
+
+
+def test_cost_prefers_token_budget_total_over_summed_models():
+    attempt = {
+        "outcome": "complete",
+        "started_at": "2026-09-27T16:33:43.385090Z",
+        "duration_seconds": 60,
+        "model_usage": {
+            "claude-a": {"inputTokens": 100, "costUSD": 1.0},
+            "claude-b": {"inputTokens": 200, "costUSD": 2.0},
+        },
+        "token_budget": {"total_cost_usd": 9.99},
+        "model_stop_reason": "end_turn",
+    }
+    stdout, code = _stdout(_payload([_entry(1, "2026-09-27T16-33-43.385090Z", attempt)]))
+    (summary,) = read_history(stdout, code, now=NOW).summaries
+    assert summary.cost_value == 9.99
+    assert summary.cost_text == "$9.99"
+    # Tokens still sum across models even when the budget wins for cost.
+    assert summary.input_value == 300
+
+
+def test_summary_and_log_header_agree_on_cost():
+    from agent_dashboard.attempt_log import read_attempt_log
+
+    attempt = {
+        "outcome": "complete",
+        "started_at": "2026-09-27T16:33:43.385090Z",
+        "duration_seconds": 60,
+        "model_usage": {
+            "claude-a": {"inputTokens": 100, "costUSD": 1.0},
+            "claude-b": {"inputTokens": 200, "costUSD": 0.234},
+        },
+        "token_budget": {"total_cost_usd": 1.5},
+        "model_stop_reason": "end_turn",
+    }
+    stdout, code = _stdout(_payload([_entry(98, "2026-09-27T16-33-43.385090Z", attempt)]))
+    (summary,) = read_history(stdout, code, now=NOW).summaries
+    log_payload = {
+        "layout": "attempt-log/v1",
+        "issue": 98,
+        "started": "2026-09-27T16-33-43.385090Z",
+        "attempt": attempt,
+        "events": [
+            {
+                "timestamp": "2026-09-27T16:33:43Z",
+                "level": "INFO",
+                "event": "x",
+                "detail": "y",
+            }
+        ],
+        "total_events": 1,
+        "unreadable": 0,
+        "truncated": False,
+        "file_size": 0,
+    }
+    header = read_attempt_log(
+        json.dumps(log_payload).encode(),
+        0,
+        issue=98,
+        started="2026-09-27T16-33-43.385090Z",
+    )
+    assert summary.cost_text == header.cost_text == "$1.50"
 
 
 # --- time window filter ----------------------------------------------------

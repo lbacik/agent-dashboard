@@ -168,13 +168,15 @@ HISTORY_ATTEMPT_DONE = {
     "duration_seconds": 1712,
     "model_usage": {
         "claude-x": {
-            "input_tokens": 120000,
-            "cache_read_input_tokens": 350000,
-            "cache_creation_input_tokens": 12000,
-            "output_tokens": 42000,
-            "cost_usd": 1.23,
+            "inputTokens": 120000,
+            "cacheReadInputTokens": 350000,
+            "cacheCreationInputTokens": 12000,
+            "outputTokens": 42000,
+            "costUSD": 1.23,
+            "costBasis": "managed",
         }
     },
+    "token_budget": {"total_cost_usd": 1.23},
     "model_stop_reason": "end_turn",
 }
 

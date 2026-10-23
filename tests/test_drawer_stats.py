@@ -24,10 +24,27 @@ def _started(days_ago: float, now: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - days_ago * 86400))
 
 
-def _attempt(issue: int, started: str, outcome: str = "complete", cost=None) -> dict:
+def _attempt(
+    issue: int, started: str, outcome: str = "complete", cost=None, snake: bool = False
+) -> dict:
     record = {"outcome": outcome, "started_at": started, "duration_seconds": 60}
     if cost is not None:
-        record["model_usage"] = {"m": {"input_tokens": 10, "cost_usd": cost}}
+        if snake:
+            # Snake_case record kept for tolerance: older payloads still read.
+            record["model_usage"] = {"m": {"input_tokens": 10, "cost_usd": cost}}
+        else:
+            record["model_usage"] = {
+                "m": {
+                    "inputTokens": 10,
+                    "cacheReadInputTokens": 30,
+                    "cacheCreationInputTokens": 2,
+                    "outputTokens": 5,
+                    "costUSD": cost,
+                    "costBasis": "managed",
+                }
+            }
+            record["token_budget"] = {"total_cost_usd": cost}
+            record["model_stop_reason"] = "end_turn"
     return {"issue": issue, "started": started.replace(":", "-"), "attempt": record}
 
 
@@ -334,7 +351,18 @@ def test_stats_stopped_instance_reads_via_copy():
         "outcome": "complete",
         "started_at": started_colon,
         "duration_seconds": 60,
-        "model_usage": {"m": {"input_tokens": 10, "cost_usd": 1.5}},
+        "model_usage": {
+            "m": {
+                "inputTokens": 10,
+                "cacheReadInputTokens": 30,
+                "cacheCreationInputTokens": 2,
+                "outputTokens": 5,
+                "costUSD": 1.5,
+                "costBasis": "managed",
+            }
+        },
+        "token_budget": {"total_cost_usd": 1.5},
+        "model_stop_reason": "end_turn",
     }
     tree = make_logs_tree(
         {f"logs/1/{started_dash}/attempt.json": _json.dumps(attempt).encode()}
@@ -400,14 +428,18 @@ def test_stats_unreadable_attempts_are_counted():
     payload = _payload(
         [
             _attempt(1, _started(1, now), "complete", 1.0),
+            # Snake_case record kept for tolerance.
+            _attempt(3, _started(3, now), "complete", 2.0, snake=True),
             {"issue": 2, "started": _started(2, now).replace(":", "-"), "attempt": None},
             {"bogus": True},
         ]
     )
     client, _, _, _ = make_stats_client({"work": "running"}, {"id-work": payload})
     body = client.get("/instances/work/stats?preset=all").text
-    assert "of 2 attempts" in body
+    assert "of 3 attempts" in body
     assert "1 unreadable" in body
+    # Both the camelCase and the snake_case records feed the cost total.
+    assert "$3.00" in body
 
 
 # --- never on the poll cycle -----------------------------------------------
