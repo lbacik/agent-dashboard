@@ -3,7 +3,10 @@
    below it with a slim table. Rows open the instance drawer; the log
    buttons stop propagation so they follow their link instead. Each table
    sits in a .table-scroll box so a viewport narrower than the table
-   scrolls the table, not the page. #}
+   scrolls the table, not the page. Each box opts into the shared scroll
+   keeper (`scroll-keep.js`) with a stable key (`fleet-running` and
+   `fleet-not-running`), so the `fleet` SSE re-render keeps the horizontal
+   position. #}
 {% macro logs_icon() -%}
 <svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 1.5h6L13 5v9.5H3.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9.5 1.5V5H13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8h5M5.5 10.5h5M5.5 13h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
 {%- endmacro %}
@@ -16,7 +19,7 @@
 {% set running = rows | selectattr("state", "equalto", "running") | list %}
 {% set stopped = rows | rejectattr("state", "equalto", "running") | list %}
 {% if running %}
-<div class="table-scroll">
+<div class="table-scroll" data-scroll-key="fleet-running">
 <table class="fleet">
   <thead>
     <tr><th>Instance</th><th>Status headline</th><th>Reach</th><th>Intake</th><th>Attempt</th><th>Budget</th><th>Main context</th><th>Turns</th><th>Cache hit rate</th><th>Errors</th><th><span class="sr-only">Logs</span></th></tr>
@@ -63,7 +66,7 @@
 {% if stopped %}
 <details class="not-running" data-persist="not-running">
   <summary>Not running ({{ stopped | length }})</summary>
-  <div class="table-scroll">
+  <div class="table-scroll" data-scroll-key="fleet-not-running">
   <table class="fleet">
     <thead>
       <tr><th>Instance</th><th>Reach</th><th>Last finished attempt</th><th><span class="sr-only">Logs</span></th></tr>
