@@ -419,7 +419,9 @@ def test_stats_empty_range_shows_hint_not_zero_cost():
     assert "No attempts in this window" in body
     assert "0</strong> of 1 attempts" in body
     assert "$0.00" not in body
-    assert "$5.00" not in body
+    # The out-of-range attempt only appears as the Cost section's
+    # range-independent last finished row, never as a range figure.
+    assert "Last finished" in body
     assert "stats-bar" not in body
 
 

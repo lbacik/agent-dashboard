@@ -65,6 +65,7 @@ from .charts import (
     undated_count,
 )
 from .config import Settings
+from .cost_summary import summarize_cost
 from .fleet import FleetState, poll_forever
 from .gateway import (
     COMMAND_LOG_RE,
@@ -531,18 +532,20 @@ def create_app(
 
     @app.get("/instances/{name}/stats", response_class=HTMLResponse)
     async def instance_stats(request: Request, name: str) -> Response:
-        """Drawer card: per-instance attempt statistics for the active range.
+        """Drawer card plus Cost section: per-instance figures for the range.
 
         Loaded once when the drawer opens (``hx-trigger="load"``) and again
         on every range change; the drawer's SSE refresh keeps the loaded
-        card via ``hx-preserve``, so polling never re-reads attempt
-        summaries. An explicit ``preset`` (or ``from``/``to``) wins and is
-        remembered in a cookie; otherwise the cookie names the range, so it
-        survives switching instances and reopening the drawer. Unknown
-        instances, gone volumes and unreadable summaries render a hint
-        instead of figures, never zero figures. Stopped instances read
-        their summaries through a ``docker cp`` tree copy, like the
-        history page.
+        fragment via ``hx-preserve``, so polling never re-reads attempt
+        summaries. One range selector drives both: a preset or strip
+        selection re-renders the statistics card and the Cost section
+        together from the same cut. An explicit ``preset`` (or
+        ``from``/``to``) wins and is remembered in a cookie; otherwise the
+        cookie names the range, so it survives switching instances and
+        reopening the drawer. Unknown instances, gone volumes and unreadable
+        summaries render a hint instead of figures, never zero figures.
+        Stopped instances read their summaries through a ``docker cp`` tree
+        copy, like the history page.
         """
         params = request.query_params
         if "preset" in params or ("from" in params and "to" in params):
@@ -569,6 +572,7 @@ def create_app(
             "strip": [],
             "strip_peak": 0,
             "error": None,
+            "cost": None,
         }
 
         def page() -> Response:
@@ -608,6 +612,7 @@ def create_app(
             window="all",
             result=cut,
         )
+        ctx["cost"] = summarize_cost(cut, full)
         ctx["strip"] = day_strip(full.summaries, spec, now_ts)
         ctx["strip_peak"] = max((day.total for day in ctx["strip"]), default=0)
         ctx["legend"] = outcome_legend(cut.summaries)

@@ -1,11 +1,14 @@
-{# Drawer attempt-statistics card: per-instance outcomes and cost for a range.
-   Loaded once when the drawer opens (hx-trigger="load") and on every range
-   change; the drawer's SSE refresh keeps it via hx-preserve, so polling
-   never re-reads attempt summaries. `inst` is the overview-style summary for
-   the cut range (None with `error` when unknown, stopped or unreadable).
-   The strip and the bar never rely on colour alone: every day and every bar
-   segment carries a tooltip naming its outcomes, and the legend pairs each
-   colour with its shape glyph and label. #}
+{# Drawer attempt-statistics card plus Cost section: per-instance outcomes and
+   cost for a range. Loaded once when the drawer opens (hx-trigger="load")
+   and on every range change; the drawer's SSE refresh keeps it via
+   hx-preserve, so polling never re-reads attempt summaries. One range
+   selector drives both: a preset or strip selection re-renders the card and
+   the section together. `inst` is the overview-style summary for the cut
+   range (None with `error` when unknown, stopped or unreadable); `cost` is
+   the cost summary for the same cut plus the most recent finished attempt
+   regardless of range. The strip and the bar never rely on colour alone:
+   every day and every bar segment carries a tooltip naming its outcomes,
+   and the legend pairs each colour with its shape glyph and label. #}
 <div class="stats-card" data-range-query="{{ spec.query }}">
   <div class="stats-head">
     <a class="stats-title" href="/instances/{{ name | urlencode }}/history?{{ spec.query }}">Attempt history →</a>
@@ -70,5 +73,51 @@
     {% endfor %}
   </ul>
   {% endif %}
+  {% endif %}
+</div>
+<div class="stats-card cost-card">
+  <div class="stats-head">
+    <span class="stats-title">Cost</span>
+    <span class="stats-label">{{ spec.label }}</span>
+  </div>
+  {% if error %}
+  <p class="hint">{{ error }}</p>
+  {% elif cost is none %}
+  <p class="hint">Cost unavailable.</p>
+  {% elif cost.total_attempts == 0 %}
+  <p class="hint">No attempts recorded yet.</p>
+  <p class="hint">The current attempt's cost appears once it finishes.</p>
+  {% elif cost.shown == 0 %}
+  <p class="hint">No attempts in this window.</p>
+  {% if cost.last is not none %}
+  <dl class="facts">
+    <div><dt>Last finished</dt><dd><a href="/instances/{{ name | urlencode }}/attempts/{{ cost.last.issue }}/{{ cost.last.started_at | replace(":", "-") | urlencode }}">#{{ cost.last.issue }}</a> · {{ cost.last.cost_text }}</dd></div>
+  </dl>
+  {% endif %}
+  <p class="hint">The current attempt's cost appears once it finishes.</p>
+  {% elif cost.with_cost == 0 %}
+  <p class="hint">No cost data in this window · {{ cost.missing }} attempt(s) without usage data.</p>
+  {% if cost.last is not none %}
+  <dl class="facts">
+    <div><dt>Last finished</dt><dd><a href="/instances/{{ name | urlencode }}/attempts/{{ cost.last.issue }}/{{ cost.last.started_at | replace(":", "-") | urlencode }}">#{{ cost.last.issue }}</a> · {{ cost.last.cost_text }}</dd></div>
+  </dl>
+  {% endif %}
+  <p class="hint">The current attempt's cost appears once it finishes.</p>
+  {% else %}
+  <p class="stats-line">
+    <strong>{{ cost.total_text }}</strong> across {{ cost.with_cost }} attempt(s) with usage data{% if cost.missing %} · {{ cost.missing }} without usage data excluded{% endif %}
+  </p>
+  <dl class="facts">
+    <div><dt>Average</dt><dd>{{ cost.average_text }} per attempt with usage data</dd></div>
+    {% if cost.most is not none %}
+    <div><dt>Most expensive</dt><dd><a href="/instances/{{ name | urlencode }}/attempts/{{ cost.most.issue }}/{{ cost.most.started_at | replace(":", "-") | urlencode }}">#{{ cost.most.issue }}</a> · {{ cost.most.cost_text }}</dd></div>
+    {% endif %}
+    {% if cost.last is not none %}
+    <div><dt>Last finished</dt><dd><a href="/instances/{{ name | urlencode }}/attempts/{{ cost.last.issue }}/{{ cost.last.started_at | replace(":", "-") | urlencode }}">#{{ cost.last.issue }}</a> · {{ cost.last.cost_text }}</dd></div>
+    {% else %}
+    <div><dt>Last finished</dt><dd>none yet</dd></div>
+    {% endif %}
+  </dl>
+  <p class="hint">The current attempt's cost appears once it finishes.</p>
   {% endif %}
 </div>
