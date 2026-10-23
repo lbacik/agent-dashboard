@@ -1,0 +1,3 @@
+{# PROTOTYPE (#97) variant C: what the collapsed Commands summary still says. #}
+{% set items = proto.timeline(row) %}
+{% if items %}{% set it = items[0] %}· {{ items | length }} · latest #{{ it.sequence }} {{ it.kind | replace("_", " ") }}: <span class="ctl-c-tl-latest ack-{{ it.acknowledgement | replace(' ', '-') }}">{{ it.current | replace("_", " ") }}</span>{% else %}· none{% endif %}

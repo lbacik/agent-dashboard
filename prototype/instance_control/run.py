@@ -629,7 +629,8 @@ def install(app, world: World, gw: ProtoGateway) -> Proto:
             f"proto_ctl/{proto.variant.lower()}_body.html"
         if part == "timeline":
             tpl = "proto_ctl/c_timeline.html"
-        return render(request, tpl, row=row, av=proto.avail(row), where=where, error=None)
+        return render(request, tpl, row=row, av=proto.avail(row), where=where, error=None,
+                      oob=part == "timeline")
 
     @app.post("/proto/ctl/{name}/confirm", response_class=HTMLResponse)
     async def confirm(request: Request, name: str):

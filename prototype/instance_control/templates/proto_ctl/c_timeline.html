@@ -1,6 +1,6 @@
 {# PROTOTYPE (#97) variant C: telemetry control.commands as lifecycle steppers. #}
 {% set items = proto.timeline(row) %}
-<h4>Commands <span class="hint">(last 10 from telemetry)</span></h4>
+{% if oob %}<span id="ctl-tl-sum-{{ proto.slug(row.name) }}" hx-swap-oob="innerHTML">{% include "proto_ctl/c_timeline_sum.html" %}</span>{% endif %}
 {% if not items %}<p class="hint">No commands recorded.</p>{% endif %}
 <ol class="ctl-c-tl">
   {% for it in items %}

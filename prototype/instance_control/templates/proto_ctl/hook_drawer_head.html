@@ -31,8 +31,15 @@
        hx-swap="innerHTML">
     {% with where = "drawer", error = none %}{% include "proto_ctl/c_body.html" %}{% endwith %}
   </div>
-  <div class="ctl-timeline" hx-get="/proto/ctl/{{ row.name | urlencode }}/body?part=timeline" hx-trigger="sse:fleet" hx-swap="innerHTML">
-    {% include "proto_ctl/c_timeline.html" %}
-  </div>
+  {# Collapsible; the open state is one page-wide preference kept by
+     fleet.js (data-persist), and the <details> sits outside the refreshed
+     list, so the SSE refresh never reopens or closes it. #}
+  <details class="ctl-c-tl-wrap" data-persist="control-commands" open>
+    <summary><span class="ctl-c-tl-title">Commands</span> <span class="hint">(last 10 from telemetry)</span>
+      <span class="ctl-c-tl-sum" id="ctl-tl-sum-{{ s }}">{% include "proto_ctl/c_timeline_sum.html" %}</span></summary>
+    <div class="ctl-timeline" hx-get="/proto/ctl/{{ row.name | urlencode }}/body?part=timeline" hx-trigger="sse:fleet" hx-swap="innerHTML">
+      {% include "proto_ctl/c_timeline.html" %}
+    </div>
+  </details>
 </section>
 {% endif %}

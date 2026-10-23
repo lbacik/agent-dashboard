@@ -101,6 +101,14 @@
 .ctl-c-composer:has(input[value="next_issue"]:checked) [data-for="next_issue"] { display: inline-flex; }
 .ctl-c-preview { margin: 0.6rem 0; padding: 0.45rem 0.6rem; background: var(--surface-2); border-radius: 4px; font-size: 0.85rem; }
 .ctl-c-prompt { color: var(--muted); }
+.ctl-c-tl-wrap { margin-top: 0.75rem; }
+.ctl-c-tl-wrap > summary { cursor: pointer; font-size: 0.9rem; padding: 0.3rem 0; }
+.ctl-c-tl-title { font-weight: 700; }
+.ctl-c-tl-sum { color: var(--muted); font-size: 0.8rem; }
+.ctl-c-tl-wrap[open] .ctl-c-tl-sum { display: none; }
+.ctl-c-tl-latest { font-weight: 600; color: var(--info-ink); }
+.ctl-c-tl-latest.ack-completed { color: var(--ok-ink); }
+.ctl-c-tl-latest.ack-not-fulfilled { color: var(--warn-ink); }
 .ctl-c-tl { list-style: none; margin: 0; padding: 0; }
 .ctl-c-tl-item { padding: 0.5rem 0; border-top: 1px solid var(--line); font-size: 0.85rem; }
 .ctl-c-tl-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; }
