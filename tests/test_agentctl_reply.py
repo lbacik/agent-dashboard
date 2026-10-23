@@ -1,10 +1,18 @@
 """Reply parser and version table (spec sections 4, 5.4).
 
-Fixtures under ``tests/fixtures/agentctl/`` are synthetic examples
-modelled on the research's observed agentctl output. They stay apart
-from the copied contract fixtures until agent change 3 ships.
+The kinds table is exercised with the agent's published reply-contract
+examples copied under ``tests/fixtures/contract/v1/agentctl/`` (contract:
+``docs/agents/agentctl-command-replies.md`` in simple-coding-agent).
+A contract change on the agent side shows up here as a failing test.
+
+The synthetic fixtures left under ``tests/fixtures/agentctl/`` cover
+only what the contract has no example for, and each test using one says
+so: ``PRE-CONTRACT`` marks today's (pre-contract) agent output the
+parser must keep tolerating, ``MALFORMED`` marks a malformed input the
+contract has no example for.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -29,6 +37,9 @@ from agent_dashboard.gateway import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "agentctl"
+CONTRACT = Path(__file__).parent / "fixtures" / "contract" / "v1" / "agentctl"
+
+CONTRACT_REPO = "example-owner/example-repo"
 
 REPO = "acme-corp/web-app"
 RID = "dash-0123456789abcdef"
@@ -38,47 +49,75 @@ def read_fixture(name: str) -> bytes:
     return (FIXTURES / name).read_bytes()
 
 
+def read_contract(name: str) -> ControlExec:
+    """One copied contract example as the exec it pins.
+
+    Each ``examples/agentctl/*.json`` file is ``{"argv", "exit_code",
+    "stdout", "stderr"}`` and byte-identical to real CLI output.
+    """
+    payload = json.loads((CONTRACT / name).read_text())
+    return ControlExec(
+        stdout=payload["stdout"].encode(),
+        stderr=payload["stderr"].encode(),
+        returncode=payload["exit_code"],
+    )
+
+
 def control(stdout: bytes, stderr: bytes, returncode: int) -> ControlExec:
     return ControlExec(stdout=stdout, stderr=stderr, returncode=returncode)
 
 
-# --- kinds table: mutating Control actions -----------------------------------
+# --- kinds table: mutating Control actions (contract examples) ----------------
 
 
 def test_exit_0_is_accepted_with_all_fields():
     reply = parse_control_reply(
-        control(read_fixture("accepted.stdout"), b"", 0),
-        expected_repository=REPO,
+        read_contract("accepted.json"),
+        expected_repository=CONTRACT_REPO,
     )
     assert reply.kind == "accepted"
-    assert reply.repository == REPO
-    assert reply.request_id == RID
-    assert reply.sequence == 12
+    assert reply.repository == CONTRACT_REPO
+    assert reply.request_id == "req-example-accepted"
+    assert reply.sequence == 1
     assert reply.acknowledgement == "accepted"
-    assert reply.effect == "stop will begin after the current attempt finishes"
+    assert reply.effect == "finish active attempt, then stop intake"
     assert reply.repository_mismatch is False
     assert reply.repository_note is None
     assert reply.exit_code == 0
 
 
+def test_exit_0_completed_acknowledgement_is_accepted():
+    reply = parse_control_reply(
+        read_contract("completed.json"),
+        expected_repository=CONTRACT_REPO,
+    )
+    assert reply.kind == "accepted"
+    assert reply.repository == CONTRACT_REPO
+    assert reply.request_id == "req-example-completed"
+    assert reply.sequence == 1
+    assert reply.acknowledgement == "completed"
+    assert reply.effect == "intake stopped"
+    assert reply.repository_mismatch is False
+    assert reply.exit_code == 0
+
+
 def test_exit_1_is_rejected_with_reason():
     reply = parse_control_reply(
-        control(b"", read_fixture("rejected-no-repository.stderr"), 1),
-        expected_repository=REPO,
+        read_contract("rejected.json"),
+        expected_repository=CONTRACT_REPO,
     )
     assert reply.kind == "rejected"
-    assert reply.repository is None
-    assert reply.repository_mismatch is None
-    assert "already committed" in reply.reason
+    assert reply.repository == CONTRACT_REPO
+    assert reply.repository_mismatch is False
+    assert "req-example-rejected" in reply.reason
+    assert "No control change was accepted." in reply.reason
     assert reply.exit_code == 1
 
 
 def test_exit_2_usage_is_usage_error():
-    reply = parse_control_reply(
-        control(b"", read_fixture("usage-error.stderr"), 2),
-    )
+    reply = parse_control_reply(read_contract("usage-error.json"))
     assert reply.kind == "usage_error"
-    assert "unexpected argument" in reply.reason
+    assert "expected one argument" in reply.reason
     assert reply.exit_code == 2
 
 
@@ -89,17 +128,19 @@ def test_exit_2_usage_line_need_not_be_first():
 
 def test_exit_2_without_usage_is_unknown():
     reply = parse_control_reply(
-        control(b"", read_fixture("unreachable.stderr"), 2),
-        expected_repository=REPO,
+        read_contract("not-submitted.json"),
+        expected_repository=CONTRACT_REPO,
     )
     assert reply.kind == "unknown"
-    assert "connection refused" in reply.reason
+    assert "req-example-not-submitted" in reply.reason
     assert reply.repository is None
     assert reply.exit_code == 2
 
 
 @pytest.mark.parametrize("code", [125, 126, 127])
 def test_docker_could_not_run_agentctl_is_failed(code):
+    # No contract example: Docker never started agentctl, so the agent
+    # answered nothing.
     reply = parse_control_reply(control(b"", b"docker: error", code))
     assert reply.kind == "failed"
     assert reply.exit_code == code
@@ -141,44 +182,46 @@ def test_unexpected_exception_is_reraised():
         reply_for_exception(ValueError("boom"))
 
 
-# --- agentctl command <id> ----------------------------------------------------
+# --- agentctl command <id> (contract examples) ---------------------------------
 
 
 def test_command_exit_0_yields_the_record():
     reply = parse_command_reply(
-        control(read_fixture("command-record.stdout"), b"", 0),
-        expected_repository=REPO,
+        read_contract("command-found.json"),
+        expected_repository=CONTRACT_REPO,
     )
     assert reply.kind == "record"
-    assert reply.repository == REPO
-    assert reply.request_id == RID
-    assert reply.sequence == 12
+    assert reply.repository == CONTRACT_REPO
+    assert reply.request_id == "req-example-record"
+    assert reply.sequence == 1
     assert reply.acknowledgement == "completed"
     assert reply.repository_mismatch is False
-    # Future contract keys ride along in raw without breaking the reader.
-    assert reply.raw["detail"] == "the stop committed at 2026-09-30T09:00:00Z"
+    assert reply.effect == "intake stopped"
     assert reply.exit_code == 0
 
 
 def test_command_exit_1_is_not_recorded():
-    reply = parse_command_reply(
-        control(b"", read_fixture("command-not-recorded.stderr"), 1)
-    )
+    reply = parse_command_reply(read_contract("command-not-found.json"))
     assert reply.kind == "not_recorded"
     assert "no such command" in reply.reason
+    assert reply.repository == CONTRACT_REPO
     assert reply.exit_code == 1
 
 
 def test_command_exit_2_is_unknown():
+    # The contract has no command-specific exit-2 example; the shared
+    # not-submitted example covers the shared exit-2-unknown path the
+    # command parser reuses.
     reply = parse_command_reply(
-        control(b"", read_fixture("command-unknown.stderr"), 2),
+        read_contract("not-submitted.json"),
+        expected_repository=CONTRACT_REPO,
     )
     assert reply.kind == "unknown"
-    assert "connection refused" in reply.reason
+    assert "req-example-not-submitted" in reply.reason
 
 
 def test_command_exit_2_usage_is_usage_error():
-    reply = parse_command_reply(control(b"", read_fixture("usage-error.stderr"), 2))
+    reply = parse_command_reply(read_contract("usage-error.json"))
     assert reply.kind == "usage_error"
 
 
@@ -198,10 +241,38 @@ def test_command_timeout_is_unknown_and_docker_missing_is_failed():
     assert reply_for_exception(DockerNotAvailableError("d")).kind == "failed"
 
 
-# --- tolerance rules ----------------------------------------------------------
+# --- pre-contract tolerance: today's output without a repository line ---------
 
 
-def test_missing_repository_on_exit_0_is_no_mismatch_with_a_note():
+def test_pre_contract_rejection_without_repository_line():
+    # PRE-CONTRACT: agents before the reply contract reject without the
+    # stderr `repository:` line; the parser must keep tolerating that.
+    reply = parse_control_reply(
+        control(b"", read_fixture("rejected-no-repository.stderr"), 1),
+        expected_repository=REPO,
+    )
+    assert reply.kind == "rejected"
+    assert reply.repository is None
+    assert reply.repository_mismatch is None
+    assert "already committed" in reply.reason
+    assert reply.exit_code == 1
+
+
+def test_pre_contract_command_not_found_without_repository_line():
+    # PRE-CONTRACT: "no such command" before the contract carried no
+    # `repository:` line; the parser must keep tolerating that.
+    reply = parse_command_reply(
+        control(b"", read_fixture("command-not-recorded.stderr"), 1)
+    )
+    assert reply.kind == "not_recorded"
+    assert reply.repository is None
+    assert "no such command" in reply.reason
+    assert reply.exit_code == 1
+
+
+def test_pre_contract_missing_repository_on_exit_0_is_no_mismatch_with_a_note():
+    # PRE-CONTRACT: exit-0 replies before the contract may name no
+    # repository; that is no mismatch, with a note.
     reply = parse_control_reply(
         control(read_fixture("completed-no-repository.stdout"), b"", 0),
         expected_repository=REPO,
@@ -214,7 +285,13 @@ def test_missing_repository_on_exit_0_is_no_mismatch_with_a_note():
     assert reply.repository_note == "the reply did not name a repository"
 
 
+# --- tolerance rules: malformed input the contract has no example for --------
+
+
 def test_unknown_keys_are_ignored_but_kept_in_raw():
+    # MALFORMED (contract has no example): the contract says new keys are
+    # additive and readers ignore unknown keys; the parser keeps them in
+    # raw for tests without rendering them.
     reply = parse_control_reply(
         control(read_fixture("unknown-keys.stdout"), b"", 0),
         expected_repository=REPO,
@@ -226,6 +303,8 @@ def test_unknown_keys_are_ignored_but_kept_in_raw():
 
 
 def test_non_integer_sequence_is_none():
+    # MALFORMED (contract has no example): a non-integer sequence reads
+    # as none rather than raising.
     reply = parse_control_reply(
         control(read_fixture("non-integer-sequence.stdout"), b"", 0),
         expected_repository=REPO,
@@ -244,6 +323,9 @@ def test_unparsable_sequences_are_none(sequence):
 
 
 def test_duplicate_keys_first_wins():
+    # MALFORMED (contract has no example): the contract prints one line
+    # per key, so a repeated key is malformed input; the first occurrence
+    # wins and never raises.
     reply = parse_control_reply(
         control(read_fixture("duplicate-keys.stdout"), b"", 0),
         expected_repository=REPO,
@@ -257,15 +339,15 @@ def test_duplicate_keys_first_wins():
 
 def test_stderr_repository_line_on_a_rejection():
     reply = parse_control_reply(
-        control(b"", read_fixture("rejected-repository-mismatch.stderr"), 1),
-        expected_repository=REPO,
+        read_contract("rejected.json"),
+        expected_repository="other-owner/other-repo",
     )
     assert reply.kind == "rejected"
-    assert reply.repository == "acme-corp/other-app"
+    assert reply.repository == CONTRACT_REPO
     assert reply.repository_mismatch is True
     # Only the first line is the repository; the rest is the reason.
     assert "repository:" not in reply.reason
-    assert "expected repository" in reply.reason
+    assert "No control change was accepted." in reply.reason
 
 
 def test_stderr_repository_matching_is_no_mismatch():

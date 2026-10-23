@@ -1,6 +1,0 @@
-repository: acme-corp/web-app
-request_id: dash-0123456789abcdef
-sequence: 12
-acknowledgement: completed
-effect: stop completed after 3 attempts
-detail: the stop committed at 2026-09-30T09:00:00Z
