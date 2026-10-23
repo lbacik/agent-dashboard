@@ -1,7 +1,9 @@
 # AGENTS.md
 
-Read-only web dashboard (FastAPI + Jinja2 + htmx/SSE) for a fleet of
-simple-coding-agent containers on one Docker host. Start with `README.md`.
+Web dashboard (FastAPI + Jinja2 + htmx/SSE) for a fleet of
+simple-coding-agent containers on one Docker host: live monitoring plus
+optional Control actions on live instances (read-only with `--control off`).
+Start with `README.md`.
 
 ## Where things are decided
 
