@@ -21,6 +21,9 @@ ENV_PREFIX = "AGENT_DASHBOARD_"
 #: Values of AGENT_DASHBOARD_ALLOW_NON_LOOPBACK that opt in to a non-loopback bind.
 TRUTHY = {"1", "true", "yes", "on"}
 
+#: Falsy spellings for the ``control`` setting (anything else is a startup error).
+FALSY = {"0", "false", "no", "off"}
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -33,6 +36,7 @@ class Settings:
     max_concurrent_execs: int = DEFAULT_MAX_CONCURRENT_EXECS
     allow_non_loopback: bool = False
     allowed_hosts: frozenset[str] = field(default_factory=frozenset)
+    control: bool = True
 
 
 def is_loopback(host: str) -> bool:
@@ -79,6 +83,25 @@ def parse_truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in TRUTHY
 
 
+def parse_control(value: str | None) -> bool:
+    """Parse the ``control`` setting: on/off plus truthy/falsy spellings.
+
+    ``None`` (or blank) means the default (on). Anything else is a startup
+    error, so a typo never silently disables Control actions.
+    """
+    if value is None or not value.strip():
+        return True
+    text = value.strip().lower()
+    if text in TRUTHY:
+        return True
+    if text in FALSY:
+        return False
+    raise ValueError(
+        f"invalid control value: {value!r} (expected on/off, "
+        "or a truthy/falsy spelling like true/false, yes/no, 1/0)"
+    )
+
+
 def _env(name: str) -> str | None:
     value = os.environ.get(ENV_PREFIX + name)
     return value if value not in (None, "") else None
@@ -122,6 +145,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--allowed-hosts",
         default=None,
         help="Comma-separated extra Host allow-list entries (no wildcard).",
+    )
+    parser.add_argument(
+        "--control",
+        default=None,
+        help="Control actions on/off (default on; off is read-only mode).",
     )
     return parser
 
@@ -175,6 +203,9 @@ def load_settings(argv: list[str] | None = None) -> Settings:
     if max_execs < 1:
         raise ValueError(f"max concurrent execs must be >= 1: {max_execs}")
 
+    control = parse_control(
+        args.control if args.control is not None else _env("CONTROL")
+    )
     allow_non_loopback = bool(
         args.allow_non_loopback or parse_truthy(_env("ALLOW_NON_LOOPBACK"))
     )
@@ -193,4 +224,5 @@ def load_settings(argv: list[str] | None = None) -> Settings:
         max_concurrent_execs=max_execs,
         allow_non_loopback=allow_non_loopback,
         allowed_hosts=allowed_hosts,
+        control=control,
     )

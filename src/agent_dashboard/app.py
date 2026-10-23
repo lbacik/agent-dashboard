@@ -65,6 +65,12 @@ from .charts import (
     undated_count,
 )
 from .config import Settings
+from .control import (
+    compute_control_mode,
+    control_slug,
+    host_guard_disabled_from_env,
+)
+from .control_routes import register_control_routes
 from .cost_summary import summarize_cost
 from .fleet import FleetState, poll_forever
 from .gateway import (
@@ -214,6 +220,11 @@ def create_app(
 ) -> FastAPI:
     fleet = state if state is not None else FleetState()
     cfg = settings if settings is not None else Settings()
+    control_mode = compute_control_mode(
+        control_enabled=getattr(cfg, "control", True),
+        host=cfg.host,
+        host_guard_disabled=host_guard_disabled_from_env(),
+    )
     if gateway is not None:
         gw = gateway
     else:
@@ -228,6 +239,7 @@ def create_app(
         app.state.fleet = fleet
         app.state.settings = cfg
         app.state.gateway = gw
+        app.state.control_mode = control_mode
         task: asyncio.Task | None = None
         if start_poller:
             task = asyncio.create_task(
@@ -252,6 +264,7 @@ def create_app(
     app.state.fleet = fleet
     app.state.settings = cfg
     app.state.gateway = gw
+    app.state.control_mode = control_mode
     extra_hosts = getattr(cfg, "allowed_hosts", frozenset()) or frozenset()
     # TEMPORARY escape hatch: AGENT_DASHBOARD_DISABLE_HOST_GUARD=1 skips the Host check.
     if os.environ.get("AGENT_DASHBOARD_DISABLE_HOST_GUARD") != "1":
@@ -291,6 +304,7 @@ def create_app(
                 "drawer_open": bool(wanted),
                 "row": row,
                 "name": wanted,
+                "ctl_slug": control_slug(row.name) if row is not None else "",
             },
         )
 

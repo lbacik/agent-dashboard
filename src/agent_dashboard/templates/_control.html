@@ -1,0 +1,30 @@
+{# Control console body (spec sections 5, 8.2): the "Controls unavailable"
+   line, or the read-only composer. Fetched by the console slot in the
+   drawer on load and on every filtered `sse:fleet` event. Review is not
+   wired up yet: the Review button posts to the review route, which a
+   later slice adds. #}
+{% if error %}
+<p class="hint">{{ error }}</p>
+{% elif av.unavailable %}
+<p class="ctl-unavailable">Controls unavailable: {{ av.unavailable }}</p>
+{% else %}
+{% if av.stale_note %}<p class="ctl-stale">{{ av.stale_note }}</p>{% endif %}
+<form class="ctl-composer" hx-post="{{ review_url }}" hx-target="closest .ctl-body" hx-swap="innerHTML">
+  <div class="ctl-actions" role="radiogroup" aria-label="Control action">
+    {% for a in av.actions %}
+    <label class="ctl-opt{% if not a.enabled %} is-disabled{% endif %}">
+      <input type="radio" name="action" value="{{ a.key }}"{% if not a.enabled %} disabled{% endif %}{% if a.checked %} checked{% endif %} data-cmd="{{ ACTION_COMMANDS[a.key] }}">
+      <span class="ctl-label">{{ a.label }}</span>
+      {% if a.reason %}<span class="ctl-reason">{{ a.reason }}</span>{% elif a.note %}<span class="ctl-note">{{ a.note }}</span>{% endif %}
+    </label>
+    {% endfor %}
+  </div>
+  <div class="ctl-params">
+    <label data-for="stop_after"{% if not (av.actions | selectattr("key", "equalto", "stop_after") | selectattr("checked") | list) %} hidden{% endif %}>Attempts before stopping <input name="n" inputmode="numeric" size="3" value="1"></label>
+    <label data-for="next_issue"{% if not (av.actions | selectattr("key", "equalto", "next_issue") | selectattr("checked") | list) %} hidden{% endif %}>Issue number <input name="issue" inputmode="numeric" size="7" value="" placeholder="e.g. 123"></label>
+  </div>
+  {% set first = av.actions | selectattr("enabled") | first %}
+  <p class="ctl-preview"><span class="ctl-prompt">$</span> <code>agentctl <span data-preview>{% if first %}{{ first.command }}{% else %}(choose an action){% endif %}</span></code></p>
+  <button type="submit" class="btn ctl-review"{% if not first %} disabled{% endif %}>Review…</button>
+</form>
+{% endif %}
