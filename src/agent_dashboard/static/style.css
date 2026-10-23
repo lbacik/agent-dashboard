@@ -312,6 +312,47 @@ table.fleet td.headline { min-width: 14rem; }
 .ctl-step.is-current { color: var(--ink); font-weight: 700; text-decoration: underline; }
 .ctl-detail { margin: 0.35rem 0 0; overflow-wrap: anywhere; }
 
+/* Feedback cards above the composer (spec 8.4): one tone per outcome plus
+   a text title, so no state relies on colour alone. Light theme only,
+   tokens from :root. */
+.ctl-feedback { display: flex; flex-direction: column; gap: 0.5rem; }
+.ctl-feedback:empty { display: none; }
+.ctl-card {
+  position: relative;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+  background: var(--card);
+}
+.ctl-card-dismiss {
+  position: absolute;
+  top: 0.15rem;
+  right: 0.4rem;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 1rem;
+  cursor: pointer;
+}
+.ctl-card-head { margin: 0; }
+.ctl-card-head code { font-family: monospace; }
+.ctl-card-title { margin: 0.2rem 0 0; font-weight: 700; }
+.ctl-card-body { margin: 0.2rem 0 0; overflow-wrap: anywhere; }
+.ctl-card-progress { margin: 0.2rem 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.ctl-card-note { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.8rem; }
+.ctl-card-meta { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.8rem; }
+.ctl-card-meta code { font-family: monospace; }
+.ctl-card-retry, .ctl-card-status { margin-top: 0.35rem; }
+.ctl-tone-info { border-left-color: var(--accent); }
+.ctl-tone-ok { border-left-color: var(--oc-complete); background: var(--ok-bg); }
+.ctl-tone-muted { border-left-color: var(--muted); background: var(--surface-2); }
+.ctl-tone-warn { border-left-color: var(--oc-incomplete); background: var(--warn-bg); }
+.ctl-tone-error { border-left-color: var(--oc-infra); background: var(--danger-bg); }
+.ctl-error { color: var(--danger-ink); }
+
 .budget-bar {
   position: relative;
   height: 0.6rem;

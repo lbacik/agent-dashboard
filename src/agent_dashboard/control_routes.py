@@ -1,10 +1,13 @@
-"""Control console routes (spec section 6, review and submit slices).
+"""Control console routes (spec section 6, review/submit/track/status).
 
 GET routes serve the console body and the command timeline (read-only).
 POST ``/review`` validates the composer's choice and renders the two-step
 confirmation; it never runs a control exec and never writes a ``submitted``
 entry. POST ``/submit`` sends the Control action and returns one feedback
-card. Every refusal writes one ``refused`` Control audit entry.
+card. Every submit/review refusal writes one ``refused`` Control audit
+entry. GET ``/track`` re-reads one accepted card from the latest good
+snapshot (no Docker call) and POST ``/status`` re-renders it from
+``agentctl command <id>``; neither writes a Control audit entry.
 """
 
 from __future__ import annotations
@@ -12,7 +15,7 @@ from __future__ import annotations
 import secrets
 import sys
 import time
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs, quote, urlencode
 
 from fastapi import Request, Response
 from fastapi.responses import HTMLResponse
@@ -20,6 +23,7 @@ from fastapi.templating import Jinja2Templates
 
 from .agentctl_reply import (
     ControlReply,
+    parse_command_reply,
     parse_control_reply,
     reply_for_exception,
     supports_expect_repo,
@@ -29,9 +33,11 @@ from .control import (
     ACTION_LABELS,
     MISSING,
     ControlMode,
+    FollowResult,
     command_timeline,
     control_availability,
     control_slug,
+    follow_command,
     timeline_summary,
 )
 from .control_audit import (
@@ -90,6 +96,222 @@ USAGE_ERROR_BODY = (
     "The agent's agentctl did not accept the dashboard's arguments; "
     "nothing was sent. This is a dashboard bug or a version mismatch."
 )
+
+#: Not recorded card body (spec 8.4): the command was never committed.
+NOT_RECORDED_BODY = (
+    "Not recorded: the command was not applied. "
+    "Retry with the same request ID to send it."
+)
+
+
+def render_card(
+    templates: Jinja2Templates,
+    *,
+    command: str,
+    tone: str,
+    title: str,
+    body: str,
+    request_id: str | None,
+    sequence: int | None = None,
+    note: str | None = None,
+    outcome_note: str | None = None,
+    progress: str | None = None,
+    track_url: str | None = None,
+    retry_fields: dict | None = None,
+    status_fields: dict | None = None,
+) -> str:
+    """One feedback card fragment (agent text goes through autoescape).
+
+    A card with ``track_url`` keeps following its command: it re-requests
+    ``track`` on every ``sse:fleet`` event and its meta shows
+    "following…". Shared by the submit, status and track routes.
+    """
+    return templates.get_template("_control_card.html").render(
+        {
+            "command": command,
+            "tone": tone,
+            "title": title,
+            "body": body,
+            "note": note,
+            "outcome_note": outcome_note,
+            "progress": progress,
+            "track_url": track_url,
+            "request_id": request_id,
+            "sequence": sequence,
+            "retry_fields": retry_fields,
+            "status_fields": status_fields,
+        }
+    )
+
+
+def track_url_for(
+    name: str,
+    *,
+    action: str,
+    n_value: int | None,
+    issue_value: int | None,
+    container_id: str,
+    repository: str,
+    request_id: str,
+    sequence: int | None,
+) -> str:
+    """The ``track`` URL that re-reads one accepted card (spec 8.4).
+
+    The card's values travel as query parameters, plus the sequence from
+    the accepted reply, so the stateless ``track`` route can locate the
+    command in the latest good snapshot.
+    """
+    params: dict[str, str] = {
+        "action": action,
+        "container_id": container_id,
+        "repository": repository,
+        "request_id": request_id,
+    }
+    if n_value is not None:
+        params["n"] = str(n_value)
+    if issue_value is not None:
+        params["issue"] = str(issue_value)
+    if sequence is not None:
+        params["sequence"] = str(sequence)
+    return f"/instances/{quote(name, safe='')}/control/track?{urlencode(params)}"
+
+
+def _validate_track(query: dict[str, str]) -> tuple[dict | None, str | None]:
+    """Validate the ``track`` query parameters (the card's values).
+
+    Returns ``(values, None)`` with the parsed action, parameter, container
+    ID, repository, request ID and sequence (none when the accepted reply
+    named none), or ``(None, message)`` with the first failure. A failure
+    answers 422 and never reaches the snapshot.
+    """
+    action_raw = query.get("action", "")
+    try:
+        action = validate_control_action(action_raw)
+    except ValueError:
+        return None, (
+            f"Invalid action: {action_raw!r} "
+            "(expected one of stop, stop_after, resume, handoff, next_issue)."
+        )
+    n_value: int | None = None
+    issue_value: int | None = None
+    if action == "stop_after":
+        try:
+            n_value = validate_control_n(query.get("n", ""))
+        except ValueError:
+            return None, (
+                f"Invalid attempts before stopping: {query.get('n', '')!r} "
+                "(expected 1–99)."
+            )
+    elif action == "next_issue":
+        try:
+            issue_value = validate_control_issue(query.get("issue", ""))
+        except ValueError:
+            return None, (
+                f"Invalid issue number: {query.get('issue', '')!r} "
+                "(expected 1–2147483647)."
+            )
+    try:
+        container_id = validate_container_id(query.get("container_id", ""))
+    except ValueError:
+        return None, f"Invalid container ID: {query.get('container_id', '')!r}."
+    try:
+        request_id = validate_request_id(query.get("request_id", ""))
+    except ValueError:
+        return None, (
+            f"Invalid request ID: {query.get('request_id', '')!r} "
+            "(expected dash- plus 16 hex characters)."
+        )
+    raw_sequence = query.get("sequence", "")
+    sequence: int | None = None
+    if raw_sequence not in ("", None):
+        try:
+            sequence = int(str(raw_sequence))
+        except (TypeError, ValueError):
+            return None, f"Invalid sequence: {raw_sequence!r} (expected an integer)."
+        if sequence < 0:
+            return None, f"Invalid sequence: {raw_sequence!r} (expected an integer)."
+    return (
+        {
+            "action": action,
+            "n_value": n_value,
+            "issue_value": issue_value,
+            "container_id": container_id,
+            "repository": query.get("repository", ""),
+            "request_id": request_id,
+            "sequence": sequence,
+        },
+        None,
+    )
+
+
+def follow_card(
+    templates: Jinja2Templates,
+    name: str,
+    values: dict,
+    result: FollowResult,
+    *,
+    submit_url: str | None = None,
+    status_url: str | None = None,
+) -> str:
+    """Render one tracked card from a :class:`FollowResult` (spec 8.4).
+
+    Following, paused and waiting cards keep their ``sse:fleet`` track
+    trigger; the evicted card stops and offers Check status; terminal and
+    gone cards stop with no buttons.
+    """
+    command = _display_command(
+        values["action"], n=values["n_value"], issue=values["issue_value"]
+    )
+    if result.outcome in ("following", "paused", "waiting"):
+        return render_card(
+            templates,
+            command=command,
+            tone=result.tone,
+            title=result.title,
+            body=result.body,
+            request_id=values["request_id"],
+            sequence=values["sequence"],
+            progress=result.progress,
+            track_url=track_url_for(
+                name,
+                action=values["action"],
+                n_value=values["n_value"],
+                issue_value=values["issue_value"],
+                container_id=values["container_id"],
+                repository=values["repository"],
+                request_id=values["request_id"],
+                sequence=values["sequence"],
+            ),
+        )
+    if result.outcome == "evicted" and status_url is not None:
+        return render_card(
+            templates,
+            command=command,
+            tone=result.tone,
+            title=result.title,
+            body=result.body,
+            request_id=values["request_id"],
+            sequence=values["sequence"],
+            status_fields={
+                "action": values["action"],
+                "n_value": values["n_value"],
+                "issue_value": values["issue_value"],
+                "container_id": values["container_id"],
+                "repository": values["repository"],
+                "request_id": values["request_id"],
+                "status_url": status_url,
+            },
+        )
+    return render_card(
+        templates,
+        command=command,
+        tone=result.tone,
+        title=result.title,
+        body=result.body,
+        request_id=values["request_id"],
+        sequence=values["sequence"],
+        progress=result.progress,
+    )
 
 
 def _validate_submit(form: dict[str, str]) -> tuple[dict | None, str | None]:
@@ -617,23 +839,26 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
             sequence: int | None = None,
             note: str | None = None,
             outcome_note: str | None = None,
+            progress: str | None = None,
+            track_url: str | None = None,
             retry_fields: dict | None = None,
             status_fields: dict | None = None,
         ) -> str:
             """One feedback card fragment (agent text goes through autoescape)."""
-            return templates.get_template("_control_card.html").render(
-                {
-                    "command": command,
-                    "tone": tone,
-                    "title": title,
-                    "body": body,
-                    "note": note,
-                    "outcome_note": outcome_note,
-                    "request_id": request_id,
-                    "sequence": sequence,
-                    "retry_fields": retry_fields,
-                    "status_fields": status_fields,
-                }
+            return render_card(
+                templates,
+                command=command,
+                tone=tone,
+                title=title,
+                body=body,
+                request_id=request_id,
+                sequence=sequence,
+                note=note,
+                outcome_note=outcome_note,
+                progress=progress,
+                track_url=track_url,
+                retry_fields=retry_fields,
+                status_fields=status_fields,
             )
 
         def refused_card(message: str, *, request_id: str | None, command: str) -> str:
@@ -959,16 +1184,41 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
             )
         elif reply.kind == "accepted":
             completed = reply.acknowledgement == "completed"
-            feedback = card(
-                command=command,
-                tone="ok" if completed else "info",
-                title="Completed" if completed else "Accepted",
-                body=reply.effect or "—",
-                request_id=request_id,
-                sequence=reply.sequence,
-                note=reply.repository_note,
-                outcome_note=outcome_note,
-            )
+            if completed:
+                feedback = card(
+                    command=command,
+                    tone="ok",
+                    title="Completed",
+                    body=reply.effect or "—",
+                    request_id=request_id,
+                    sequence=reply.sequence,
+                    note=reply.repository_note,
+                    outcome_note=outcome_note,
+                )
+            else:
+                # An accepted (non-terminal) card keeps following its
+                # command: it re-requests `track` on every `sse:fleet`
+                # event until the acknowledgement is terminal.
+                feedback = card(
+                    command=command,
+                    tone="info",
+                    title="Accepted",
+                    body=reply.effect or "—",
+                    request_id=request_id,
+                    sequence=reply.sequence,
+                    note=reply.repository_note,
+                    outcome_note=outcome_note,
+                    track_url=track_url_for(
+                        name,
+                        action=action,
+                        n_value=n_value,
+                        issue_value=issue_value,
+                        container_id=container_id,
+                        repository=repository,
+                        request_id=request_id,
+                        sequence=reply.sequence,
+                    ),
+                )
         elif reply.kind == "rejected":
             feedback = card(
                 command=command,
@@ -1017,3 +1267,344 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                 outcome_note=outcome_note,
             )
         return HTMLResponse(feedback + body_oob(), status_code=200)
+
+    @app.get("/instances/{name}/control/track", response_class=HTMLResponse)
+    async def instance_control_track(request: Request, name: str) -> Response:
+        """One accepted card, re-read from the latest good snapshot.
+
+        The card re-requests this route on every ``sse:fleet`` event until
+        its acknowledgement is terminal. Reads only the latest good
+        snapshot (no Docker call, no Control audit entry): when the request
+        ID is in ``control.commands`` the card takes its acknowledgement
+        and detail plus the progress line from the related section; an
+        absent ID below every recorded sequence stops with "No longer in
+        the last 10 commands" and Check status; an absent ID otherwise
+        keeps "waiting for the next snapshot"; a replaced container stops
+        with the /data volume message; a non-live Reach pauses but keeps
+        following. An instance the fleet no longer lists stops the same
+        way (200, so the ``sse:fleet`` trigger swaps and tracking ends).
+        """
+        fleet = request.app.state.fleet
+        cfg = request.app.state.settings
+        poll_interval = getattr(cfg, "poll_interval", 5.0)
+        rows, _ = await fleet.snapshot(poll_interval=poll_interval)
+        row = next((r for r in rows if r.name == name), None)
+
+        query = dict(request.query_params)
+        values, message = _validate_track(query)
+        if values is None:
+            assert message is not None
+            return HTMLResponse(f'<p class="ctl-error">{message}</p>', status_code=422)
+        status_url = f"/instances/{quote(name, safe='')}/control/status"
+        if row is None:
+            return HTMLResponse(
+                render_card(
+                    templates,
+                    command=_display_command(
+                        values["action"],
+                        n=values["n_value"],
+                        issue=values["issue_value"],
+                    ),
+                    tone="info",
+                    title="Accepted",
+                    body=(
+                        "Instance replaced or unavailable; the agent's record of "
+                        "this command is on its /data volume."
+                    ),
+                    request_id=values["request_id"],
+                    sequence=values["sequence"],
+                ),
+                status_code=200,
+            )
+        control = None if row.control_raw_missing else row.control_raw
+        result = follow_command(
+            action=values["action"],
+            request_id=values["request_id"],
+            sequence=values["sequence"],
+            card_container_id=values["container_id"],
+            control=control,
+            reach=row.reach,
+            row_container_id=row.container_id,
+            row_exists=True,
+        )
+        return HTMLResponse(
+            follow_card(templates, name, values, result, status_url=status_url),
+            status_code=200,
+        )
+
+    @app.post("/instances/{name}/control/status", response_class=HTMLResponse)
+    async def instance_control_status(request: Request, name: str) -> Response:
+        """Ask the agent directly: ``agentctl command <id>`` for one card.
+
+        Request protection, then validation, then the gateway's
+        command-status exec (409 when busy), then the re-rendered card.
+        Exit 0 takes the record's state; ``not_recorded`` offers Retry;
+        ``unknown`` (and any other non-record outcome) shows "Could not
+        check" with both buttons. It writes no Control audit entry: it
+        changes nothing. No path returns a 500.
+        """
+        fleet = request.app.state.fleet
+        cfg = request.app.state.settings
+        mode = getattr(request.app.state, "control_mode", ControlMode(available=True))
+        gateway = request.app.state.gateway
+        poll_interval = getattr(cfg, "poll_interval", 5.0)
+        rows, _ = await fleet.snapshot(poll_interval=poll_interval)
+        row = next((r for r in rows if r.name == name), None)
+
+        form = parse_form(await request.body())
+
+        protection = check_protection(request, mode)
+        if protection is not None:
+            reason, message = protection
+            if reason == "controls_unavailable":
+                fragment = f"Controls unavailable: {message}"
+            else:
+                fragment = f"Request refused: {message}"
+            return HTMLResponse(f'<p class="ctl-error">{fragment}</p>', status_code=403)
+
+        if row is None:
+            return templates.TemplateResponse(
+                request,
+                "_control.html",
+                {"name": name, "slug": control_slug(name), "error": "instance not found"},
+                status_code=404,
+            )
+
+        values, validation_message = _validate_submit(form)
+        if values is None:
+            assert validation_message is not None
+            try:
+                shown_request: str | None = validate_request_id(
+                    form.get("request_id", "")
+                )
+            except ValueError:
+                shown_request = None
+            action_raw = form.get("action", "")
+            return HTMLResponse(
+                render_card(
+                    templates,
+                    command=action_raw or "—",
+                    tone="error",
+                    title="Refused",
+                    body=validation_message,
+                    request_id=shown_request,
+                ),
+                status_code=422,
+            )
+
+        action = values["action"]
+        n_value = values["n_value"]
+        issue_value = values["issue_value"]
+        container_id = values["container_id"]
+        repository = values["repository"]
+        request_id = values["request_id"]
+        command = values["command"]
+        submit_url = f"/instances/{quote(name, safe='')}/control/submit"
+        status_url = f"/instances/{quote(name, safe='')}/control/status"
+
+        def check_card(reason: str) -> str:
+            """A "Could not check" card with both Retry and Check status."""
+            return render_card(
+                templates,
+                command=command,
+                tone="error",
+                title="Outcome unknown",
+                body=f"Could not check: {reason}",
+                request_id=request_id,
+                sequence=None,
+                retry_fields={
+                    "action": action,
+                    "n_value": n_value,
+                    "issue_value": issue_value,
+                    "container_id": container_id,
+                    "repository": repository,
+                    "request_id": request_id,
+                    "submit_url": submit_url,
+                },
+                status_fields={
+                    "action": action,
+                    "n_value": n_value,
+                    "issue_value": issue_value,
+                    "container_id": container_id,
+                    "repository": repository,
+                    "request_id": request_id,
+                    "status_url": status_url,
+                },
+            )
+
+        # The card's container must still be the fleet's: otherwise the
+        # agent's record of this command is on its /data volume.
+        if row.container_id != container_id:
+            return HTMLResponse(
+                render_card(
+                    templates,
+                    command=command,
+                    tone="info",
+                    title="Accepted",
+                    body=(
+                        "Instance replaced or unavailable; the agent's record of "
+                        "this command is on its /data volume."
+                    ),
+                    request_id=request_id,
+                    sequence=None,
+                ),
+                status_code=200,
+            )
+
+        # The per-instance busy check refuses before the exec (409), like
+        # submit but without any audit entry.
+        in_flight = getattr(gateway, "control_in_flight", None)
+        if callable(in_flight):
+            try:
+                claimed = bool(in_flight(row.container_id))
+            except Exception:  # noqa: BLE001 - a broken probe never refuses
+                claimed = False
+            if claimed:
+                return HTMLResponse(check_card(BUSY_MESSAGE), status_code=409)
+
+        reply: ControlReply | None = None
+        try:
+            exec_result = await gateway.command_status(row.container_id, request_id)
+        except ControlBusyError:
+            return HTMLResponse(check_card(BUSY_MESSAGE), status_code=409)
+        except (ControlTimeoutError, DockerNotAvailableError) as exc:
+            reply = reply_for_exception(exc)
+        except Exception as exc:  # noqa: BLE001 - no path returns a 500
+            reply = ControlReply(
+                kind="unknown",
+                reason=str(exc)[:2000] or "command status exec failed",
+                exit_code=None,
+            )
+        else:
+            try:
+                reply = parse_command_reply(
+                    exec_result, expected_repository=repository
+                )
+            except Exception as exc:  # noqa: BLE001 - the parser never raises
+                code = getattr(exec_result, "returncode", None)
+                reply = ControlReply(
+                    kind="unknown",
+                    reason=str(exc)[:2000] or "command status exec failed",
+                    exit_code=code if isinstance(code, int) else None,
+                )
+        assert reply is not None
+
+        if reply.kind == "record":
+            acknowledgement = reply.acknowledgement
+            # The record carries `effect` as a first-class field; its
+            # `detail` line survives in the raw mapping only.
+            record_text = reply.effect or reply.raw.get("detail") or None
+            if isinstance(acknowledgement, str) and acknowledgement in (
+                "completed",
+                "superseded",
+                "not fulfilled",
+            ):
+                titles = {
+                    "completed": "Completed",
+                    "superseded": "Superseded",
+                    "not fulfilled": "Not fulfilled",
+                }
+                tones = {
+                    "completed": "ok",
+                    "superseded": "muted",
+                    "not fulfilled": "warn",
+                }
+                return HTMLResponse(
+                    render_card(
+                        templates,
+                        command=command,
+                        tone=tones[acknowledgement],
+                        title=titles[acknowledgement],
+                        body=record_text or "—",
+                        request_id=request_id,
+                        sequence=reply.sequence,
+                    ),
+                    status_code=200,
+                )
+            # A non-terminal record keeps following from the snapshot: the
+            # progress line comes from the related section there.
+            control = None if row.control_raw_missing else row.control_raw
+            result = follow_command(
+                action=action,
+                request_id=request_id,
+                sequence=reply.sequence,
+                card_container_id=container_id,
+                control=control,
+                reach=row.reach,
+                row_container_id=row.container_id,
+                row_exists=True,
+            )
+            if result.outcome == "terminal":
+                return HTMLResponse(
+                    render_card(
+                        templates,
+                        command=command,
+                        tone=result.tone,
+                        title=result.title,
+                        body=result.body,
+                        request_id=request_id,
+                        sequence=reply.sequence,
+                    ),
+                    status_code=200,
+                )
+            status_values = {
+                "action": action,
+                "n_value": n_value,
+                "issue_value": issue_value,
+                "container_id": container_id,
+                "repository": repository,
+                "request_id": request_id,
+                "sequence": reply.sequence,
+            }
+            # The agent just confirmed the command is still accepted. The
+            # record's own text is fresher than the snapshot's, so it wins;
+            # the progress line still comes from the snapshot's related
+            # section.
+            if result.outcome in ("following", "paused", "waiting"):
+                outcome = result.outcome
+            else:
+                outcome = "following"
+            body = record_text or result.body
+            return HTMLResponse(
+                follow_card(
+                    templates,
+                    name,
+                    status_values,
+                    FollowResult(
+                        outcome=outcome,
+                        acknowledgement=acknowledgement,
+                        title="Accepted",
+                        tone="info",
+                        body=body,
+                        progress=result.progress,
+                        following=True,
+                    ),
+                    status_url=status_url,
+                ),
+                status_code=200,
+            )
+        if reply.kind == "not_recorded":
+            return HTMLResponse(
+                render_card(
+                    templates,
+                    command=command,
+                    tone="error",
+                    title="Not recorded",
+                    body=NOT_RECORDED_BODY,
+                    request_id=request_id,
+                    sequence=reply.sequence,
+                    retry_fields={
+                        "action": action,
+                        "n_value": n_value,
+                        "issue_value": issue_value,
+                        "container_id": container_id,
+                        "repository": repository,
+                        "request_id": request_id,
+                        "submit_url": submit_url,
+                    },
+                ),
+                status_code=200,
+            )
+        return HTMLResponse(
+            check_card(reply.reason or "no reply from the agent"), status_code=200
+        )

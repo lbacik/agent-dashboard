@@ -1,19 +1,23 @@
 {# One Control submit feedback card (spec section 8.4).
 
-   Returned by the submit route into the feedback slot above the composer
-   (`hx-target="#ctl-feedback-<slug>" hx-swap="afterbegin"`), so the newest
-   card lands first; a Retry response replaces its own card
+   Returned by the submit/status/track routes into the feedback slot above
+   the composer (`hx-target="#ctl-feedback-<slug>" hx-swap="afterbegin"`),
+   so the newest card lands first; a Retry response replaces its own card
    (`hx-target="closest .ctl-card"`). `tone` is info (Accepted), ok
-   (Completed) or error (every other card). Agent text (`body`) renders
-   through autoescape only. #}
-<article class="ctl-card ctl-tone-{{ tone }}" data-request-id="{{ request_id or '' }}">
+   (Completed), muted (Superseded), warn (Not fulfilled) or error (every
+   other card). Agent text (`body`, `progress`) renders through autoescape
+   only. A card with `track_url` keeps following its command: it
+   re-requests `track` on every `sse:fleet` event until the acknowledgement
+   is terminal, and its meta shows "following…". #}
+<article class="ctl-card ctl-tone-{{ tone }}" data-request-id="{{ request_id or '' }}"{% if track_url %} hx-get="{{ track_url }}" hx-trigger="sse:fleet" hx-swap="outerHTML"{% endif %}>
   <button type="button" class="ctl-card-dismiss" aria-label="Dismiss" onclick="this.closest('.ctl-card').remove()">×</button>
   <p class="ctl-card-head"><code>agentctl {{ command }}</code></p>
   <p class="ctl-card-title">{{ title }}</p>
   <p class="ctl-card-body">{{ body }}</p>
+  {% if progress %}<p class="ctl-card-progress">{{ progress }}</p>{% endif %}
   {% if note %}<p class="ctl-card-note">{{ note }}</p>{% endif %}
   {% if outcome_note %}<p class="ctl-card-note">{{ outcome_note }}</p>{% endif %}
-  <p class="ctl-card-meta">Request ID <code>{{ request_id or "—" }}</code>{% if sequence is not none %} · seq {{ sequence }}{% endif %}</p>
+  <p class="ctl-card-meta">Request ID <code>{{ request_id or "—" }}</code>{% if sequence is not none %} · seq {{ sequence }}{% endif %}{% if track_url %} · following…{% endif %}</p>
   {% if retry_fields %}
   <form class="ctl-card-retry" hx-post="{{ retry_fields.submit_url }}" hx-target="closest .ctl-card" hx-swap="outerHTML">
     <input type="hidden" name="action" value="{{ retry_fields.action }}">
