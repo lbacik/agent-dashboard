@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from .usage import read_cost_value, read_stop_reason, read_token_totals
+
 #: Layout marker the collector script stamps on its output.
 HISTORY_LAYOUT = "attempt-logs/v1"
 
@@ -47,6 +49,8 @@ WINDOW_DAYS = {
 }
 
 #: Token counters summed across the per-model usage map.
+#: Canonical display names pair with the shared usage reader's canonical
+#: token keys; both camelCase and snake_case spellings are accepted there.
 TOKEN_KEYS = (
     ("input_text", "input_tokens"),
     ("cache_read_text", "cache_read_input_tokens"),
@@ -55,7 +59,14 @@ TOKEN_KEYS = (
 )
 
 #: Cost keys accepted inside one model's usage counters, in preference order.
-COST_KEYS = ("cost_usd", "total_cost_usd", "cost", "total_cost")
+#: Kept for backwards compatibility; :mod:`usage` is the source of truth.
+COST_KEYS = (
+    "costUSD",
+    "cost_usd",
+    "total_cost_usd",
+    "total_cost",
+    "cost",
+)
 
 #: Cost soft-threshold keys accepted at the top level of one attempt record,
 #: in preference order. The agent reports the threshold only when it knows
@@ -199,7 +210,10 @@ def _read_usage(attempt: dict[str, Any]) -> dict[str, Any]:
     """Sum token and cost counters across the per-model usage map.
 
     Returns display-ready texts plus ``has_usage``: only a real number ever
-    counts as usage, so a missing map never renders as zero.
+    counts as usage, so a missing map never renders as zero. Cost precedence
+    is the ``token_budget`` total when present, else the summed per-model
+    costs (see :mod:`agent_dashboard.usage`); token spellings accept the
+    agent's camelCase and the older snake_case.
     """
     out: dict[str, Any] = {name: NOT_APPLICABLE for name, _ in TOKEN_KEYS}
     for name, _ in TOKEN_KEYS:
@@ -207,23 +221,10 @@ def _read_usage(attempt: dict[str, Any]) -> dict[str, Any]:
     out["cost"] = NOT_APPLICABLE
     out["cost_value"] = None
     out["has_usage"] = False
-    usage = attempt.get("model_usage")
-    if not isinstance(usage, dict):
+    if not isinstance(attempt, dict):
         return out
-    totals: dict[str, int | float] = {}
-    cost: int | float | None = None
-    for model in usage.values():
-        if not isinstance(model, dict):
-            continue
-        for _, key in TOKEN_KEYS:
-            value = _num(model.get(key))
-            if value is not None:
-                totals[key] = totals.get(key, 0) + value
-        for key in COST_KEYS:
-            value = _num(model.get(key))
-            if value is not None:
-                cost = (cost or 0) + value
-                break
+    totals = read_token_totals(attempt)
+    cost = read_cost_value(attempt)
     if totals or cost is not None:
         out["has_usage"] = True
     for name, key in TOKEN_KEYS:
@@ -251,16 +252,12 @@ def _read_cost_threshold(attempt: dict[str, Any]) -> float | None:
 
 
 def _read_stop_reason(attempt: dict[str, Any], has_usage: bool) -> str:
-    if not has_usage:
-        return NOT_APPLICABLE
-    raw = attempt.get("model_stop_reason")
-    if isinstance(raw, str) and raw:
-        return raw
-    if isinstance(raw, dict):
-        reasons = sorted({v for v in raw.values() if isinstance(v, str) and v})
-        if reasons:
-            return ", ".join(reasons)
-    return NOT_APPLICABLE
+    """Model stop reason, or ``n/a`` when the attempt has no usage.
+
+    Delegates to the shared usage reader so history and the Attempt log
+    header accept the same spellings.
+    """
+    return read_stop_reason(attempt, has_usage)
 
 
 #: Status for a run directory whose ``attempt.json`` is missing or unparsable

@@ -276,7 +276,17 @@ def _page_payload():
                     "outcome": "complete",
                     "started_at": recent,
                     "duration_seconds": 60,
-                    "model_usage": {"m": {"input_tokens": 10, "cost_usd": 1.23}},
+                    "model_usage": {
+                        "m": {
+                            "inputTokens": 10,
+                            "cacheReadInputTokens": 300,
+                            "cacheCreationInputTokens": 5,
+                            "outputTokens": 20,
+                            "costUSD": 1.23,
+                            "costBasis": "managed",
+                        }
+                    },
+                    "token_budget": {"total_cost_usd": 1.23},
                     "model_stop_reason": "end_turn",
                 },
             },
@@ -605,7 +615,17 @@ def _cost_page_payload(with_threshold=True):
         "outcome": "complete",
         "started_at": recent,
         "duration_seconds": 120,
-        "model_usage": {"m": {"input_tokens": 10, "cost_usd": 1.50}},
+        "model_usage": {
+            "m": {
+                "inputTokens": 10,
+                "cacheReadInputTokens": 300,
+                "cacheCreationInputTokens": 5,
+                "outputTokens": 20,
+                "costUSD": 1.50,
+                "costBasis": "managed",
+            }
+        },
+        "token_budget": {"total_cost_usd": 1.50},
         "model_stop_reason": "end_turn",
     }
     if with_threshold:
@@ -614,8 +634,18 @@ def _cost_page_payload(with_threshold=True):
         "outcome": "incomplete",
         "started_at": older,
         "duration_seconds": 3600,
-        "model_usage": {"m": {"input_tokens": 20, "cost_usd": 0.50}},
+        "model_usage": {
+            "m": {
+                "inputTokens": 20,
+                "cacheReadInputTokens": 40,
+                "cacheCreationInputTokens": 2,
+                "outputTokens": 8,
+                "costUSD": 0.50,
+            }
+        },
+        "model_stop_reason": "end_turn",
     }
+    # Snake_case record kept for tolerance: older/divergent payloads still read.
     stale_attempt = {
         "outcome": "handoff",
         "started_at": old,
@@ -761,7 +791,11 @@ def test_history_page_zero_cost_with_usage_still_charts():
                     "outcome": "complete",
                     "started_at": recent,
                     "duration_seconds": 5,
-                    "model_usage": {"m": {"input_tokens": 10, "cost_usd": 0}},
+                    "model_usage": {
+                        "m": {"inputTokens": 10, "costUSD": 0},
+                    },
+                    "token_budget": {"total_cost_usd": 0},
+                    "model_stop_reason": "end_turn",
                 },
             }
         ],
@@ -1040,12 +1074,15 @@ def _token_page_payload():
                     "duration_seconds": 120,
                     "model_usage": {
                         "m": {
-                            "input_tokens": 100,
-                            "cache_read_input_tokens": 300,
-                            "cache_creation_input_tokens": 100,
-                            "output_tokens": 50,
+                            "inputTokens": 100,
+                            "cacheReadInputTokens": 300,
+                            "cacheCreationInputTokens": 100,
+                            "outputTokens": 50,
+                            "costUSD": 1.10,
+                            "costBasis": "managed",
                         }
                     },
+                    "token_budget": {"total_cost_usd": 1.10},
                     "model_stop_reason": "end_turn",
                 },
             },
@@ -1058,11 +1095,13 @@ def _token_page_payload():
                     "duration_seconds": 60,
                     "model_usage": {
                         "m": {
-                            "input_tokens": 200,
-                            "cache_read_input_tokens": 0,
-                            "output_tokens": 10,
+                            "inputTokens": 200,
+                            "cacheReadInputTokens": 0,
+                            "outputTokens": 10,
+                            "costUSD": 0.40,
                         }
                     },
+                    "model_stop_reason": "end_turn",
                 },
             },
             {
@@ -1071,6 +1110,7 @@ def _token_page_payload():
                 "attempt": {"outcome": "handoff", "started_at": older},
             },
             {
+                # Snake_case record kept for tolerance.
                 "issue": 7,
                 "started": old.replace(":", "-"),
                 "attempt": {
@@ -1176,7 +1216,7 @@ def test_history_page_zero_tokens_with_usage_still_charts():
                     "outcome": "complete",
                     "started_at": recent,
                     "duration_seconds": 5,
-                    "model_usage": {"m": {"input_tokens": 0}},
+                    "model_usage": {"m": {"inputTokens": 0}},
                 },
             }
         ],

@@ -28,10 +28,25 @@ def _started(days_ago, now):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - days_ago * 86400))
 
 
-def _attempt(issue, started, outcome="complete", cost=None):
+def _attempt(issue, started, outcome="complete", cost=None, snake=False):
     record = {"outcome": outcome, "started_at": started, "duration_seconds": 60}
     if cost is not None:
-        record["model_usage"] = {"m": {"input_tokens": 10, "cost_usd": cost}}
+        if snake:
+            # Snake_case record kept for tolerance: older payloads still read.
+            record["model_usage"] = {"m": {"input_tokens": 10, "cost_usd": cost}}
+        else:
+            record["model_usage"] = {
+                "m": {
+                    "inputTokens": 10,
+                    "cacheReadInputTokens": 30,
+                    "cacheCreationInputTokens": 2,
+                    "outputTokens": 5,
+                    "costUSD": cost,
+                    "costBasis": "managed",
+                }
+            }
+            record["token_budget"] = {"total_cost_usd": cost}
+            record["model_stop_reason"] = "end_turn"
     return {"issue": issue, "started": started.replace(":", "-"), "attempt": record}
 
 
@@ -80,7 +95,8 @@ def test_overview_aggregates_outcomes_and_cost_per_instance():
         _payload(
             [
                 _attempt(1, _started(1, now), "complete", cost=1.0),
-                _attempt(2, _started(2, now), "complete", cost=2.0),
+                # Snake_case record kept for tolerance.
+                _attempt(2, _started(2, now), "complete", cost=2.0, snake=True),
                 _attempt(3, _started(3, now), "incomplete"),
             ]
         ),
