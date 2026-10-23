@@ -281,10 +281,38 @@ def test_drawer_helpers_keep_scroll_and_drop_instance_param():
     # Closing the drawer empties the holder and drops ?instance=, so a
     # reload does not reopen it.
     assert 'searchParams.delete("instance")' in static.text
-    # The in-place refresh keeps the aside's scroll position.
-    assert "scrollTop" in static.text
-    assert "htmx:beforeSwap" in static.text
-    assert "htmx:afterSwap" in static.text
+    # Scroll keeping moved to the shared keeper: no drawer-specific
+    # save/restore remains here.
+    assert "scrollTop" not in static.text
+    assert "scrollLeft" not in static.text
+    assert "drawerScrollTop" not in static.text
+    # The shared keeper still keeps the aside's scroll position across
+    # the in-place `sse:fleet` refresh.
+    keeper = client.get("/static/scroll-keep.js")
+    assert keeper.status_code == 200
+    assert "scrollTop" in keeper.text
+    assert "scrollLeft" in keeper.text
+    assert "htmx:beforeSwap" in keeper.text
+    assert "htmx:afterSwap" in keeper.text
+
+
+def test_drawer_scroll_container_carries_stable_key():
+    """The drawer's scroll container opts into the shared scroll keeper."""
+    body = open_drawer("snapshot-attempt-in-progress.json")
+    assert '<aside id="drawer" class="drawer" data-scroll-key="drawer"' in body
+    client, _, _ = make_fleet_client({"work": load_snapshot(EXAMPLES[0])})
+    gone = client.get("/instances/nope").text
+    assert '<aside id="drawer" class="drawer" data-scroll-key="drawer"' in gone
+
+
+def test_scroll_keeper_is_memory_only_and_tolerant():
+    """The shared keeper stores positions in page memory, not storage."""
+    client, _, _ = make_fleet_client({"work": load_snapshot(EXAMPLES[0])})
+    assert "/static/scroll-keep.js" in client.get("/").text
+    keeper = client.get("/static/scroll-keep.js").text
+    assert "data-scroll-key" in keeper
+    assert "localStorage" not in keeper
+    assert "sessionStorage" not in keeper
 
 
 def test_drawer_skewed_snapshot_renders():
