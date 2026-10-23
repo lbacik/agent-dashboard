@@ -91,7 +91,7 @@ table.fleet {
 table.fleet th,
 table.fleet td {
   text-align: left;
-  padding: 0.6rem 0.9rem;
+  padding: 0.6rem 0.7rem;
   border-bottom: 1px solid var(--line);
 }
 
@@ -157,8 +157,11 @@ details.overview[open] > summary { border-bottom: 1px solid var(--line); }
 
 /* Fleet tables scroll inside their own box, so a viewport narrower than
    the table scrolls the table instead of pushing it past the page edge.
-   The Instance column stays pinned while the rest scrolls. */
+   The Instance column stays pinned while the rest scrolls. The box is
+   positioned so absolutely positioned content (the .sr-only header) scrolls
+   with the table instead of widening the page. */
 .table-scroll {
+  position: relative;
   overflow-x: auto;
   background: var(--card);
   border: 1px solid var(--line);
@@ -551,7 +554,9 @@ ul.events.handoffs { margin-top: 1rem; }
   border: 0;
 }
 
-.row-actions { white-space: nowrap; }
+/* The buttons sit side by side when the table has room and stack when it
+   is squeezed, so the actions column never forces the table wider. */
+.row-actions-inner { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 
 .btn {
   display: inline-flex;
