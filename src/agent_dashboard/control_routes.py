@@ -31,7 +31,10 @@ from .agentctl_reply import (
 from .control import (
     ACTION_COMMANDS,
     ACTION_LABELS,
+    GONE_BODY,
     MISSING,
+    TERMINAL_TITLES,
+    TERMINAL_TONES,
     ControlMode,
     FollowResult,
     command_timeline,
@@ -1307,10 +1310,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     ),
                     tone="info",
                     title="Accepted",
-                    body=(
-                        "Instance replaced or unavailable; the agent's record of "
-                        "this command is on its /data volume."
-                    ),
+                    body=GONE_BODY,
                     request_id=values["request_id"],
                     sequence=values["sequence"],
                 ),
@@ -1441,10 +1441,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     command=command,
                     tone="info",
                     title="Accepted",
-                    body=(
-                        "Instance replaced or unavailable; the agent's record of "
-                        "this command is on its /data volume."
-                    ),
+                    body=GONE_BODY,
                     request_id=request_id,
                     sequence=None,
                 ),
@@ -1503,16 +1500,6 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                 "superseded",
                 "not fulfilled",
             ):
-                titles = {
-                    "completed": "Completed",
-                    "superseded": "Superseded",
-                    "not fulfilled": "Not fulfilled",
-                }
-                tones = {
-                    "completed": "ok",
-                    "superseded": "muted",
-                    "not fulfilled": "warn",
-                }
                 if acknowledgement == "completed":
                     terminal_body = record_text or "—"
                 else:
@@ -1521,8 +1508,8 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     render_card(
                         templates,
                         command=command,
-                        tone=tones[acknowledgement],
-                        title=titles[acknowledgement],
+                        tone=TERMINAL_TONES[acknowledgement],
+                        title=TERMINAL_TITLES[acknowledgement],
                         body=terminal_body,
                         request_id=request_id,
                         sequence=reply.sequence,
