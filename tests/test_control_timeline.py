@@ -212,6 +212,9 @@ def test_commands_route_returns_list_plus_oob_summary():
     body = commands_body(client).text
     assert 'hx-swap-oob="true"' in body
     assert 'id="ctl-timeline-summary-work"' in body
+    # The out-of-band swap replaces the summary element outright, so the
+    # fragment must carry its class or the styling is lost on first refresh.
+    assert 'class="ctl-timeline-sum"' in body
     assert "3 commands" in body
     assert "#9" in body
     # Newest first in the fragment too.
