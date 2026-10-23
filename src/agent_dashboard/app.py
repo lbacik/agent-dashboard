@@ -218,7 +218,9 @@ def create_app(
         gw = gateway
     else:
         gw = DockerGateway(
-            timeout=cfg.exec_timeout, log_timeout=cfg.log_exec_timeout
+            timeout=cfg.exec_timeout,
+            log_timeout=cfg.log_exec_timeout,
+            control_exec_timeout=cfg.control_exec_timeout,
         )
 
     @asynccontextmanager

@@ -17,10 +17,15 @@ import tarfile
 
 from agent_dashboard.gateway import (
     EVIDENCE_PREVIEW_CAP,
+    ControlBusyError,
+    ControlExec,
+    ControlTimeoutError,
     FileResult,
     ManagedInstance,
     TelemetryExec,
     TelemetryTimeoutError,
+    argv_command_status,
+    argv_control,
 )
 
 DEFAULT_SCRIPT = TelemetryExec(stdout=b"", returncode=2)
@@ -58,6 +63,12 @@ class FakeGateway:
         self.delay = 0.0
         self.history_delay = 0.0
         self.history_delays: dict[str, float] = {}
+        self._control_scripts: dict[str, ControlExec | Exception] = {}
+        self._status_scripts: dict[str, ControlExec | Exception] = {}
+        self._control_active: set[str] = set()
+        self._control_held: set[str] = set()
+        self.control_delay = 0.0
+        self.control_delays: dict[str, float] = {}
         self.list_calls = 0
         self.telemetry_calls: list[str] = []
         self.history_calls: list[str] = []
@@ -65,6 +76,9 @@ class FakeGateway:
         self.log_calls: list[tuple[str, str, str]] = []
         self.tail_calls: list[tuple[str, str, str]] = []
         self.run_files_calls: list[tuple[str, str, str]] = []
+        self.control_calls: list[dict] = []
+        self.command_status_calls: list[tuple[str, str]] = []
+        self.control_argvs: list[list[str]] = []
         self.file_calls: list[tuple[str, str, str, str]] = []
         self.logs_tree_calls: list[str] = []
         self.run_tree_calls: list[tuple[str, str, str]] = []
@@ -157,6 +171,122 @@ class FakeGateway:
         finally:
             self.in_flight -= 1
             self.per_id_in_flight[container_id] -= 1
+
+    def set_control(
+        self, container_id: str, stdout: bytes, stderr: bytes = b"", returncode: int = 0
+    ) -> None:
+        """Script one control exec reply: reported, never raised."""
+        self._control_scripts[container_id] = ControlExec(
+            stdout=stdout, stderr=stderr, returncode=returncode
+        )
+
+    def set_control_error(self, container_id: str, error: Exception) -> None:
+        """Script one control exec error (busy, timeout, ...)."""
+        self._control_scripts[container_id] = error
+
+    def set_control_busy(self, container_id: str) -> None:
+        """Script a busy control slot: the next control call raises at once."""
+        self.set_control_error(
+            container_id,
+            ControlBusyError(
+                f"another control exec for container {container_id} is already in flight"
+            ),
+        )
+
+    def set_control_timeout(
+        self, container_id: str, message: str = "docker exec timed out after 15 s"
+    ) -> None:
+        """Script a control timeout: the next control call raises."""
+        self.set_control_error(container_id, ControlTimeoutError(message))
+
+    def set_command_status(
+        self, container_id: str, stdout: bytes, stderr: bytes = b"", returncode: int = 0
+    ) -> None:
+        """Script one ``agentctl command <id>`` reply: reported, never raised."""
+        self._status_scripts[container_id] = ControlExec(
+            stdout=stdout, stderr=stderr, returncode=returncode
+        )
+
+    def set_command_status_error(self, container_id: str, error: Exception) -> None:
+        """Script one command-status error (busy, timeout, ...)."""
+        self._status_scripts[container_id] = error
+
+    def hold_control(self, container_id: str) -> None:
+        """Pin a container as control-in-flight (collector skip tests).
+
+        A hold survives scripted control calls (only :meth:`release_control`
+        clears it); a control call for a held container raises at once.
+        """
+        self._control_held.add(container_id)
+
+    def release_control(self, container_id: str) -> None:
+        """Clear a :meth:`hold_control` pin."""
+        self._control_held.discard(container_id)
+
+    def control_in_flight(self, container_id: str) -> bool:
+        """True while a scripted control or command-status exec runs or is held."""
+        return container_id in self._control_active or container_id in self._control_held
+
+    async def _run_scripted_control(
+        self, container_id: str, scripts: dict[str, ControlExec | Exception]
+    ) -> ControlExec:
+        """One scripted control-slot exec: busy when held or already running."""
+        if self.control_in_flight(container_id):
+            raise ControlBusyError(
+                f"another control exec for container {container_id} is already in flight"
+            )
+        self._control_active.add(container_id)
+        try:
+            delay = self.control_delays.get(container_id, self.control_delay)
+            if delay:
+                await asyncio.sleep(delay)
+            scripted = scripts.get(
+                container_id, ControlExec(stdout=b"", stderr=b"", returncode=0)
+            )
+            if isinstance(scripted, Exception):
+                raise scripted
+            return scripted
+        finally:
+            self._control_active.discard(container_id)
+
+    async def control(
+        self,
+        container_id: str,
+        action: str,
+        *,
+        request_id: str,
+        n: int | str | None = None,
+        issue: int | str | None = None,
+        expect_repo: str | None = None,
+    ) -> ControlExec:
+        """One scripted Control action exec, validated like the real gateway."""
+        argv = argv_control(
+            container_id,
+            action,
+            request_id=request_id,
+            n=n,
+            issue=issue,
+            expect_repo=expect_repo,
+        )
+        self.control_argvs.append(argv)
+        self.control_calls.append(
+            {
+                "container_id": container_id,
+                "action": action,
+                "request_id": request_id,
+                "n": n,
+                "issue": issue,
+                "expect_repo": expect_repo,
+            }
+        )
+        return await self._run_scripted_control(container_id, self._control_scripts)
+
+    async def command_status(self, container_id: str, request_id: str) -> ControlExec:
+        """One scripted ``agentctl command <id>`` exec, validated like the real one."""
+        argv = argv_command_status(container_id, request_id)
+        self.control_argvs.append(argv)
+        self.command_status_calls.append((container_id, request_id))
+        return await self._run_scripted_control(container_id, self._status_scripts)
 
     async def attempt_history(self, container_id: str) -> TelemetryExec:
         """One scripted history exec; unscripted IDs report an empty log."""
