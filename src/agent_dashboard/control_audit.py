@@ -62,6 +62,7 @@ def refused_entry(
     command: str = "",
     agent_version: str | None = None,
     expect_repo_guard: bool = False,
+    retry: bool = False,
 ) -> dict[str, Any]:
     """Build a ``refused`` audit entry (spec section 7).
 
@@ -82,7 +83,7 @@ def refused_entry(
         "command": command,
         "agent_version": agent_version,
         "expect_repo_guard": expect_repo_guard,
-        "retry": False,
+        "retry": retry,
         "exit_code": None,
         "sequence": None,
         "acknowledgement": None,
@@ -91,6 +92,103 @@ def refused_entry(
         "reason": reason,
         "error": error,
         "duration_ms": None,
+    }
+
+
+def submitted_entry(
+    *,
+    instance: str,
+    request_id: str,
+    container_id: str | None,
+    expected_repository: str | None,
+    action: str,
+    params: dict[str, Any] | None = None,
+    command: str = "",
+    agent_version: str | None = None,
+    expect_repo_guard: bool = False,
+    retry: bool = False,
+) -> dict[str, Any]:
+    """Build a ``submitted`` audit entry (spec section 7).
+
+    Written before ``docker exec`` runs; a failing write means the command
+    is not sent. ``container_id`` is the form's value, ``retry`` is true
+    when the card's Retry sent it.
+    """
+    return {
+        "at": utc_now_ms(),
+        "outcome": "submitted",
+        "request_id": request_id,
+        "instance": instance,
+        "container_id": container_id,
+        "expected_repository": expected_repository,
+        "action": action,
+        "params": dict(params) if params is not None else {},
+        "command": command,
+        "agent_version": agent_version,
+        "expect_repo_guard": expect_repo_guard,
+        "retry": retry,
+        "exit_code": None,
+        "sequence": None,
+        "acknowledgement": None,
+        "reply_repository": None,
+        "repository_mismatch": None,
+        "reason": None,
+        "error": None,
+        "duration_ms": None,
+    }
+
+
+def outcome_entry(
+    *,
+    instance: str,
+    outcome: str,
+    request_id: str,
+    container_id: str | None,
+    expected_repository: str | None,
+    action: str,
+    params: dict[str, Any] | None = None,
+    command: str = "",
+    agent_version: str | None = None,
+    expect_repo_guard: bool = False,
+    retry: bool = False,
+    exit_code: int | None = None,
+    sequence: int | None = None,
+    acknowledgement: str | None = None,
+    reply_repository: str | None = None,
+    repository_mismatch: bool | None = None,
+    reason: str | None = None,
+    error: str | None = None,
+    duration_ms: int | None = None,
+) -> dict[str, Any]:
+    """Build an outcome audit entry for one Control exec result.
+
+    The outcome is ``accepted``, ``rejected``, ``unknown``,
+    ``usage_error``, ``failed``, or ``refused`` (``busy``). The entry is
+    written after the exec; a failing write does not change the card
+    shown. ``error`` is the human text and ``duration_ms`` the exec
+    duration.
+    """
+    return {
+        "at": utc_now_ms(),
+        "outcome": outcome,
+        "request_id": request_id,
+        "instance": instance,
+        "container_id": container_id,
+        "expected_repository": expected_repository,
+        "action": action,
+        "params": dict(params) if params is not None else {},
+        "command": command,
+        "agent_version": agent_version,
+        "expect_repo_guard": expect_repo_guard,
+        "retry": retry,
+        "exit_code": exit_code,
+        "sequence": sequence,
+        "acknowledgement": acknowledgement,
+        "reply_repository": reply_repository,
+        "repository_mismatch": repository_mismatch,
+        "reason": reason,
+        "error": error,
+        "duration_ms": duration_ms,
     }
 
 
@@ -139,6 +237,8 @@ __all__ = [
     "audit_dir",
     "audit_path",
     "log_refusal_failure",
+    "outcome_entry",
     "refused_entry",
+    "submitted_entry",
     "utc_now_ms",
 ]
