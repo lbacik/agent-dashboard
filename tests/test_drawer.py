@@ -609,3 +609,26 @@ def test_drawer_activity_disclosure_markup_is_unchanged():
     assert '<div class="activity-body" data-scroll-key="activity-body"' in body
     assert 'hx-get="/instances/work/activity"' in body
     assert 'hx-trigger="load, sse:fleet"' in body
+
+
+def test_drawer_outside_click_closes_like_close_button():
+    """Clicking empty space outside the drawer closes it like ×.
+
+    Fleet rows switch instead, clicks inside the drawer never close, and
+    links, buttons, disclosure summaries and the statistics strip keep
+    their own behaviour; a text selection ending outside never closes.
+    """
+    client, _, _ = make_fleet_client({"work": load_snapshot(EXAMPLES[0])})
+    static = client.get("/static/drawer.js")
+    assert static.status_code == 200
+    text = static.text
+    assert 'document.addEventListener("click"' in text
+    assert 'closest("#drawer")' in text
+    assert 'closest(".fleet-row")' in text
+    assert 'closest("a, button, summary, .stats-strip")' in text
+    assert "getSelection" in text
+    assert "isCollapsed" in text
+    assert "closeDrawer()" in text
+    # A strip range drag ending outside the strip still leaves the drawer
+    # open: the pointerup suppresses the trailing click.
+    assert "__drawerStripSuppressClick" in text
