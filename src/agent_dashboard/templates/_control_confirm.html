@@ -1,0 +1,24 @@
+{# Step 2 confirmation (spec section 8.3): what will run, exactly.
+
+   Replaces the composer inside the same `.ctl-body` slot. The argv line is
+   rendered from the gateway's own `argv_control` for the form's values
+   (including `--expect-repo` when the version table allows it), so the line
+   is what runs. Confirm posts to the submit route; Cancel GETs the console
+   body, restoring the composer. `tone` is danger (stop, stop after,
+   handoff) or primary (resume, next issue). #}
+<div class="ctl-confirm ctl-tone-{{ tone }}">
+  <p class="ctl-confirm-head">Confirm: <code>agentctl {{ display_command }}</code> on <strong>{{ name }}</strong> ({{ repository }})</p>
+  <p class="ctl-argv"><code>{{ argv_text }}</code></p>
+  <p class="ctl-request-id">Request ID <code>{{ request_id }}</code></p>
+  <form class="ctl-confirm-form" hx-post="{{ submit_url }}" hx-swap="innerHTML" hx-disabled-elt=".ctl-confirm-form button">
+    <input type="hidden" name="action" value="{{ action }}">
+    {% if n_value is not none %}<input type="hidden" name="n" value="{{ n_value }}">{% endif %}
+    {% if issue_value is not none %}<input type="hidden" name="issue" value="{{ issue_value }}">{% endif %}
+    <input type="hidden" name="container_id" value="{{ container_id }}">
+    <input type="hidden" name="repository" value="{{ repository }}">
+    <input type="hidden" name="request_id" value="{{ request_id }}">
+    <button type="submit" class="btn ctl-confirm-yes btn-{{ tone }}" autofocus>Confirm</button>
+    <button type="button" class="btn ctl-confirm-no" hx-get="{{ console_url }}" hx-target="closest .ctl-body" hx-swap="innerHTML">Cancel</button>
+    <p class="ctl-sending htmx-indicator">Sending… waiting for the agent to accept</p>
+  </form>
+</div>
