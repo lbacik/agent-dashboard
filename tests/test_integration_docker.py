@@ -385,6 +385,95 @@ def test_attempt_log_against_real_docker(tmp_path):
         _run("docker", "rmi", "-f", tag)
 
 
+CONTROL_AGENTCTL_STUB = """\
+#!/bin/sh
+# Stub agentctl for the control integration test: echoes the invoking user
+# (proving the gateway runs as --user agent), then behaves per subcommand.
+echo "user=$(id -un)"
+if [ "$1" = "resume" ]; then
+    echo "simulated failure" >&2
+    exit 42
+fi
+if [ "$1" = "command" ]; then
+    echo "request_id: $2"
+    echo "acknowledgement: completed"
+    exit 0
+fi
+echo "acknowledgement: accepted"
+echo "effect: ok"
+exit 0
+"""
+
+CONTROL_DOCKERFILE = """\
+FROM busybox:stable
+LABEL io.github.lbacik.simple-coding-agent.role="agent"
+COPY agentctl /usr/local/bin/agentctl
+RUN chmod +x /usr/local/bin/agentctl && adduser -D agent
+CMD ["sh", "-c", "while true; do sleep 3600; done"]
+"""
+
+
+@docker
+def test_control_against_real_docker(tmp_path):
+    """One control exec and one ``command <id>`` against a stub agentctl.
+
+    Proves the control argv runs as ``--user agent`` (the stub echoes
+    ``id -un``) and that exit codes — including a nonzero one — come back
+    instead of raising.
+    """
+    tag = f"agent-dashboard-control:{uuid.uuid4().hex[:12]}"
+    name = f"e2e-control-{uuid.uuid4().hex[:8]}"
+    try:
+        (tmp_path / "agentctl").write_text(CONTROL_AGENTCTL_STUB)
+        (tmp_path / "Dockerfile").write_text(CONTROL_DOCKERFILE)
+        build = _run("docker", "build", "-q", "-t", tag, str(tmp_path))
+        assert build.returncode == 0, build.stderr
+
+        started = _run("docker", "run", "-d", "--name", name, tag)
+        assert started.returncode == 0, started.stderr
+
+        import time
+
+        deadline = time.time() + 30
+        container_id = None
+        while time.time() < deadline:
+            found = asyncio.run(DockerGateway(timeout=10.0).list_instances())
+            ids = {inst.name: inst.container_id for inst in found}
+            if name in ids:
+                container_id = ids[name]
+                break
+            time.sleep(1)
+        assert container_id is not None
+
+        gateway = DockerGateway(timeout=10.0, control_exec_timeout=15.0)
+        assert gateway.control_in_flight(container_id) is False
+
+        stopped = asyncio.run(
+            gateway.control(container_id, "stop", request_id="dash-0123456789abcdef")
+        )
+        assert stopped.returncode == 0
+        assert "user=agent" in stopped.stdout.decode()
+        assert b"acknowledgement: accepted" in stopped.stdout
+        assert gateway.control_in_flight(container_id) is False
+
+        failed = asyncio.run(
+            gateway.control(container_id, "resume", request_id="dash-abcdef0123456789")
+        )
+        assert failed.returncode == 42
+        assert b"simulated failure" in failed.stderr
+        assert "user=agent" in failed.stdout.decode()
+
+        record = asyncio.run(
+            gateway.command_status(container_id, "dash-0123456789abcdef")
+        )
+        assert record.returncode == 0
+        assert "user=agent" in record.stdout.decode()
+        assert b"acknowledgement: completed" in record.stdout
+    finally:
+        _run("docker", "rm", "-f", name)
+        _run("docker", "rmi", "-f", tag)
+
+
 @docker
 def test_stopped_instance_logs_via_docker_cp(tmp_path):
     """Stopped containers keep their Attempt logs readable via ``docker cp``.

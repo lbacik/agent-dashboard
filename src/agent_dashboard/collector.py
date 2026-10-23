@@ -120,9 +120,18 @@ async def _poll_one(
     instance: ManagedInstance,
     semaphore: asyncio.Semaphore,
     now: float,
-) -> tuple[str, InstancePoll]:
-    """One exec for one running instance, bounded by the shared semaphore."""
+) -> tuple[str, InstancePoll] | None:
+    """One exec for one running instance, bounded by the shared semaphore.
+
+    A running instance with a control exec in flight gets no telemetry exec
+    this cycle: ``None`` stands for "skipped", so ``apply_cycle`` keeps its
+    previous poll outcome and snapshot. The skip is not counted as a failure.
+    The check runs right before the exec, after taking the poll semaphore.
+    """
     async with semaphore:
+        in_flight = getattr(gateway, "control_in_flight", None)
+        if in_flight is not None and in_flight(instance.container_id):
+            return None
         try:
             exec_result: TelemetryExec = await gateway.telemetry(instance.container_id)
         except TelemetryTimeoutError as exc:
@@ -164,4 +173,5 @@ async def run_cycle(
     results = await asyncio.gather(
         *(_poll_one(gateway, inst, semaphore, at) for inst in running)
     )
-    await state.apply_cycle(discovered, dict(results), at)
+    polls = {name: poll for item in results if item is not None for name, poll in [item]}
+    await state.apply_cycle(discovered, polls, at)

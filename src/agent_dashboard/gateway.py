@@ -4,7 +4,9 @@ All Docker access uses argv lists (no shell). The gateway exposes discovery
 (``list_instances``), one telemetry exec per running container
 (``telemetry``), one Attempt log history exec per running container
 (``attempt_history``), the per-attempt event stream reads, and one Evidence
-file read per file (``read_file``). Stopped containers cannot run ``docker
+file read per file (``read_file``), and one Control action or command-status
+exec per live instance (``control`` / ``command_status``, at most one in
+flight per container). Stopped containers cannot run ``docker
 exec``, so their Attempt logs arrive through ``docker cp`` tree copies
 (``copy_logs`` for the whole list, ``copy_run`` for one attempt), parsed on
 the dashboard side with the same validation and caps. Exit codes are never
@@ -138,6 +140,14 @@ LOG_TAIL_CAP = 512 * 1024
 
 #: Default bound for one Attempt log read (bigger payloads than telemetry).
 LOG_EXEC_TIMEOUT = 15.0
+
+#: Default bound for one Control exec. Control execs wait on the agent's own
+#: socket (up to 10 s), so the dashboard-side bound must stay above it;
+#: anything smaller would turn every slow acceptance into "Outcome unknown".
+DEFAULT_CONTROL_EXEC_TIMEOUT = 15.0
+
+#: A control exec timeout at or below this is a startup error.
+MIN_CONTROL_EXEC_TIMEOUT = 10.0
 
 #: At most this many Attempt log operations run at once; the semaphore lives
 #: on the gateway, separate from the poll cycle's ``max_concurrent_execs``.
@@ -594,11 +604,40 @@ class AttemptLogTimeoutError(GatewayError):
     pass
 
 
+class ControlTimeoutError(GatewayError):
+    """A control exec outlived ``control_exec_timeout``.
+
+    The ``docker exec`` client was killed and reaped, but ``agentctl``
+    may still have committed inside the container, so a timeout means
+    "outcome unknown".
+    """
+
+
+class ControlBusyError(GatewayError):
+    """Another control exec for the same container ID is already in flight.
+
+    There is no queue: the caller reports this at once and never retries
+    on its own.
+    """
+
+
 @dataclass(frozen=True)
 class TelemetryExec:
     """One finished ``docker exec``: raw stdout plus the exit code."""
 
     stdout: bytes
+    returncode: int
+
+
+@dataclass(frozen=True)
+class ControlExec:
+    """One finished control exec: raw stdout, raw stderr, plus the exit code.
+
+    Exit codes are reported, never raised: the caller classifies each exec.
+    """
+
+    stdout: bytes
+    stderr: bytes
     returncode: int
 
 
@@ -652,6 +691,168 @@ def validate_container_id(container_id: str) -> str:
     if not isinstance(container_id, str) or not CONTAINER_ID_RE.fullmatch(container_id):
         raise ValueError(f"invalid container id: {container_id!r}")
     return container_id
+
+
+#: Control actions the dashboard can send to a live managed instance: the
+#: agent's command kinds, so the same key names a Control action, a
+#: ``control.commands`` record and a Control audit entry.
+CONTROL_ACTIONS = frozenset({"stop", "stop_after", "resume", "handoff", "next_issue"})
+
+#: ``stop --after`` takes 1-99 attempts, no leading zeros.
+CONTROL_N_RE = re.compile(r"[1-9][0-9]?\Z")
+
+#: ``next issue`` takes an int32 issue number, no leading zeros.
+CONTROL_ISSUE_RE = re.compile(r"[1-9][0-9]{0,9}\Z")
+MAX_CONTROL_ISSUE = 2147483647
+
+#: The only request IDs the dashboard sends: ``dash-`` plus 16 lowercase hex.
+REQUEST_ID_RE = re.compile(r"dash-[0-9a-f]{16}\Z")
+
+#: ``owner/name`` the confirmation form carried, passed to ``agentctl`` as
+#: ``--expect-repo`` when the agent supports the guard.
+EXPECT_REPO_RE = re.compile(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}\Z")
+
+
+def validate_control_action(action: str) -> str:
+    """Return the action key when it names a Control action, else raise.
+
+    The check runs in the route layer first and again inside the ``argv_*``
+    functions (the gateway does not trust its caller). Uses only full
+    matches; a failure raises :class:`ValueError` before any argv exists.
+    """
+    if not isinstance(action, str) or action not in CONTROL_ACTIONS:
+        raise ValueError(f"invalid control action: {action!r}")
+    return action
+
+
+def _validate_control_int(
+    value: int | str, pattern: re.Pattern[str], maximum: int, name: str
+) -> int:
+    """Shared shape behind the Control integer validators (no leading zeros).
+
+    Accepts an int or its decimal text; anything else (empty, leading zero,
+    sign, whitespace, out of range, non-ASCII digits) raises
+    :class:`ValueError` before any argv exists.
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"invalid {name}: {value!r}")
+    if isinstance(value, int):
+        if 1 <= value <= maximum:
+            return value
+        raise ValueError(f"invalid {name}: {value!r}")
+    if isinstance(value, str) and pattern.fullmatch(value) is not None:
+        number = int(value)
+        if number <= maximum:
+            return number
+    raise ValueError(f"invalid {name}: {value!r}")
+
+
+def validate_control_n(n: int | str) -> int:
+    """Return the ``stop --after`` attempt count (1-99), else raise."""
+    return _validate_control_int(n, CONTROL_N_RE, 99, "attempts before stopping")
+
+
+def validate_control_issue(issue: int | str) -> int:
+    """Return the ``next issue`` issue number (at most 2147483647), else raise."""
+    return _validate_control_int(
+        issue, CONTROL_ISSUE_RE, MAX_CONTROL_ISSUE, "issue number"
+    )
+
+
+def validate_request_id(request_id: str) -> str:
+    """Return the request ID when it is a ``dash-`` ID the dashboard sent.
+
+    Anything else (empty, wrong prefix, wrong length or alphabet, sign,
+    whitespace, an extra ``=``/``--``) raises :class:`ValueError` before
+    any argv exists.
+    """
+    if not isinstance(request_id, str) or REQUEST_ID_RE.fullmatch(request_id) is None:
+        raise ValueError(f"invalid request id: {request_id!r}")
+    return request_id
+
+
+def validate_expect_repo(expect_repo: str) -> str:
+    """Return the expected ``owner/name`` repository, else raise.
+
+    Anything else (empty, missing slash, whitespace, an extra ``=``/``--``
+    flag shape) raises :class:`ValueError` before any argv exists.
+    """
+    if not isinstance(expect_repo, str) or EXPECT_REPO_RE.fullmatch(expect_repo) is None:
+        raise ValueError(f"invalid expected repository: {expect_repo!r}")
+    return expect_repo
+
+
+def argv_control(
+    container_id: str,
+    action: str,
+    *,
+    request_id: str,
+    n: int | str | None = None,
+    issue: int | str | None = None,
+    expect_repo: str | None = None,
+) -> list[str]:
+    """Argv for one Control action exec, addressed by container ID, never name.
+
+    Every value is validated first (the gateway does not trust its caller):
+    a bad value raises :class:`ValueError` before any argv exists. Each of
+    ``--request-id=<id>`` and ``--expect-repo=<value>`` is a single argv
+    element, and ``--expect-repo`` is always last when given. Runs as
+    ``--user agent`` like telemetry and calls ``agentctl`` by absolute path.
+    """
+    validate_container_id(container_id)
+    validate_control_action(action)
+    validate_request_id(request_id)
+    if action == "stop_after":
+        tail = ["stop", "--after", str(validate_control_n(n)), f"--request-id={request_id}"]
+    elif action == "next_issue":
+        tail = [
+            "next",
+            "issue",
+            str(validate_control_issue(issue)),
+            f"--request-id={request_id}",
+        ]
+    else:
+        if n is not None or issue is not None:
+            raise ValueError(f"control action {action!r} takes no parameter")
+        if action == "stop":
+            tail = ["stop", f"--request-id={request_id}"]
+        elif action == "resume":
+            tail = ["resume", f"--request-id={request_id}"]
+        else:  # handoff
+            tail = ["handoff", "now", f"--request-id={request_id}"]
+    if expect_repo is not None:
+        validate_expect_repo(expect_repo)
+        tail.append(f"--expect-repo={expect_repo}")
+    return [
+        "docker",
+        "exec",
+        "--user",
+        AGENT_USER,
+        container_id,
+        AGENTCTL_PATH,
+        *tail,
+    ]
+
+
+def argv_command_status(container_id: str, request_id: str) -> list[str]:
+    """Argv for one read-only ``agentctl command <id>`` status exec.
+
+    Both values are validated first: a bad value raises :class:`ValueError`
+    before any argv exists. Runs as ``--user agent`` and calls ``agentctl``
+    by absolute path, like every other exec.
+    """
+    validate_container_id(container_id)
+    validate_request_id(request_id)
+    return [
+        "docker",
+        "exec",
+        "--user",
+        AGENT_USER,
+        container_id,
+        AGENTCTL_PATH,
+        "command",
+        request_id,
+    ]
 
 
 def argv_attempt_history(container_id: str) -> list[str]:
@@ -1034,21 +1235,36 @@ class DockerGateway:
 
     ``timeout`` bounds discovery, telemetry, history and events execs;
     ``log_timeout`` bounds the Attempt log full-stream read, which moves
-    more data. At most :data:`LOG_MAX_CONCURRENT` Attempt log reads run at
-    once on ``_log_semaphore``, separate from the poll cycle's
-    ``max_concurrent_execs``.
+    more data. ``control_exec_timeout`` bounds the Control action and
+    command-status execs, which wait on the agent's own socket, so it must
+    stay greater than :data:`MIN_CONTROL_EXEC_TIMEOUT`. At most
+    :data:`LOG_MAX_CONCURRENT` Attempt log reads run at once on
+    ``_log_semaphore``, separate from the poll cycle's
+    ``max_concurrent_execs``; control execs never take that semaphore.
     """
 
     def __init__(
-        self, timeout: float = 5.0, log_timeout: float = LOG_EXEC_TIMEOUT
+        self,
+        timeout: float = 5.0,
+        log_timeout: float = LOG_EXEC_TIMEOUT,
+        control_exec_timeout: float = DEFAULT_CONTROL_EXEC_TIMEOUT,
     ) -> None:
         if timeout <= 0:
             raise ValueError(f"timeout must be positive: {timeout}")
         if log_timeout <= 0:
             raise ValueError(f"log timeout must be positive: {log_timeout}")
+        # ``not x > floor`` (not ``x <= floor``) so NaN is also a startup
+        # error: every comparison with NaN is False, including ``<=``.
+        if not control_exec_timeout > MIN_CONTROL_EXEC_TIMEOUT:
+            raise ValueError(
+                "control exec timeout must be greater than "
+                f"{MIN_CONTROL_EXEC_TIMEOUT:g} s: {control_exec_timeout}"
+            )
         self.timeout = timeout
         self.log_timeout = log_timeout
+        self.control_exec_timeout = control_exec_timeout
         self._log_semaphore = asyncio.Semaphore(LOG_MAX_CONCURRENT)
+        self._control_in_flight: set[str] = set()
 
     def argv(self) -> list[str]:
         return argv_list_instances()
@@ -1110,6 +1326,110 @@ class DockerGateway:
                 f"docker exec timed out after {self.timeout:g} s"
             ) from exc
         return TelemetryExec(stdout=stdout, returncode=proc.returncode)
+
+    def control_in_flight(self, container_id: str) -> bool:
+        """True while a control or command-status exec for this container runs.
+
+        The collector checks this right before a telemetry exec (after taking
+        the poll semaphore) and skips that instance's poll while it holds.
+        """
+        return container_id in self._control_in_flight
+
+    async def _run_control_exec(self, argv: list[str]) -> ControlExec:
+        """Spawn one control argv and report its stdout, stderr and exit code.
+
+        Exit codes are reported, not raised. A dashboard-side timeout kills
+        and reaps the client process, then raises
+        :class:`ControlTimeoutError`: killing the ``docker exec`` client does
+        not stop ``agentctl`` inside the container, so a timeout means
+        "outcome unknown".
+        """
+        proc = await self._run(argv)
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), self.control_exec_timeout
+            )
+        except TimeoutError as exc:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+            raise ControlTimeoutError(
+                f"docker exec timed out after {self.control_exec_timeout:g} s"
+            ) from exc
+        return ControlExec(stdout=stdout, stderr=stderr, returncode=proc.returncode)
+
+    def _claim_control(self, container_id: str) -> None:
+        """Take the per-container control slot, or raise :class:`ControlBusyError`.
+
+        The check and the claim run with no await between them, so two
+        concurrent calls for one container cannot both win. Different
+        containers never block each other, and the slot never touches the
+        poll cycle's ``max_concurrent_execs`` semaphore.
+        """
+        if container_id in self._control_in_flight:
+            raise ControlBusyError(
+                f"another control exec for container {container_id} is already in flight"
+            )
+        self._control_in_flight.add(container_id)
+
+    async def _run_single_control(self, container_id: str, argv: list[str]) -> ControlExec:
+        """Run one validated control argv in the per-container slot.
+
+        Claims the slot (raising :class:`ControlBusyError` when another
+        control exec for the same container is in flight, before anything is
+        spawned), runs the exec, and always releases the slot.
+        """
+        self._claim_control(container_id)
+        try:
+            return await self._run_control_exec(argv)
+        finally:
+            self._control_in_flight.discard(container_id)
+
+    async def control(
+        self,
+        container_id: str,
+        action: str,
+        *,
+        request_id: str,
+        n: int | str | None = None,
+        issue: int | str | None = None,
+        expect_repo: str | None = None,
+    ) -> ControlExec:
+        """Run one Control action against a container ID (never a name).
+
+        Exactly one ``agentctl`` command runs: there is no queue and no
+        automatic retry. The argv is built inside the gateway from validated
+        values, so a bad value raises :class:`ValueError` before any argv
+        exists. The exit code is reported, not raised. Raises only
+        :class:`DockerNotAvailableError` (nothing was sent),
+        :class:`ControlTimeoutError` (after killing and reaping the client)
+        and :class:`ControlBusyError` (another control exec for the same
+        container ID is in flight).
+        """
+        argv = argv_control(
+            container_id,
+            action,
+            request_id=request_id,
+            n=n,
+            issue=issue,
+            expect_repo=expect_repo,
+        )
+        return await self._run_single_control(container_id, argv)
+
+    async def command_status(self, container_id: str, request_id: str) -> ControlExec:
+        """Run one read-only ``agentctl command <id>`` status exec.
+
+        Shares the per-container control slot with :meth:`control`: a second
+        call for the same container while one is in flight raises
+        :class:`ControlBusyError` at once. Otherwise behaves like
+        :meth:`control`: validated argv, reported exit codes, and only
+        :class:`DockerNotAvailableError` or :class:`ControlTimeoutError`
+        raised.
+        """
+        argv = argv_command_status(container_id, request_id)
+        return await self._run_single_control(container_id, argv)
 
     async def attempt_events(
         self, container_id: str, issue: int | str, started: str

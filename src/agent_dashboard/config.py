@@ -12,6 +12,8 @@ DEFAULT_POLL_INTERVAL = 5.0
 MIN_POLL_INTERVAL = 2.0
 DEFAULT_EXEC_TIMEOUT = 5.0
 DEFAULT_LOG_EXEC_TIMEOUT = 15.0
+DEFAULT_CONTROL_EXEC_TIMEOUT = 15.0
+MIN_CONTROL_EXEC_TIMEOUT = 10.0
 DEFAULT_MAX_CONCURRENT_EXECS = 4
 
 ENV_PREFIX = "AGENT_DASHBOARD_"
@@ -27,6 +29,7 @@ class Settings:
     poll_interval: float = DEFAULT_POLL_INTERVAL
     exec_timeout: float = DEFAULT_EXEC_TIMEOUT
     log_exec_timeout: float = DEFAULT_LOG_EXEC_TIMEOUT
+    control_exec_timeout: float = DEFAULT_CONTROL_EXEC_TIMEOUT
     max_concurrent_execs: int = DEFAULT_MAX_CONCURRENT_EXECS
     allow_non_loopback: bool = False
     allowed_hosts: frozenset[str] = field(default_factory=frozenset)
@@ -98,6 +101,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Attempt log read timeout in seconds.",
     )
     parser.add_argument(
+        "--control-exec-timeout",
+        type=float,
+        default=None,
+        help=(
+            "Control exec timeout in seconds "
+            f"(must be greater than {MIN_CONTROL_EXEC_TIMEOUT:g})."
+        ),
+    )
+    parser.add_argument(
         "--max-concurrent-execs", type=int, default=None, help="Max concurrent execs."
     )
     parser.add_argument(
@@ -135,6 +147,11 @@ def load_settings(argv: list[str] | None = None) -> Settings:
         if args.log_exec_timeout is not None
         else float(_env("LOG_EXEC_TIMEOUT") or DEFAULT_LOG_EXEC_TIMEOUT)
     )
+    control_exec_timeout = (
+        args.control_exec_timeout
+        if args.control_exec_timeout is not None
+        else float(_env("CONTROL_EXEC_TIMEOUT") or DEFAULT_CONTROL_EXEC_TIMEOUT)
+    )
     max_execs = (
         args.max_concurrent_execs
         if args.max_concurrent_execs is not None
@@ -148,6 +165,13 @@ def load_settings(argv: list[str] | None = None) -> Settings:
         raise ValueError(f"exec timeout must be positive: {exec_timeout}")
     if log_exec_timeout <= 0:
         raise ValueError(f"log exec timeout must be positive: {log_exec_timeout}")
+    # ``not x > floor`` (not ``x <= floor``) so NaN is also a startup
+    # error: every comparison with NaN is False, including ``<=``.
+    if not control_exec_timeout > MIN_CONTROL_EXEC_TIMEOUT:
+        raise ValueError(
+            "control exec timeout must be greater than "
+            f"{MIN_CONTROL_EXEC_TIMEOUT:g} s: {control_exec_timeout}"
+        )
     if max_execs < 1:
         raise ValueError(f"max concurrent execs must be >= 1: {max_execs}")
 
@@ -165,6 +189,7 @@ def load_settings(argv: list[str] | None = None) -> Settings:
         poll_interval=poll_interval,
         exec_timeout=exec_timeout,
         log_exec_timeout=log_exec_timeout,
+        control_exec_timeout=control_exec_timeout,
         max_concurrent_execs=max_execs,
         allow_non_loopback=allow_non_loopback,
         allowed_hosts=allowed_hosts,
