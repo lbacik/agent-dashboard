@@ -65,3 +65,7 @@ rather than `0.0.0.0`, and restrict the port with the host firewall.
 - Revisit when v2 adds authentication (then LAN exposure can be reconsidered)
   or commands that change agent state (then the socket-in-container tradeoff
   must be re-evaluated).
+- Revisited for Control actions in
+  [ADR 0007](0007-control-actions-on-a-loopback-only-dashboard.md): this
+  exception stays read-only; Control actions are refused under a
+  non-loopback bind.
