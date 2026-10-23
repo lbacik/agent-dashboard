@@ -944,10 +944,10 @@ def test_log_page_has_sticky_breadcrumb_topbar():
     assert f"<span aria-current=\"page\">#98 · {STARTED_COLON}</span>" in body
     # The current crumb is text, never a link.
     assert f"/attempts/98/{STARTED_DASH}" not in nav
-    # The on-demand note and Refresh live in the sticky bar.
-    subnav = body.split('<div class="subnav">', 1)[1].split("</div>", 1)[0]
-    assert "data is read on demand" in subnav
-    assert ">Refresh</a>" in subnav
+    # The on-demand note and Refresh live in the pinned header.
+    actions = body.split('<div class="topbar-actions">', 1)[1].split("</div>", 1)[0]
+    assert "data is read on demand" in actions
+    assert ">Refresh</a>" in actions
     # The bottom escape hatches and the pseudo-breadcrumb subtitle are gone.
     assert "Back to attempt history" not in body
     assert "Back to the fleet" not in body
@@ -969,8 +969,8 @@ def test_log_refresh_keeps_filters_and_page():
         f"/instances/work/attempts/98/{STARTED_DASH}?level=INFO&page=2"
     ).text
     assert "page 2/3, 450 events" in body
-    subnav = body.split('<div class="subnav">', 1)[1].split("</div>", 1)[0]
-    refresh = subnav.replace("&amp;", "&")
+    actions = body.split('<div class="topbar-actions">', 1)[1].split("</div>", 1)[0]
+    refresh = actions.replace("&amp;", "&")
     assert "level=INFO" in refresh
     assert "page=2" in refresh
 

@@ -1,20 +1,11 @@
 {% extends "base.html" %}
-{% block content %}
-<div class="subnav">
-  <nav aria-label="Breadcrumb">
-    <ol class="crumbs">
-      {% for crumb in breadcrumbs %}
-      {% if crumb.url is not none %}
-      <li><a href="{{ crumb.url }}">{{ crumb.label }}</a></li>
-      {% else %}
-      <li><span aria-current="page">{{ crumb.label }}</span></li>
-      {% endif %}
-      {% endfor %}
-    </ol>
-  </nav>
+{% block topbar_actions %}
+<div class="topbar-actions">
   <span class="on-demand">data is read on demand</span>
   <a class="refresh" href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ started | urlencode }}/progress">Refresh</a>
 </div>
+{% endblock %}
+{% block content %}
 <div class="history-head">
   <h2>Attempt progress</h2>
   <p class="subtitle">Managed instance {{ name }} · Issue #{{ issue }} · Started {{ started }}</p>

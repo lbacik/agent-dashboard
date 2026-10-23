@@ -64,28 +64,31 @@ a:hover { text-decoration-thickness: 2px; }
   font-size: 0.9rem;
 }
 
-/* Sticky sub-navigation for pages below the fleet view (Attempt history,
-   Attempt log, Attempt progress). It stays pinned while scrolling and
-   carries the breadcrumb plus the on-demand note and Refresh, so the
-   operator never scrolls to the bottom. The main fleet header (.topbar)
+/* Pages below the fleet view (Attempt history, Attempt log, Attempt
+   progress) pin the header while scrolling: the breadcrumb takes the
+   subtitle's place and the on-demand note and Refresh sit on the right,
+   so the operator never scrolls to the bottom. The fleet view's header
    stays static. */
-.subnav {
+.topbar.pinned {
   position: sticky;
   top: 0;
   z-index: 10;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 6px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem 1rem;
-  padding: 0.6rem 0.9rem;
-  margin: 0 0 1rem;
+  padding: 0.75rem 1.5rem;
   max-width: 100%;
 }
 
-.subnav nav { min-width: 0; flex: 1 1 auto; }
+.topbar-title { min-width: 0; flex: 1 1 auto; }
+
+.topbar-actions {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  margin-left: auto;
+}
 
 .crumbs {
   display: flex;
@@ -93,9 +96,10 @@ a:hover { text-decoration-thickness: 2px; }
   align-items: baseline;
   gap: 0.25rem 0.5rem;
   list-style: none;
-  margin: 0;
+  margin: 0.25rem 0 0;
   padding: 0;
   min-width: 0;
+  font-size: 0.9rem;
 }
 
 .crumbs li { min-width: 0; overflow-wrap: anywhere; }
@@ -106,15 +110,13 @@ a:hover { text-decoration-thickness: 2px; }
   margin-right: 0.5rem;
 }
 
-.subnav .on-demand { color: var(--muted); font-size: 0.85rem; }
+.topbar-actions .on-demand { color: var(--muted); font-size: 0.85rem; }
 
-.subnav .refresh { margin-left: auto; }
-
-/* Jump targets below the sticky bar (opened Evidence slots, sticky table
-   headers) keep a clearance so the pinned subnav never covers them. */
+/* Jump targets below the pinned header (opened Evidence slots, sticky table
+   headers) keep a clearance so the header never covers them. */
 .evidence-slot,
 table.fleet thead th {
-  scroll-margin-top: 4.5rem;
+  scroll-margin-top: 6rem;
 }
 
 .container {
