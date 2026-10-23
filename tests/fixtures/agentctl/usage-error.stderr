@@ -1,2 +1,0 @@
-usage: agentctl stop [--after N] --request-id=ID
-error: unexpected argument '--bogus'

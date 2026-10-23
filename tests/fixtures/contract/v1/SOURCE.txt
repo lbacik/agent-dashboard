@@ -23,3 +23,30 @@ Copies:
 - error-agent-unreachable.json — code agent_unreachable
 - error-unsupported-operation.json — code unsupported_operation
 - error-snapshot-failed.json — code snapshot_failed
+
+These fixtures are copies of the synthetic agentctl command-reply
+examples published by the simple-coding-agent repository. That
+repository owns the command-reply contract; this dashboard only reads
+it. Contract: docs/agents/agentctl-command-replies.md.
+
+Source repository: https://github.com/lbacik/simple-coding-agent
+Source path: examples/agentctl/
+Source commit: 6abe94c8db3435afe6967808c38722569b583d16
+  ("Publish mutating agentctl command replies as a test-pinned contract",
+   merged as PR #321 for "Publish the agentctl command reply contract")
+Seen at: 4c8039f0f42878273febdd1ec61a4528e8cad843 (main)
+
+The files are synthetic: invented repositories (example-owner/...),
+fixed request IDs (req-example-...), and {{SOCKET}} for the control
+socket the conformance test substitutes (not-submitted.json pins the
+missing socket path it was recorded with). No data was captured from
+live instances.
+
+Copies:
+- accepted.json — stop accepted (active attempt finishes first)
+- completed.json — stop completed (no active attempt)
+- rejected.json — stop --after rejected by a stopped instance, with the repository: line
+- not-submitted.json — connection loss: exit 2, no reply, no repository: line
+- usage-error.json — argparse usage error: exit 2, usage: prefix on stderr
+- command-found.json — command <id> for a recorded command
+- command-not-found.json — command <id> for an unknown ID, with the repository: line

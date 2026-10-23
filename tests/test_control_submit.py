@@ -102,6 +102,19 @@ def agentctl_stderr(name: str) -> bytes:
     return (Path(__file__).parent / "fixtures" / "agentctl" / name).read_bytes()
 
 
+CONTRACT_AGENTCTL = Path(__file__).parent / "fixtures" / "contract" / "v1" / "agentctl"
+
+
+def contract_reply(name: str) -> tuple[bytes, bytes, int]:
+    """One copied agentctl contract example as a scripted gateway reply.
+
+    Each ``examples/agentctl/*.json`` file is ``{"argv", "exit_code",
+    "stdout", "stderr"}`` and byte-identical to real CLI output.
+    """
+    payload = json.loads((CONTRACT_AGENTCTL / name).read_text())
+    return payload["stdout"].encode(), payload["stderr"].encode(), payload["exit_code"]
+
+
 # --- outcome cards ---------------------------------------------------------------
 
 
@@ -176,6 +189,8 @@ def test_submit_accepted_records_no_mismatch_for_expected_repository():
 
 
 def test_submit_completed_card_and_ok_tone():
+    # PRE-CONTRACT agent output: exit-0 replies before the contract may
+    # name no repository; the card notes it instead of mismatching.
     client, _, gateway, cids = live_client()
     gateway.set_control(cids["work"], agentctl_stdout("completed-no-repository.stdout"), b"", 0)
     response = submit(client, "work", base_form(cids))
@@ -193,6 +208,8 @@ def test_submit_completed_card_and_ok_tone():
 
 
 def test_submit_rejected_card_with_reason():
+    # PRE-CONTRACT agent output: rejections before the contract carried
+    # no stderr `repository:` line; the card still says Rejected.
     client, _, gateway, cids = live_client()
     gateway.set_control(cids["work"], b"", agentctl_stderr("rejected-no-repository.stderr"), 1)
     response = submit(client, "work", base_form(cids))
@@ -208,23 +225,26 @@ def test_submit_rejected_card_with_reason():
 
 
 def test_submit_rejected_with_reply_repository_still_rejected():
+    # The published contract rejection carries a `repository:` line; the
+    # card still says Rejected (the Repository-mismatch card is exit-0
+    # only).
     client, _, gateway, cids = live_client()
-    gateway.set_control(
-        cids["work"], b"", agentctl_stderr("rejected-repository-mismatch.stderr"), 1
-    )
+    stdout, stderr, code = contract_reply("rejected.json")
+    gateway.set_control(cids["work"], stdout, stderr, code)
     response = submit(client, "work", base_form(cids))
     assert response.status_code == 200
     assert "Rejected" in response.text
     assert "Repository mismatch" not in response.text
     outcome = audit_entries()[-1]
     assert outcome["outcome"] == "rejected"
-    assert outcome["reply_repository"] == "acme-corp/other-app"
-    assert outcome["repository_mismatch"] is True
+    assert outcome["reply_repository"] == "example-owner/example-repo"
+    assert outcome["repository_mismatch"] is False
 
 
 def test_submit_unknown_card_with_retry_and_check_status():
     client, _, gateway, cids = live_client()
-    gateway.set_control(cids["work"], b"", agentctl_stderr("unreachable.stderr"), 2)
+    stdout, stderr, code = contract_reply("not-submitted.json")
+    gateway.set_control(cids["work"], stdout, stderr, code)
     response = submit(client, "work", base_form(cids))
     assert response.status_code == 200
     assert "Outcome unknown" in response.text
@@ -258,7 +278,8 @@ def test_submit_unknown_for_other_exit_codes_and_timeout():
 
 def test_submit_usage_error_is_not_sent():
     client, _, gateway, cids = live_client()
-    gateway.set_control(cids["work"], b"", agentctl_stderr("usage-error.stderr"), 2)
+    stdout, stderr, code = contract_reply("usage-error.json")
+    gateway.set_control(cids["work"], stdout, stderr, code)
     response = submit(client, "work", base_form(cids))
     assert response.status_code == 200
     assert "Not sent" in response.text
@@ -622,7 +643,8 @@ def test_submit_busy_race_after_submitted_is_409_with_refused_busy_outcome():
 
 def test_submit_retry_sends_same_request_id():
     client, _, gateway, cids = live_client()
-    gateway.set_control(cids["work"], b"", agentctl_stderr("unreachable.stderr"), 2)
+    stdout, stderr, code = contract_reply("not-submitted.json")
+    gateway.set_control(cids["work"], stdout, stderr, code)
     first = submit(client, "work", base_form(cids, retry="1"))
     assert first.status_code == 200
     assert "Outcome unknown" in first.text
@@ -649,7 +671,8 @@ def test_submit_retry_sends_same_request_id():
 
 def test_submit_retry_goes_through_every_check_again():
     client, _, gateway, cids = live_client()
-    gateway.set_control(cids["work"], b"", agentctl_stderr("unreachable.stderr"), 2)
+    stdout, stderr, code = contract_reply("not-submitted.json")
+    gateway.set_control(cids["work"], stdout, stderr, code)
     first = submit(client, "work", base_form(cids, retry="1"))
     assert "Outcome unknown" in first.text
     retry_form = base_form(cids, repository="other-owner/other-repo", retry="1")
