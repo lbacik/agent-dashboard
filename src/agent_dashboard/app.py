@@ -43,6 +43,7 @@ from .attempt_log import (
     read_attempt_tail_log,
     read_stopped_attempt_log,
 )
+from .breadcrumbs import history_trail
 from .charts import (
     CACHE_READ_SHARE_DEFINITION,
     OUTCOME_LABELS,
@@ -662,6 +663,7 @@ def create_app(
                     "presets": list(RANGE_PRESETS),
                     "result": result,
                     "error": error,
+                    "breadcrumbs": history_trail(name),
                     **extra,
                 },
             )

@@ -1176,3 +1176,88 @@ def test_history_page_with_missing_rows_still_charts_usable_summaries():
     # Charts still render from the usable summary only.
     assert "Outcomes" in body
     assert "complete" in body
+
+
+# --- sticky breadcrumb top bar (tracer bullet) --------------------------------
+
+
+def test_history_page_has_sticky_breadcrumb_topbar():
+    client, _, _ = make_history_client(
+        [("work", "running")], {"id-work": _history_payload_old_and_recent()}
+    )
+    body = client.get("/instances/work/history?window=all").text
+    # Breadcrumb trail: Fleet links home, the instance is plain current text.
+    assert '<nav aria-label="Breadcrumb">' in body
+    assert '<a href="/">Fleet</a>' in body
+    assert '<span aria-current="page">work</span>' in body
+    # The current crumb is text, never a link.
+    assert 'href="/instances/work/history"' not in body.split("Breadcrumb")[1].split("</nav>")[0]
+    # The on-demand note and Refresh live in the sticky bar.
+    subnav = body.split('<div class="subnav">', 1)[1].split("</div>", 1)[0]
+    assert "data is read on demand" in subnav
+    assert ">Refresh</a>" in subnav
+    # The bottom "Back to the fleet" escape hatch is gone.
+    assert "Back to the fleet" not in body
+
+
+def test_history_refresh_keeps_the_selected_range():
+    client, _ = _history_client_with_aged_attempts()
+    body = client.get("/instances/work/history?preset=7d").text
+    subnav = body.split('<div class="subnav">', 1)[1].split("</div>", 1)[0]
+    assert "/instances/work/history?preset=7d" in subnav.replace("&amp;", "&")
+
+
+def test_history_breadcrumb_renders_for_unknown_instance_and_errors():
+    from agent_dashboard.gateway import GatewayError
+
+    client, _, _ = make_history_client(
+        [("work", "running")], {"id-work": _history_payload_old_and_recent()}
+    )
+    unknown = client.get("/instances/nope/history").text
+    assert '<nav aria-label="Breadcrumb">' in unknown
+    assert '<a href="/">Fleet</a>' in unknown
+    assert '<span aria-current="page">nope</span>' in unknown
+    assert "Back to the fleet" not in unknown
+
+    bad_layout_client, _, _ = make_history_client(
+        [("work", "running")], {"id-work": {"layout": "unknown", "attempts": []}}
+    )
+    error_body = bad_layout_client.get("/instances/work/history").text
+    assert '<span aria-current="page">work</span>' in error_body
+    assert "Back to the fleet" not in error_body
+
+    err_client, _, gateway = make_history_client([("work", "running")])
+    gateway.set_history_error("id-work", GatewayError("boom"))
+    gateway_body = err_client.get("/instances/work/history").text
+    assert '<nav aria-label="Breadcrumb">' in gateway_body
+    assert '<span aria-current="page">work</span>' in gateway_body
+
+
+def test_fleet_view_has_no_breadcrumb_and_header_is_not_sticky():
+    from test_web import make_client
+
+    client, _ = make_client([("worker-a", "running")])
+    body = client.get("/").text
+    assert 'aria-label="Breadcrumb"' not in body
+    assert 'class="subnav"' not in body
+    assert 'class="crumbs"' not in body
+    css = client.get("/static/style.css").text
+    # The history bar pins; the fleet header stays static.
+    assert "position: sticky" in css.split(".subnav", 1)[1].split("}", 1)[0]
+    topbar = css.split(".topbar {", 1)[1].split("}", 1)[0]
+    assert "sticky" not in topbar
+
+
+def test_subnav_wraps_without_horizontal_scroll_and_uses_tokens():
+    from test_web import make_client
+
+    client, _ = make_client([("worker-a", "running")])
+    css = client.get("/static/style.css").text
+    block = css.split(".subnav {", 1)[1].split("}", 1)[0]
+    assert "flex-wrap: wrap" in block
+    assert "max-width: 100%" in block
+    crumbs = css.split(".crumbs li {", 1)[1].split("}", 1)[0]
+    assert "overflow-wrap: anywhere" in crumbs
+    # Tokens only: no literal colours in the new bar or crumbs.
+    assert "#" not in block
+    assert "#" not in css.split(".crumbs li + li::before {", 1)[1].split("}", 1)[0]
