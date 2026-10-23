@@ -19,11 +19,10 @@ from typing import Any
 
 #: Budget total keys accepted at the top level of one attempt record, in
 #: preference order. The agent reports the total as ``total_cost_usd``; the
-#: camelCase and bare variants stay accepted for older/divergent payloads.
+#: camelCase and snake_case variants stay accepted for older/divergent payloads.
 BUDGET_COST_KEYS = (
     "total_cost_usd",
     "totalCostUsd",
-    "totalCostUSD",
     "cost_usd",
     "costUSD",
     "cost",
@@ -37,7 +36,6 @@ MODEL_COST_KEYS = (
     "costUSD",
     "cost_usd",
     "total_cost_usd",
-    "totalCostUsd",
     "cost",
     "total_cost",
 )
@@ -46,18 +44,16 @@ MODEL_COST_KEYS = (
 #: snake_case key maps to the accepted variants in preference order: the
 #: agent's camelCase first, snake_case for older or divergent payloads.
 TOKEN_FIELD_KEYS: dict[str, tuple[str, ...]] = {
-    "input_tokens": ("inputTokens", "input_tokens", "input"),
+    "input_tokens": ("inputTokens", "input_tokens"),
     "cache_read_input_tokens": (
         "cacheReadInputTokens",
         "cache_read_input_tokens",
-        "cache_read",
     ),
     "cache_creation_input_tokens": (
         "cacheCreationInputTokens",
         "cache_creation_input_tokens",
-        "cache_creation",
     ),
-    "output_tokens": ("outputTokens", "output_tokens", "output"),
+    "output_tokens": ("outputTokens", "output_tokens"),
 }
 
 #: Canonical token keys in stable display order.
@@ -74,8 +70,6 @@ TOKEN_CANONICAL_KEYS = (
 STOP_REASON_KEYS = (
     "model_stop_reason",
     "modelStopReason",
-    "stop_reason",
-    "stopReason",
 )
 
 #: Display for missing usage.
@@ -86,10 +80,6 @@ def _num(raw: Any) -> int | float | None:
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return None
     return raw
-
-
-def _str(raw: Any) -> str | None:
-    return raw if isinstance(raw, str) and raw else None
 
 
 def _model_usage(attempt: dict[str, Any]) -> dict[str, Any]:
@@ -125,7 +115,7 @@ def read_cost_value(attempt: dict[str, Any]) -> float | None:
                 continue
             value = _first_num(model, MODEL_COST_KEYS)
             if value is not None:
-                total = (total or 0) + value
+                total = value if total is None else total + value
         if total is not None:
             return float(total)
     return None
@@ -150,15 +140,6 @@ def read_token_totals(attempt: dict[str, Any]) -> dict[str, int | float]:
             if value is not None:
                 totals[canonical] = totals.get(canonical, 0) + value
     return totals
-
-
-def has_usage(attempt: dict[str, Any]) -> bool:
-    """Whether an attempt record carries any usable cost or token data."""
-    if not isinstance(attempt, dict):
-        return False
-    if read_cost_value(attempt) is not None:
-        return True
-    return bool(read_token_totals(attempt))
 
 
 def read_stop_reason(attempt: dict[str, Any], usage_present: bool) -> str:

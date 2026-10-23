@@ -58,16 +58,6 @@ TOKEN_KEYS = (
     ("output_text", "output_tokens"),
 )
 
-#: Cost keys accepted inside one model's usage counters, in preference order.
-#: Kept for backwards compatibility; :mod:`usage` is the source of truth.
-COST_KEYS = (
-    "costUSD",
-    "cost_usd",
-    "total_cost_usd",
-    "total_cost",
-    "cost",
-)
-
 #: Cost soft-threshold keys accepted at the top level of one attempt record,
 #: in preference order. The agent reports the threshold only when it knows
 #: it, so a missing (or non-numeric, or non-positive) value means unknown and
