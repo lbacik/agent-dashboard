@@ -83,7 +83,7 @@
     <div id="{{ activity_id }}" hx-preserve>
       <details class="activity" open data-activity-group="activity">
         <summary><span class="activity-label">Activity</span> <span id="{{ activity_id }}-sum" class="activity-sum"></span></summary>
-        <div class="activity-body"
+        <div class="activity-body" data-scroll-key="activity-body"
              hx-get="/instances/{{ row.name | urlencode }}/activity" hx-trigger="load, sse:fleet" hx-target="this" hx-swap="innerHTML">
           <p class="hint">Loading activity…</p>
         </div>
