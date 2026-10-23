@@ -406,7 +406,14 @@ def create_app(
         if row is None and not rows:
             return Response(status_code=204)
         return templates.TemplateResponse(
-            request, "_drawer.html", {**context(request), "row": row, "name": name}
+            request,
+            "_drawer.html",
+            {
+                **context(request),
+                "row": row,
+                "name": name,
+                "ctl_slug": control_slug(name),
+            },
         )
 
     # Evidence files never change once written, so the Activity widget
@@ -1451,5 +1458,7 @@ def create_app(
                 "X-Accel-Buffering": "no",
             },
         )
+
+    register_control_routes(app, templates)
 
     return app

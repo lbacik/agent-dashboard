@@ -8,10 +8,11 @@ is not wired up yet.
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from urllib.parse import quote
 
 from .control import (
     ACTION_COMMANDS,
@@ -65,7 +66,6 @@ def register_control_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             {
                 "name": name,
                 "slug": control_slug(name),
-                "row": row,
                 "av": availability,
                 "error": None,
                 "review_url": f"/instances/{quote(name, safe='')}/control/review",

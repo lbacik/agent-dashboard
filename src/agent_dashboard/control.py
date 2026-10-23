@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from .config import is_loopback
+
 #: Sentinel for a missing ``control`` key (distinct from null/unreadable).
 MISSING = object()
 
@@ -67,7 +69,7 @@ def compute_control_mode(
             available=False,
             reason="control is off (AGENT_DASHBOARD_CONTROL=off, read-only mode)",
         )
-    if not _is_loopback(host):
+    if not is_loopback(host or ""):
         return ControlMode(
             available=False,
             reason=f"the dashboard is bound to a non-loopback address ({host})",
@@ -84,13 +86,6 @@ def host_guard_disabled_from_env(env: dict[str, str] | None = None) -> bool:
     """Whether the Host-guard escape hatch is set (test deployments only)."""
     source = os.environ if env is None else env
     return source.get("AGENT_DASHBOARD_DISABLE_HOST_GUARD") == "1"
-
-
-def _is_loopback(host: str) -> bool:
-    h = (host or "").strip().strip("[]").lower()
-    if h in ("localhost", "::1"):
-        return True
-    return h.startswith("127.") and len(h) > 4
 
 
 @dataclass(frozen=True)
@@ -152,7 +147,7 @@ def control_availability(
     """
     active_mode = mode if mode is not None else ControlMode(available=True)
     if not active_mode.available:
-        return ControlAvailability(unavailable=active_mode.reason or "")
+        return ControlAvailability(unavailable=active_mode.reason or "unavailable")
     if reach != "live":
         return ControlAvailability(
             unavailable=REACH_REASONS.get(reach, f"the snapshot is {reach}")
@@ -175,16 +170,11 @@ def control_availability(
         )
 
     states = _action_states(control)
-    first_enabled = next((s.key for s in states if s.enabled), None)
+    first_enabled = next((key for key, enabled, _, _ in states if enabled), None)
     actions: list[ControlAction] = []
     for key, enabled, reason, note in states:
         checked = first_enabled is not None and key == first_enabled
-        if key == "stop_after":
-            command = _preview(key, n=1)
-        elif key == "next_issue":
-            command = _preview(key)
-        else:
-            command = _preview(key)
+        command = _preview(key, n=1) if key == "stop_after" else _preview(key)
         actions.append(
             ControlAction(
                 key=key,

@@ -58,3 +58,10 @@ the main page):
 
 Do not add per-widget save/restore code around a live swap: put the
 stable key on the container and let the shared keeper handle it.
+
+## An in-progress form inside a live region is never re-rendered mid-typing
+
+An in-progress form inside a live-refreshed region gets a stable ID and
+`hx-preserve`. Its own parts refresh through a filtered `sse:fleet`
+trigger that holds while a confirmation is open or focus is inside it.
+Never re-render a form the operator is typing into.
