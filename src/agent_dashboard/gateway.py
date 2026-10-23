@@ -1253,7 +1253,9 @@ class DockerGateway:
             raise ValueError(f"timeout must be positive: {timeout}")
         if log_timeout <= 0:
             raise ValueError(f"log timeout must be positive: {log_timeout}")
-        if control_exec_timeout <= MIN_CONTROL_EXEC_TIMEOUT:
+        # ``not x > floor`` (not ``x <= floor``) so NaN is also a startup
+        # error: every comparison with NaN is False, including ``<=``.
+        if not control_exec_timeout > MIN_CONTROL_EXEC_TIMEOUT:
             raise ValueError(
                 "control exec timeout must be greater than "
                 f"{MIN_CONTROL_EXEC_TIMEOUT:g} s: {control_exec_timeout}"

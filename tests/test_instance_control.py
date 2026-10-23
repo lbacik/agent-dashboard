@@ -708,3 +708,46 @@ def test_fake_unscripted_control_defaults_to_empty_ok():
     assert asyncio.run(gateway.control(CID, "stop", request_id=RID)) == ControlExec(
         stdout=b"", stderr=b"", returncode=0
     )
+
+
+def test_gateway_rejects_nan_control_timeout():
+    with pytest.raises(ValueError):
+        DockerGateway(control_exec_timeout=float("nan"))
+
+
+def test_control_exec_timeout_nan_env_rejected(monkeypatch):
+    monkeypatch.setenv("AGENT_DASHBOARD_CONTROL_EXEC_TIMEOUT", "nan")
+    with pytest.raises(ValueError):
+        load_settings([])
+
+
+def test_control_exec_timeout_nan_flag_rejected():
+    with pytest.raises(ValueError):
+        load_settings(["--control-exec-timeout", "nan"])
+
+
+def test_fake_busy_call_logs_no_phantom_argv():
+    """A busy-raising fake call logs nothing: the real gateway spawns nothing."""
+    gateway = FakeGateway()
+    gateway.control_delay = 0.05
+
+    async def main():
+        task = asyncio.create_task(gateway.control(CID, "stop", request_id=RID))
+        for _ in range(1000):
+            if gateway.control_in_flight(CID):
+                break
+            await asyncio.sleep(0.001)
+        assert gateway.control_in_flight(CID) is True
+        logged_argvs = list(gateway.control_argvs)
+        logged_calls = list(gateway.control_calls)
+        with pytest.raises(ControlBusyError):
+            await gateway.control(CID, "resume", request_id=RID)
+        with pytest.raises(ControlBusyError):
+            await gateway.command_status(CID, RID)
+        assert gateway.control_argvs == logged_argvs
+        assert gateway.control_calls == logged_calls
+        assert gateway.command_status_calls == []
+        assert (await task).returncode == 0
+        assert gateway.control_in_flight(CID) is False
+
+    asyncio.run(main())

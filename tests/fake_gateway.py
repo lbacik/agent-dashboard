@@ -268,6 +268,10 @@ class FakeGateway:
             issue=issue,
             expect_repo=expect_repo,
         )
+        if self.control_in_flight(container_id):
+            raise ControlBusyError(
+                f"another control exec for container {container_id} is already in flight"
+            )
         self.control_argvs.append(argv)
         self.control_calls.append(
             {
@@ -284,6 +288,10 @@ class FakeGateway:
     async def command_status(self, container_id: str, request_id: str) -> ControlExec:
         """One scripted ``agentctl command <id>`` exec, validated like the real one."""
         argv = argv_command_status(container_id, request_id)
+        if self.control_in_flight(container_id):
+            raise ControlBusyError(
+                f"another control exec for container {container_id} is already in flight"
+            )
         self.control_argvs.append(argv)
         self.command_status_calls.append((container_id, request_id))
         return await self._run_scripted_control(container_id, self._status_scripts)
