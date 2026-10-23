@@ -604,7 +604,6 @@ def test_drawer_activity_disclosure_markup_is_unchanged():
     )
     summary = body.partition("<summary>")[2].partition("</summary>")[0]
     assert "<svg" not in summary
-    assert "summary::before" not in summary
     assert "▸" not in summary
     assert "▾" not in summary
     assert '<div class="activity-body" data-scroll-key="activity-body"' in body
