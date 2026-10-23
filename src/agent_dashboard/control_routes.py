@@ -782,6 +782,39 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
             "retry": retry,
         }
 
+        # Fast-path busy check (spec 6.3): another control exec already in
+        # flight refuses before the `submitted` entry, so the normal busy
+        # path leaves no `submitted`-without-exec pair. The post-`submitted`
+        # race below remains for an exec that loses the slot afterwards.
+        in_flight = getattr(gateway, "control_in_flight", None)
+        if callable(in_flight):
+            try:
+                claimed = bool(in_flight(row.container_id))
+            except Exception:  # noqa: BLE001 - a broken probe never refuses
+                claimed = False
+            if claimed:
+                _write_refused(
+                    refused_entry(
+                        instance=name,
+                        reason="busy",
+                        error=BUSY_MESSAGE,
+                        request_id=request_id,
+                        container_id=container_id,
+                        expected_repository=repository,
+                        action=action,
+                        params=params,
+                        command=command,
+                        agent_version=agent_version,
+                        expect_repo_guard=expect_repo is not None,
+                        retry=retry,
+                    )
+                )
+                return HTMLResponse(
+                    refused_card(BUSY_MESSAGE, request_id=request_id, command=command)
+                    + body_oob(),
+                    status_code=409,
+                )
+
         # The `submitted` entry comes before `docker exec`; a failing write
         # means the command is not sent (503, Not sent card, no exec).
         try:

@@ -584,7 +584,29 @@ def test_submit_failed_refusal_write_still_returns_refusal(monkeypatch, capsys):
 # --- busy, retry, expect-repo, output safety -------------------------------------------
 
 
-def test_submit_busy_is_409_with_refused_busy_outcome():
+def test_submit_busy_in_flight_refuses_before_submitted():
+    client, _, gateway, cids = live_client()
+    gateway.hold_control(cids["work"])
+    try:
+        response = submit(client, "work", base_form(cids))
+    finally:
+        gateway.release_control(cids["work"])
+    assert response.status_code == 409
+    assert "Refused" in response.text
+    assert "Another command is being sent to this instance." in response.text
+    entries = audit_entries()
+    assert [entry["outcome"] for entry in entries] == ["refused"]
+    assert entries[0]["reason"] == "busy"
+    assert entries[0]["request_id"] == RID
+    assert entries[0]["container_id"] == cids["work"]
+    assert entries[0]["expected_repository"] == REPO
+    assert entries[0]["action"] == "stop"
+    assert entries[0]["exit_code"] is None
+    assert gateway.control_calls == []
+    assert gateway.command_status_calls == []
+
+
+def test_submit_busy_race_after_submitted_is_409_with_refused_busy_outcome():
     client, _, gateway, cids = live_client()
     gateway.set_control_busy(cids["work"])
     response = submit(client, "work", base_form(cids))
