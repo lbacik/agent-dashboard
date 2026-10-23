@@ -37,8 +37,15 @@ scroll keeper (`src/agent_dashboard/static/scroll-keep.js`, loaded on
 the main page):
 
 - Add `data-scroll-key="<stable-key>"` to the scroll container. The
-  key is stable per view (the drawer uses `drawer`); the container
-  keeps the attribute across fragments, including the gone fragment.
+  key is stable per view (the drawer uses `drawer`, the Activity body
+  uses `activity-body`); the container keeps the attribute across
+  fragments, including the gone fragment. When a pane shows
+  ever-changing content, key it per item instead (the Activity
+  call/response panes use `activity-now-<file>` and
+  `activity-last-call-<file>` / `activity-last-response-<file>`): the
+  pane then holds still while it shows the same call and starts at the
+  top when a new call replaces it, because the old key is simply absent
+  after the swap.
 - The keeper captures the container's horizontal and vertical scroll
   position before the swap and reapplies it to the container with the
   same key afterwards. The browser clamps an out-of-range value to the
