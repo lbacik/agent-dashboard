@@ -2,11 +2,12 @@
    ?instance=<name> is present, so the open drawer survives a reload.
    `row` is the FleetRow (None when the instance is unknown or removed);
    `name` is the requested instance name.
-   The `<aside>` is the scroll container, so it stays in place across the
-   `sse:fleet` refresh: the refresh swaps only the inner content
-   (`hx-target="this"` with `hx-select=".drawer-inner"`), keeping the
-   scroll position. `hx-disinherit="*"` keeps children that fetch on their
-   own (load-once widgets with `hx-preserve`) from inheriting the drawer's
+   The `<aside>` is the scroll container. It opts into the shared scroll
+   keeper (`scroll-keep.js`) with `data-scroll-key="drawer"`, so the
+   `sse:fleet` refresh (which swaps only the inner content via
+   `hx-target="this"` with `hx-select=".drawer-inner"`) keeps the scroll
+   position. `hx-disinherit="*"` keeps children that fetch on their own
+   (load-once widgets with `hx-preserve`) from inheriting the drawer's
    own fetch attributes. #}
 {% macro fig(f) -%}
 <span class="figure">{{ f.text }}{% if f.basis and f.basis != f.text %} <span class="basis">{{ f.basis }}</span>{% endif %}</span>
@@ -18,7 +19,7 @@
 <svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M1 8.5h3l1.8-5 3.4 9 1.8-4H15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
 {%- endmacro %}
 {% if row is none %}
-<aside id="drawer" class="drawer"
+<aside id="drawer" class="drawer" data-scroll-key="drawer"
        hx-get="/instances/{{ name | urlencode }}"
        hx-trigger="sse:fleet"
        hx-target="this"
@@ -37,7 +38,7 @@
 </aside>
 {% else %}
 {% set d = row.drawer %}
-<aside id="drawer" class="drawer"
+<aside id="drawer" class="drawer" data-scroll-key="drawer"
        hx-get="/instances/{{ row.name | urlencode }}"
        hx-trigger="sse:fleet"
        hx-target="this"
