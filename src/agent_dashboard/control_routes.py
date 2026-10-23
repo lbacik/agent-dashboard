@@ -219,7 +219,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
             },
         )
 
-    def _composer_context(row, name: str, mode: ControlMode, availability) -> dict:
+    def _composer_context(row, name: str, availability) -> dict:
         """The shared template context for every composer render."""
         commands = _row_commands(row)
         return {
@@ -339,7 +339,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     agent_version=_agent_version(row),
                 )
             )
-            context = _composer_context(row, name, mode, _row_availability(row, mode))
+            context = _composer_context(row, name, _row_availability(row, mode))
             context["review_error"] = validation_message
             context["entered_action"] = candidate_action
             context["entered_n"] = n_raw
@@ -373,22 +373,9 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     agent_version=_agent_version(row),
                 )
             )
-            commands = _row_commands(row)
+            context = _composer_context(row, name, availability)
             return templates.TemplateResponse(
-                request,
-                "_control.html",
-                {
-                    "name": name,
-                    "slug": control_slug(name),
-                    "av": availability,
-                    "error": None,
-                    "review_url": f"/instances/{quote(name, safe='')}/control/review",
-                    "commands_url": f"/instances/{quote(name, safe='')}/control/commands",
-                    "commands": commands,
-                    "commands_summary": timeline_summary(commands),
-                    "ACTION_COMMANDS": dict(ACTION_COMMANDS),
-                },
-                status_code=403,
+                request, "_control.html", context, status_code=403
             )
 
         # The action enabled (409: the composer with the disabled reason).
@@ -409,7 +396,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     agent_version=_agent_version(row),
                 )
             )
-            context = _composer_context(row, name, mode, availability)
+            context = _composer_context(row, name, availability)
             context["review_error"] = error
             context["entered_action"] = action
             context["entered_n"] = n_raw

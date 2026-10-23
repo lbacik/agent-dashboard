@@ -113,13 +113,13 @@ def append_entry(entry: dict[str, Any]) -> Path:
             os.chmod(str(path), 0o600)
             data = (line + "\n").encode("utf-8")
             written = 0
+            # Entries are small so this is one write in practice; loop on a
+            # partial write so the file never holds a torn non-JSON line.
             while written < len(data):
-                chunk = os.write(fd, data[written : written + len(data)])
+                chunk = os.write(fd, data[written:])
                 if chunk == 0:  # pragma: no cover - defensive
                     raise OSError("short write to the Control audit file")
                 written += chunk
-                if written < len(data):  # pragma: no cover - defensive
-                    break
             os.fsync(fd)
         finally:
             os.close(fd)

@@ -101,6 +101,12 @@ def test_review_stop_returns_confirmation_with_exact_argv():
     assert "ctl-tone-danger" in response.text
     assert "autofocus" in response.text
     assert 'hx-get="/instances/work/control"' in response.text
+    # While the submit is in flight the buttons disable and the sending note
+    # shows: the indicator lives inside the requesting form.
+    assert 'hx-disabled-elt=".ctl-confirm-form button"' in response.text
+    form_body = response.text.split('<form class="ctl-confirm-form"')[1].split("</form>")[0]
+    assert "ctl-sending htmx-indicator" in form_body
+    assert "Sending… waiting for the agent to accept" in form_body
     # A 200 writes no audit entry and runs no exec.
     assert audit_entries() == []
     assert gateway.control_calls == []
