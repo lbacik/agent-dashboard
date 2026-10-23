@@ -1,0 +1,6 @@
+repository: acme-corp/web-app
+request_id: dash-0123456789abcdef
+sequence: 9
+acknowledgement: accepted
+effect: handoff started
+new_future_key: something the dashboard does not know yet

@@ -1,0 +1,3 @@
+repository: acme-corp/other-app
+rejected: expected repository acme-corp/web-app, this instance targets acme-corp/other-app
+request_id: dash-0123456789abcdef
