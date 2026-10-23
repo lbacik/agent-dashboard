@@ -1,6 +1,6 @@
 # agent-dashboard
 
-A read-only web dashboard for a fleet of [simple-coding-agent](https://github.com/lbacik/simple-coding-agent) containers on one Docker host. It discovers agent containers by image label, polls each one with `docker exec <container> agentctl telemetry --json`, and shows what every instance is doing: control state, the current attempt's token budget and context figures, and recent events.
+A web dashboard for a fleet of [simple-coding-agent](https://github.com/lbacik/simple-coding-agent) containers on one Docker host. It discovers agent containers by image label, polls each one with `docker exec <container> agentctl telemetry --json`, and shows what every instance is doing: control state, the current attempt's token budget and context figures, and recent events. On live instances it can also send Control actions (see below); with control switched off it is a read-only view.
 
 Status: specified, not yet built.
 
@@ -59,6 +59,51 @@ Caveat: the log layout is not a contract ([ADR
 agent release can move or rename these files and break the view until the
 dashboard follows; an unrecognised layout renders "layout not recognised",
 never an error.
+
+## Control actions
+
+On a live managed instance, the drawer offers a **Control console** with
+five Control actions, each issuing exactly one `agentctl` command to that
+instance via `docker exec`:
+
+- `stop`
+- `stop --after N` (1–99 attempts)
+- `resume`
+- `handoff now`
+- `next issue <n>`
+
+Each action takes two steps: "Review…" renders a confirmation showing the
+exact `agentctl` command (and the full `docker exec` argv), the instance and
+repository it is bound to, and a newly generated request ID; Confirm sends
+it. A double submit reuses the same request ID, so the agent treats it as an
+identical retry. After the send, a feedback card reports the outcome
+(accepted, completed, rejected, outcome unknown, …) and, for an accepted
+command, follows it through telemetry until it reaches a terminal state.
+A read-only helper, `agentctl command <id>` behind each card's "Check
+status" button, re-reads an outcome without sending anything.
+
+**Switching control off.** Control defaults to on. Pass `--control off`
+(or set `AGENT_DASHBOARD_CONTROL=off`) for read-only mode: every drawer
+shows only "Controls unavailable: control is off
+(`AGENT_DASHBOARD_CONTROL=off`, read-only mode)" and every Control action
+route answers 403. Controls also switch themselves off when the dashboard
+is bound to a non-loopback address (`--allow-non-loopback`, the Docker test
+deployment below) or when the Host guard is disabled
+(`AGENT_DASHBOARD_DISABLE_HOST_GUARD=1`); each state names its reason after
+"Controls unavailable:".
+
+**Timeout.** `--control-exec-timeout` (or
+`AGENT_DASHBOARD_CONTROL_EXEC_TIMEOUT`, default 15 s) bounds one control
+exec. It must stay greater than 10 s — the agent's own socket timeout for
+mutating commands — so a smaller value is a startup error.
+
+**Control audit.** The dashboard's own append-only record of every Control
+action submission and its outcome at submission time lives at
+`$XDG_STATE_HOME/agent-dashboard/control-audit.jsonl` (when
+`XDG_STATE_HOME` is unset, `~/.local/state/agent-dashboard/control-audit.jsonl`).
+The directory is created on first write (mode `0700`, file `0600`). Every
+entry is also mirrored to stdout as one `control-audit <json>` line, for
+journald or `docker logs`. There is no rotation: one or two lines per click.
 
 ## Running in Docker (test deployments)
 

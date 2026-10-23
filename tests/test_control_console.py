@@ -1,9 +1,9 @@
-"""Control console (spec slice 4): the read-only composer in the drawer.
+"""Control console (spec slice 4): the composer in the drawer.
 
 The console tells the operator which Control actions they could take and
-why the others are unavailable. Nothing is sent yet: "Review…" is not
-wired up. Tests assert HTML fragments through TestClient, following the
-``make_fleet_client`` + ``fresh_snapshot`` patterns in ``test_web.py``.
+why the others are unavailable. Tests assert HTML fragments through
+TestClient, following the ``make_fleet_client`` + ``fresh_snapshot``
+patterns in ``test_web.py``.
 """
 
 from __future__ import annotations

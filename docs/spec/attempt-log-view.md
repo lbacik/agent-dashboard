@@ -9,7 +9,7 @@ Inputs, all resolved on the map:
 - Shape and data access: ticket "Charting decisions: shape and data access of the attempt log view".
 - Verified layout and Docker behaviour: [`docs/research/attempt-log-layout.md`](https://github.com/lbacik/agent-dashboard/blob/research/attempt-log-layout/docs/research/attempt-log-layout.md) (branch `research/attempt-log-layout`, local commit 5b2a896 supersedes the remote ec06145), plus its correction comment on ticket "Verify attempt log layout and file access against the agent".
 - Look and behaviour: variant A of ticket "Prototype the attempt log timeline and evidence viewer" (throwaway code `prototype/attempt_log/app.py` on branch `prototype/attempt-log-view`; reuse the parsing ideas, not the code).
-- Constraints: ADR 0001, 0002, 0003. The dashboard stays read-only; the gateway is the only module that builds Docker argv.
+- Constraints: ADR 0001, 0002, 0003. The Attempt log view adds no mutating operations (Control actions live in `instance-control.md`); the gateway is the only module that builds Docker argv.
 
 ## 1. Scope
 

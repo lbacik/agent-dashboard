@@ -1,7 +1,7 @@
 """Control console availability: the dashboard control mode plus per-action rules.
 
-Pure view-model functions (spec sections 2, 5.1, 5.2) for the read-only
-Control console. Templates receive only these results; there is no public
+Pure view-model functions (spec sections 2, 5.1, 5.2) for the Control
+console. Templates receive only these results; there is no public
 JSON API. A missing field leaves the action enabled: the agent is the
 authority, and its rejection is harmless and shown with its reason.
 """
