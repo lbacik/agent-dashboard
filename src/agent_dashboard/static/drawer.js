@@ -51,7 +51,39 @@ function closeDrawer() {
     var url = drag.strip.dataset.base + "from=" + days[lo] + "&to=" + days[hi];
     var target = drag.strip.dataset.target;
     drag = null;
+    try { window.__drawerStripSuppressClick = true; } catch (e) { /* ignore */ }
+    setTimeout(function () {
+      try { window.__drawerStripSuppressClick = false; } catch (e) { /* ignore */ }
+    }, 300);
     htmx.ajax("GET", url, { target: target, swap: "innerHTML" });
+  });
+})();
+
+/* Clicking empty page space outside the open drawer closes it, exactly as
+   the × button does. Fleet rows switch instead of closing, clicks inside
+   the drawer never close, and links, buttons, disclosure summaries and the
+   statistics strip keep their own behaviour. A text selection ending
+   outside the drawer does not close it either. */
+(function () {
+  document.addEventListener("click", function (e) {
+    if (window.__drawerStripSuppressClick) {
+      try { window.__drawerStripSuppressClick = false; } catch (err) { /* ignore */ }
+      return;
+    }
+    var drawer = document.getElementById("drawer");
+    if (!drawer) { return; }
+    if (e.button !== undefined && e.button !== 0) { return; }
+    var t = e.target;
+    if (!t || !t.closest) { return; }
+    if (t.closest("#drawer")) { return; }
+    if (t.closest(".fleet-row")) { return; }
+    if (t.closest("a, button, summary, .stats-strip")) { return; }
+    try {
+      var sel = window.getSelection && window.getSelection();
+      if (sel && !sel.isCollapsed) { return; }
+      if (sel && sel.toString && sel.toString() !== "") { return; }
+    } catch (err) { /* ignore */ }
+    closeDrawer();
   });
 })();
 
