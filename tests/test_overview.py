@@ -1,26 +1,27 @@
-"""Fleet overview aggregation: per-instance outcomes and cost over a window.
+"""Fleet overview aggregation: per-instance outcomes and cost over a range.
 
 Covers aggregation across instances (including a failing instance and an
-empty window), the bounded parallel read and attention-rank order. The
-overview panel itself is gone from the fleet page (the per-instance figures
-live in the instance drawer); these tests exercise the aggregation
-(``collect_overview``) directly instead of through ``/``. That ``/`` reads
-no attempt summaries on load is covered in ``test_web.py``.
+empty range), the bounded parallel read and attention-rank order. These
+tests exercise the aggregation (``collect_overview``) directly; the lazily
+loaded ``/overview`` panel is covered in ``test_overview_panel.py``, and
+that ``/`` reads no attempt summaries on load in ``test_web.py``.
 Vocabulary: Attempt log, Managed instance, Reach, Attention rank.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
-from fake_gateway import FakeGateway
+from fake_gateway import FakeGateway, make_logs_tree
 
 from agent_dashboard.charts import OUTCOME_ORDER
 from agent_dashboard.fleet import FleetState
 from agent_dashboard.gateway import GatewayError, ManagedInstance
 from agent_dashboard.history import HISTORY_LAYOUT
 from agent_dashboard.overview import collect_overview, overview_legend
+from agent_dashboard.range_stats import RangeSpec
 
 
 def _started(days_ago, now):
@@ -58,9 +59,9 @@ def make_rows(names, now=None):
     return rows, now
 
 
-def collect(rows, gateway, now, window="all", **kwargs):
+def collect(rows, gateway, now, preset="all", **kwargs):
     return asyncio.run(
-        collect_overview(rows, gateway, window=window, now=now, **kwargs)
+        collect_overview(rows, gateway, spec=RangeSpec(preset), now=now, **kwargs)
     )
 
 
@@ -150,19 +151,46 @@ def test_overview_failing_instance_listed_with_reach_excluded_from_totals():
     assert result.total_cost == 1.5
 
 
-def test_overview_not_running_instance_listed_without_exec():
+def test_overview_not_running_instance_reads_logs_tree_without_exec():
+    now = time.time()
     gateway = FakeGateway()
     state = FleetState()
     asyncio.run(
-        state.apply_cycle([ManagedInstance("down", "id-down", "exited")], {}, now=1000.0)
+        state.apply_cycle(
+            [
+                ManagedInstance("down", "id-down", "exited"),
+                ManagedInstance("gone", "id-gone", "exited"),
+            ],
+            {},
+            now=now,
+        )
     )
-    rows, _ = asyncio.run(state.snapshot(now=1000.0))
-    assert rows[0].state == "not running"
-    result = asyncio.run(collect_overview(rows, gateway, now=1000.0))
-    assert len(result.rows) == 1
-    assert not result.rows[0].ok
-    assert "running managed instances only" in result.rows[0].error
+    rows, _ = asyncio.run(state.snapshot(now=now))
+    assert {row.state for row in rows} == {"not running"}
+    # Stopped-instance run directories carry fractional seconds.
+    started = _started(1, now).replace("Z", ".123456Z")
+    record = _attempt(7, started, "complete", cost=2.0)["attempt"]
+    gateway.set_logs_tree(
+        "id-down",
+        make_logs_tree(
+            {
+                f"logs/7/{started.replace(':', '-')}/attempt.json": json.dumps(
+                    record
+                ).encode()
+            }
+        ),
+    )
+    result = collect(rows, gateway, now)
+    insts = by_name(result)
+    assert insts["down"].ok
+    assert insts["down"].counts == {"complete": 1}
+    assert insts["down"].cost_total == 2.0
+    # No volume: listed with a clear message and left out of the totals.
+    assert not insts["gone"].ok
+    assert "volume is gone" in insts["gone"].error
+    assert result.total_cost == 2.0
     assert gateway.history_calls == []
+    assert sorted(gateway.logs_tree_calls) == ["id-down", "id-gone"]
 
 
 def test_overview_unknown_outcomes_count_as_other():
@@ -199,11 +227,11 @@ def test_overview_empty_window_shown_not_zero_cost():
         ),
     )
     rows, now = make_rows(["work"], now)
-    week = collect(rows, gateway, now, window="7")
+    week = collect(rows, gateway, now, preset="7d")
     assert week.rows[0].shown == 0
     assert week.rows[0].cost_text == "No attempts in this window"
     assert week.total_cost == 0.0
-    everything = collect(rows, gateway, now, window="all")
+    everything = collect(rows, gateway, now, preset="all")
     assert everything.rows[0].cost_total == 5.0
 
 
@@ -234,15 +262,47 @@ def test_overview_measured_zero_cost_still_counts():
     assert result.total_with == 1
 
 
-def test_overview_invalid_window_means_all():
+def test_overview_default_range_is_30_days_and_keeps_full_history():
     now = time.time()
     gateway = FakeGateway()
     gateway.set_history(
-        "id-work", _payload([_attempt(3, _started(40, now), "complete", cost=4.0)])
+        "id-work",
+        _payload(
+            [
+                _attempt(3, _started(40, now), "complete", cost=4.0),
+                _attempt(4, _started(2, now), "handoff", cost=1.0),
+            ]
+        ),
     )
     rows, now = make_rows(["work"], now)
-    result = collect(rows, gateway, now, window="forever")
-    assert result.rows[0].cost_total == 4.0
+    result = asyncio.run(collect_overview(rows, gateway, now=now))
+    assert result.spec.preset == "30d"
+    assert result.rows[0].counts == {"handoff": 1}
+    assert result.rows[0].cost_total == 1.0
+    # The strip feed keeps every attempt, not just the cut range.
+    assert len(result.summaries) == 2
+
+
+def test_overview_custom_span_counts_only_days_inside():
+    from datetime import UTC, datetime, timedelta
+
+    now = time.time()
+    gateway = FakeGateway()
+    gateway.set_history(
+        "id-work",
+        _payload(
+            [
+                _attempt(1, _started(10, now), "complete", cost=1.0),
+                _attempt(2, _started(3, now), "incomplete", cost=2.0),
+            ]
+        ),
+    )
+    rows, now = make_rows(["work"], now)
+    day = datetime.fromtimestamp(now - 10 * 86400, tz=UTC).date()
+    spec = RangeSpec(preset="", start=day - timedelta(days=1), end=day + timedelta(days=1))
+    result = asyncio.run(collect_overview(rows, gateway, spec=spec, now=now))
+    assert result.rows[0].counts == {"complete": 1}
+    assert result.total_cost == 1.0
 
 
 # --- bounded parallel read ---------------------------------------------------
@@ -261,7 +321,7 @@ def test_overview_slow_instance_neither_delays_nor_breaks_panel():
     rows, now = make_rows(["fast", "slow"], now)
     started = time.monotonic()
     result = asyncio.run(
-        collect_overview(rows, gateway, window="all", now=now, timeout=0.2)
+        collect_overview(rows, gateway, spec=RangeSpec("all"), now=now, timeout=0.2)
     )
     elapsed = time.monotonic() - started
     assert elapsed < 10.0
@@ -351,7 +411,7 @@ def test_overview_order_follows_input_attention_rank():
             _payload([_attempt(1, _started(1, now), "complete", cost=1.0)]),
         )
     gateway.set_history_error("id-unreach", GatewayError("no socket"))
-    result = asyncio.run(collect_overview(rows, gateway, window="all", now=now))
+    result = asyncio.run(collect_overview(rows, gateway, spec=RangeSpec("all"), now=now))
     # Row order follows the input (attention-rank) order.
     assert [inst.name for inst in result.rows] == ["unreach", "work", "idle"]
 
@@ -374,6 +434,6 @@ def test_overview_legend_lists_only_outcomes_present_in_stable_order():
         "id-b", _payload([_attempt(2, _started(1, now), "complete", cost=1.0)])
     )
     rows, _ = asyncio.run(state.snapshot(now=now))
-    result = asyncio.run(collect_overview(rows, gateway, window="all", now=now))
+    result = asyncio.run(collect_overview(rows, gateway, spec=RangeSpec("all"), now=now))
     assert [entry.key for entry in overview_legend(result)] == ["complete", "handoff"]
     assert set(OUTCOME_ORDER) >= {entry.key for entry in overview_legend(result)}

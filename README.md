@@ -9,6 +9,18 @@ Status: specified, not yet built.
 - Vocabulary: [CONTEXT.md](CONTEXT.md); contract terms (Dashboard, Managed instance, Telemetry snapshot, Figure basis) are defined in the [agent's CONTEXT.md](https://github.com/lbacik/simple-coding-agent/blob/main/CONTEXT.md).
 - Decisions: [docs/adr/](docs/adr/)
 
+## Fleet overview
+
+Above the fleet table, a collapsible **Fleet overview** panel charts
+outcomes and cost per instance. It loads from `/overview` only once it is
+visible, so `/` itself never reads attempt summaries and the live table
+never waits for it. Its range selector is the drawer's: presets
+(`24h`/`7d`/`30d`/`90d`/`All`) plus a fleet-wide 90-day activity strip
+(click a day or drag across days). The chosen range is remembered in its
+own cookie, apart from the drawer's. Every instance is read in parallel
+with a bounded timeout, stopped ones through `docker cp`; an unreadable
+instance is listed under the charts and left out of the totals.
+
 ## Attempt log view
 
 Each Managed instance's drawer links to its **Attempt history**

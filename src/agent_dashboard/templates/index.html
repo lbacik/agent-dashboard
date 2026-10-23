@@ -1,5 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
+{# The overview panel loads from /overview once it is visible (closed, it
+   reads nothing), so the live table below never waits for attempt-summary
+   reads; its open state is remembered like "Not running" (fleet.js). #}
+<details class="overview" id="overview" data-persist="overview" open>
+  <summary>Fleet overview</summary>
+  <div id="overview-slot" hx-get="/overview" hx-trigger="intersect once" hx-swap="innerHTML">
+    <p class="hint">Loading…</p>
+  </div>
+</details>
 <div id="live"
      hx-ext="sse"
      sse-connect="/stream">
@@ -17,6 +26,8 @@
 <noscript>
   <p class="hint">Enable JavaScript for live updates; otherwise reload the page.</p>
 </noscript>
+<div class="chart-tip" id="chart-tip" hidden></div>
 <script src="/static/fleet.js" defer></script>
+<script src="/static/charts.js" defer></script>
 <script src="/static/drawer.js" defer></script>
 {% endblock %}

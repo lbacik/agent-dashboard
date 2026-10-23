@@ -1,0 +1,154 @@
+{# Fleet overview panel: outcomes and cost per instance for a range. Loaded
+   lazily into #overview-slot by the fleet page and swapped on every range
+   change, so the live table never waits for attempt-summary reads. The
+   range selector is the drawer card's: presets plus a fleet-wide 90-day
+   activity strip (click a day or drag across days; drawer.js). Every bar
+   carries a tooltip naming its outcomes or cost, and the legend pairs each
+   colour with its shape glyph, so no series relies on colour alone. #}
+<div class="overview-card" data-range-query="{{ spec.query }}">
+  <div class="stats-head">
+    <span class="stats-title">Attempts across the fleet</span>
+    <span class="stats-label">{{ spec.label }}</span>
+  </div>
+  <div class="stats-presets" role="group" aria-label="Fleet overview range">
+    {% for key in presets %}
+    {% set active = (not spec.is_custom and spec.preset == key) %}
+    <a href="/overview?preset={{ key }}"
+       hx-get="/overview?preset={{ key }}"
+       hx-target="#overview-slot" hx-swap="innerHTML"
+       {% if active %}class="current" aria-current="true"{% endif %}>{{ "All" if key == "all" else key }}</a>
+    {% endfor %}
+  </div>
+  {% if not overview.rows %}
+  <p class="empty">No managed instances found.</p>
+  {% else %}
+  {% if strip %}
+  <div class="stats-strip" data-base="/overview?" data-target="#overview-slot"
+       data-days="{{ strip | map(attribute='iso') | join(',') }}"
+       title="Click a day or drag across days to choose a range">
+    <svg class="bars" viewBox="0 0 {{ strip|length * 10 }} 48" preserveAspectRatio="none" role="img"
+         aria-label="Fleet attempts per day over the last {{ strip|length }} days; click or drag to choose a range">
+      {% for d in strip %}
+      {% set x = loop.index0 * 10 %}
+      <rect class="strip-day{% if d.selected %} is-sel{% endif %}" data-i="{{ loop.index0 }}" x="{{ x }}" y="0" width="10" height="48">
+        <title>{{ d.tooltip }}</title>
+      </rect>
+      {% if d.total and strip_peak %}
+      {% set ns = namespace(base=46) %}
+      {% for key in chart_keys %}
+      {% set count = d.counts.get(key, 0) %}
+      {% if count %}
+      {% set h = (count / strip_peak) * 42 %}
+      <rect class="bar outcome-{{ key }}" x="{{ x + 1.5 }}" y="{{ ns.base - h }}" width="7" height="{{ h }}" pointer-events="none" />
+      {% set ns.base = ns.base - h %}
+      {% endif %}
+      {% endfor %}
+      {% else %}
+      <rect class="strip-empty" x="{{ x + 1.5 }}" y="45" width="7" height="1" pointer-events="none" />
+      {% endif %}
+      {% endfor %}
+    </svg>
+    <div class="stats-strip-axis"><span>{{ strip[0].label }}</span><span>{{ strip[(strip|length - 1) // 2].label }}</span><span>today</span></div>
+  </div>
+  {% endif %}
+  {% if legend %}
+  <ul class="chart-legend" aria-label="Attempt outcome legend">
+    {% for entry in legend %}
+    <li><span class="glyph outcome-{{ entry.key }}" aria-hidden="true">{{ shape_glyphs[entry.shape] }}</span> {{ entry.label }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <div class="overview-charts">
+    <figure class="chart">
+      <figcaption>Outcomes per instance <span class="fig-sub">attempts in the range, stacked by outcome</span></figcaption>
+      {% if outcome_peak %}
+      {% set W = 720 %}{% set H = 240 %}{% set LEFT = 36 %}{% set TOP = 12 %}{% set BOTTOM = 44 %}
+      {% set plot_w = W - LEFT - 12 %}{% set plot_h = H - TOP - BOTTOM %}
+      {% set slot = plot_w / (overview.rows|length) %}{% set bar_w = [56, slot * 0.6] | min %}
+      <svg class="bars" viewBox="0 0 {{ W }} {{ H }}" role="img" aria-label="Stacked bar chart of attempt outcomes per instance">
+        {% for tick in outcome_ticks %}
+        {% set ty = TOP + plot_h - (tick / outcome_peak) * plot_h %}
+        <line x1="{{ LEFT }}" y1="{{ ty }}" x2="{{ W - 12 }}" y2="{{ ty }}" class="grid" />
+        <text x="{{ LEFT - 6 }}" y="{{ ty + 4 }}" text-anchor="end" class="axis">{{ tick }}</text>
+        {% endfor %}
+        {% for inst in overview.rows %}
+        {% set x = LEFT + loop.index0 * slot + (slot - bar_w) / 2 %}
+        <a href="/instances/{{ inst.name | urlencode }}/history?{{ spec.query }}">
+          <g class="seg" tabindex="0" role="img" aria-label="{{ inst.tip }}" data-tip="{{ inst.tip }}">
+            <title>{{ inst.tip }}</title>
+            {% set ns = namespace(base=TOP + plot_h) %}
+            {% for key in chart_keys %}
+            {% set count = inst.counts.get(key, 0) %}
+            {% if count %}
+            {% set h = (count / outcome_peak) * plot_h %}
+            {% set y = ns.base - h %}
+            <rect x="{{ x }}" y="{{ y }}" width="{{ bar_w }}" height="{{ h }}" class="bar outcome-{{ key }}" />
+            {% if h >= 16 %}
+            <text x="{{ x + bar_w / 2 }}" y="{{ y + h / 2 + 4 }}" text-anchor="middle" class="seg-label">{{ count }}</text>
+            {% endif %}
+            {% set ns.base = y %}
+            {% endif %}
+            {% endfor %}
+          </g>
+        </a>
+        {% if not inst.ok %}
+        <text x="{{ x + bar_w / 2 }}" y="{{ TOP + plot_h - 6 }}" text-anchor="middle" class="axis">n/a</text>
+        {% endif %}
+        <text x="{{ x + bar_w / 2 }}" y="{{ H - 10 }}" text-anchor="middle" class="axis">{{ inst.name }}</text>
+        {% endfor %}
+      </svg>
+      {% else %}
+      <p class="empty">No attempts in this range.</p>
+      {% endif %}
+    </figure>
+    <figure class="chart">
+      <figcaption>Cost per instance <span class="fig-sub">USD total in the range</span></figcaption>
+      {% set cost_rows = overview.rows | rejectattr("cost_total", "none") | list %}
+      {% if cost_rows %}
+      {% set W = 720 %}{% set H = 240 %}{% set LEFT = 64 %}{% set TOP = 12 %}{% set BOTTOM = 44 %}
+      {% set plot_w = W - LEFT - 12 %}{% set plot_h = H - TOP - BOTTOM %}
+      {% set slot = plot_w / (overview.rows|length) %}{% set bar_w = [56, slot * 0.6] | min %}
+      <svg class="bars" viewBox="0 0 {{ W }} {{ H }}" role="img" aria-label="Bar chart of cost per instance">
+        {% for frac, label in cost_ticks %}
+        {% set ty = TOP + plot_h - frac * plot_h %}
+        <line x1="{{ LEFT }}" y1="{{ ty }}" x2="{{ W - 12 }}" y2="{{ ty }}" class="grid" />
+        <text x="{{ LEFT - 6 }}" y="{{ ty + 4 }}" text-anchor="end" class="axis">{{ label }}</text>
+        {% endfor %}
+        {% for inst in overview.rows %}
+        {% set x = LEFT + loop.index0 * slot + (slot - bar_w) / 2 %}
+        <a href="/instances/{{ inst.name | urlencode }}/history?{{ spec.query }}">
+          <g class="seg" tabindex="0" role="img" aria-label="{{ inst.tip }}" data-tip="{{ inst.tip }}">
+            <title>{{ inst.tip }}</title>
+            {% if inst.cost_total is not none %}
+            {% if cost_peak %}{% set h = (inst.cost_total / cost_peak) * plot_h %}{% else %}{% set h = 0 %}{% endif %}
+            {% if h > 0 %}
+            <rect x="{{ x }}" y="{{ TOP + plot_h - h }}" width="{{ bar_w }}" height="{{ h }}" class="bar cost" />
+            {% else %}
+            <rect x="{{ x }}" y="{{ TOP + plot_h - 2 }}" width="{{ bar_w }}" height="2" class="bar cost" />
+            {% endif %}
+            {% endif %}
+          </g>
+        </a>
+        {% if inst.cost_total is none %}
+        <text x="{{ x + bar_w / 2 }}" y="{{ TOP + plot_h - 6 }}" text-anchor="middle" class="axis">{% if inst.ok and inst.shown == 0 %}no attempts{% else %}n/a{% endif %}</text>
+        {% endif %}
+        <text x="{{ x + bar_w / 2 }}" y="{{ H - 10 }}" text-anchor="middle" class="axis">{{ inst.name }}</text>
+        {% endfor %}
+      </svg>
+      {% else %}
+      <p class="empty">No cost data in this range.</p>
+      {% endif %}
+    </figure>
+  </div>
+  <p class="stats-line">
+    <strong>{{ overview.total_attempts }}</strong> attempt(s) across {{ overview.readable }} instance(s){% if overview.total_with %} · fleet total <strong>{{ fleet_total_text }}</strong> across {{ overview.total_with }} with usage data{% if overview.total_missing %} · {{ overview.total_missing }} without usage data excluded{% endif %}{% else %} · no cost data{% endif %}
+  </p>
+  {% if overview.unreadable %}
+  <ul class="overview-errors" aria-label="Instances left out of the totals">
+    {% for inst in overview.rows if not inst.ok %}
+    <li><strong>{{ inst.name }}</strong> <span class="pill pill-{{ inst.reach|replace(" ", "-") }}">{{ inst.reach }}</span> {{ inst.error }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% endif %}
+</div>

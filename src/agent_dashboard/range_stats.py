@@ -55,6 +55,10 @@ STRIP_DAYS = 90
 #: Cookie remembering the chosen range across instances and drawer reopenings.
 COOKIE_NAME = "attempt_range"
 
+#: Cookie remembering the fleet overview panel's range, kept apart from the
+#: drawer's so picking one never moves the other.
+FLEET_COOKIE_NAME = "fleet_range"
+
 #: How long the remembered range lives (one year).
 COOKIE_MAX_AGE = 31536000
 

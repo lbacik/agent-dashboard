@@ -216,7 +216,10 @@ def test_index_uses_sse_not_polling():
     assert 'sse-swap="fleet"' in body
     assert "/static/sse.js" in body
     assert 'hx-get="/fleet"' not in body
-    assert "hx-trigger" not in body
+    # Nothing polls: the only trigger is the overview panel's one-shot load.
+    assert 'hx-trigger="every' not in body
+    assert body.count("hx-trigger") == 1
+    assert 'hx-trigger="intersect once"' in body
 
 
 def test_sse_extension_vendored_no_cdn():

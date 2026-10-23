@@ -39,14 +39,27 @@
     tip.hidden = true;
   }
 
-  function bind(el) {
-    el.addEventListener("mouseenter", function(e) { show(el, e.clientX, e.clientY); });
-    el.addEventListener("mousemove", function(e) { place(e.clientX, e.clientY); });
-    el.addEventListener("mouseleave", hide);
-    el.addEventListener("focus", function() { show(el); });
-    el.addEventListener("blur", hide);
+  /* Delegated listeners, so marks swapped in later (the fleet page's
+     lazily loaded overview panel) get the tooltip too. */
+  function markOf(node) {
+    return node && node.closest ? node.closest("[data-tip]") : null;
   }
-
-  var marks = document.querySelectorAll("[data-tip]");
-  for (var i = 0; i < marks.length; i++) { bind(marks[i]); }
+  document.addEventListener("mouseover", function(e) {
+    var el = markOf(e.target);
+    if (el) { show(el, e.clientX, e.clientY); }
+  });
+  document.addEventListener("mousemove", function(e) {
+    if (!tip.hidden && markOf(e.target)) { place(e.clientX, e.clientY); }
+  });
+  document.addEventListener("mouseout", function(e) {
+    var el = markOf(e.target);
+    if (el && !el.contains(e.relatedTarget)) { hide(); }
+  });
+  document.addEventListener("focusin", function(e) {
+    var el = markOf(e.target);
+    if (el) { show(el); }
+  });
+  document.addEventListener("focusout", function(e) {
+    if (markOf(e.target)) { hide(); }
+  });
 })();

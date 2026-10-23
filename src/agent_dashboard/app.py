@@ -1,6 +1,7 @@
 """FastAPI app: the fleet table reads only the in-memory fleet state.
 
-The history page reads attempt summaries on demand with bounded parallel
+The history page, the drawer statistics card and the lazily loaded
+``/overview`` panel read attempt summaries on demand with bounded parallel
 gateway execs; ``/``, the ``/fleet`` partial and the ``/stream`` events
 serve the in-memory state only, so the main page never reads attempt
 summaries on load.
@@ -79,11 +80,17 @@ from .history import (
     read_history,
     read_stopped_history,
 )
-from .overview import summarize_instance
+from .overview import (
+    collect_overview,
+    overview_legend,
+    read_full_history,
+    summarize_instance,
+)
 from .progress import progress_series, read_progress, read_stopped_progress
 from .range_stats import (
     COOKIE_MAX_AGE,
     COOKIE_NAME,
+    FLEET_COOKIE_NAME,
     apply_range,
     day_strip,
     parse_cookie,
@@ -250,6 +257,8 @@ def create_app(
         The table streams over SSE after every poll cycle and reads only
         the in-memory fleet state: unlike the history page, the main page
         never reads attempt summaries, so one slow instance cannot delay it.
+        The overview panel above the table loads separately from
+        ``/overview`` once it is visible.
         """
         rows, error = await fleet.snapshot(poll_interval=cfg.poll_interval)
         wanted = request.query_params.get("instance") or ""
@@ -266,6 +275,85 @@ def create_app(
                 "name": wanted,
             },
         )
+
+    @app.get("/overview", response_class=HTMLResponse)
+    async def fleet_overview(request: Request) -> Response:
+        """Fleet overview panel: outcomes and cost per instance for a range.
+
+        Loaded lazily by the fleet page (``/`` itself never reads attempt
+        summaries) and on every range change. The range selector is the
+        drawer card's: presets plus a fleet-wide 90-day activity strip.
+        An explicit ``preset`` (or ``from``/``to``) wins and is remembered
+        in its own cookie, so the fleet range and the drawer range stay
+        independent. Every instance is read in parallel with a bounded
+        timeout; unreadable ones are listed and left out of the totals.
+        """
+        params = request.query_params
+        if "preset" in params or ("from" in params and "to" in params):
+            spec = parse_range(params)
+            remember = True
+        else:
+            spec = parse_cookie(request.cookies.get(FLEET_COOKIE_NAME))
+            remember = False
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        now_ts = time.time()
+        overview = await collect_overview(
+            rows,
+            gw,
+            spec=spec,
+            now=now_ts,
+            timeout=cfg.exec_timeout,
+            max_concurrent_execs=cfg.max_concurrent_execs,
+        )
+        strip = day_strip(overview.summaries, spec, now_ts) if rows else []
+        outcome_peak = max((inst.shown for inst in overview.rows if inst.ok), default=0)
+        if outcome_peak >= 2:
+            outcome_ticks = [0, (outcome_peak + 1) // 2, outcome_peak]
+        elif outcome_peak == 1:
+            outcome_ticks = [0, 1]
+        else:
+            outcome_ticks = []
+        cost_peak = max(
+            (inst.cost_total for inst in overview.rows if inst.cost_total is not None),
+            default=0.0,
+        )
+        if cost_peak > 0:
+            cost_ticks = [
+                (0.0, format_cost(0)),
+                (0.5, format_cost(cost_peak / 2)),
+                (1.0, format_cost(cost_peak)),
+            ]
+        else:
+            cost_ticks = []
+        response = templates.TemplateResponse(
+            request,
+            "_overview.html",
+            {
+                **context(request),
+                "spec": spec,
+                "presets": list(RANGE_PRESETS),
+                "overview": overview,
+                "legend": overview_legend(overview),
+                "chart_keys": list(OUTCOME_ORDER),
+                "shape_glyphs": dict(SHAPE_GLYPHS),
+                "strip": strip,
+                "strip_peak": max((day.total for day in strip), default=0),
+                "outcome_peak": outcome_peak,
+                "outcome_ticks": outcome_ticks,
+                "cost_peak": cost_peak,
+                "cost_ticks": cost_ticks,
+                "fleet_total_text": format_cost(overview.total_cost),
+            },
+        )
+        if remember:
+            response.set_cookie(
+                FLEET_COOKIE_NAME,
+                spec.query,
+                path="/",
+                samesite="lax",
+                max_age=COOKIE_MAX_AGE,
+            )
+        return response
 
     @app.get("/instances/{name}", response_class=HTMLResponse)
     async def instance_drawer(request: Request, name: str) -> Response:
@@ -489,52 +577,11 @@ def create_app(
         # list arrives through a ``docker cp`` tree copy parsed on the
         # dashboard side, with the same tolerance rules as the exec reader.
         now_ts = time.time()
-        if row.state == "running":
-            try:
-                exec_result = await asyncio.wait_for(
-                    gw.attempt_history(row.container_id), cfg.exec_timeout
-                )
-            except TimeoutError:
-                ctx["error"] = (
-                    "Could not read the Attempt log: history read timed out after "
-                    f"{cfg.exec_timeout:g} s"
-                )
-                return page()
-            except (GatewayError, ValueError) as exc:
-                ctx["error"] = f"Could not read the Attempt log: {exc}"
-                return page()
-            except Exception as exc:
-                ctx["error"] = f"Could not read the Attempt log: {exc}"
-                return page()
-            full = read_history(
-                exec_result.stdout, exec_result.returncode, now=now_ts, window="all"
-            )
-        else:
-            try:
-                tree = await asyncio.wait_for(
-                    gw.copy_logs(row.container_id), cfg.exec_timeout
-                )
-            except FileNotFoundError:
-                ctx["error"] = (
-                    "Attempt logs are unavailable for this instance: "
-                    "its volume is gone or it holds no logs."
-                )
-                return page()
-            except TimeoutError:
-                ctx["error"] = (
-                    "Could not read the Attempt log: history read timed out after "
-                    f"{cfg.exec_timeout:g} s"
-                )
-                return page()
-            except (GatewayError, ValueError) as exc:
-                ctx["error"] = f"Could not read the Attempt log: {exc}"
-                return page()
-            except Exception as exc:
-                ctx["error"] = f"Could not read the Attempt log: {exc}"
-                return page()
-            full = read_stopped_history(tree, now=now_ts, window="all")
-        if not full.ok:
-            ctx["error"] = full.error
+        full = await read_full_history(
+            row, gw, now=now_ts, timeout=cfg.exec_timeout
+        )
+        if isinstance(full, str):
+            ctx["error"] = full
             return page()
         cut = apply_range(full, spec, now_ts)
         ctx["inst"] = summarize_instance(
