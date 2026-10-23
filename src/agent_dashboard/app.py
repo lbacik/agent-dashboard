@@ -189,6 +189,20 @@ class HostGuardMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class RevalidatedStaticFiles(StaticFiles):
+    """Static files the browser revalidates on every load.
+
+    `no-cache` keeps the ETag round trip (a cheap 304 when unchanged) but
+    stops heuristic caching from serving a stale stylesheet or script after
+    a deploy.
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def create_app(
     state: FleetState | None = None,
     settings: Settings | None = None,
@@ -240,7 +254,7 @@ def create_app(
         app.add_middleware(
             HostGuardMiddleware, allowed_hosts=set(ALLOWED_HOSTS) | set(extra_hosts)
         )
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount("/static", RevalidatedStaticFiles(directory=STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
     def context(request: Request) -> dict:
