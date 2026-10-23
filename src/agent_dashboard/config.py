@@ -104,7 +104,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--control-exec-timeout",
         type=float,
         default=None,
-        help="Control exec timeout in seconds (must be greater than 10).",
+        help=(
+            "Control exec timeout in seconds "
+            f"(must be greater than {MIN_CONTROL_EXEC_TIMEOUT:g})."
+        ),
     )
     parser.add_argument(
         "--max-concurrent-execs", type=int, default=None, help="Max concurrent execs."
