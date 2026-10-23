@@ -46,10 +46,10 @@
       <td><div class="figure">{{ row.detail.turns_text }}{% if row.detail.turns_basis %} <span class="basis">{{ row.detail.turns_basis }}</span>{% endif %}</div></td>
       <td><div class="figure">{{ row.detail.cache_text }}{% if row.detail.cache_basis %} <span class="basis">{{ row.detail.cache_basis }}</span>{% endif %}</div></td>
       <td>{{ row.detail.errors_text }}{% if row.detail.errors_stale %} <span class="stale-tag">stale</span>{% endif %}</td>
-      <td class="row-actions">
+      <td class="row-actions"><div class="row-actions-inner">
         <a class="btn" href="/instances/{{ row.name | urlencode }}/history" onclick="event.stopPropagation()">{{ logs_icon() }} Logs</a>
         {% if row.live_url %}<a class="btn btn-live" href="{{ row.live_url }}" onclick="event.stopPropagation()">{{ live_icon() }} Live #{{ row.live_issue }}</a>{% endif %}
-      </td>
+      </div></td>
     </tr>
     {% endfor %}
   </tbody>
