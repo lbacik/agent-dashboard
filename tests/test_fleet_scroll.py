@@ -95,6 +95,20 @@ def test_scroll_keeper_restores_both_axes_without_moving_page():
         assert page_api not in keeper
 
 
+def test_keeper_records_positions_before_sse_swaps():
+    """The `fleet` table arrives over SSE, which swaps through `htmx.swap`.
+
+    htmx fires `htmx:beforeSwap` only for AJAX responses, so the keeper
+    must also record positions on the SSE extension's
+    `htmx:sseBeforeMessage`, which fires right before the SSE swap.
+    """
+    client, _ = make_client([("up", "running")])
+    keeper = client.get("/static/scroll-keep.js").text
+    assert "htmx:sseBeforeMessage" in keeper
+    sse = client.get("/static/sse.js").text
+    assert "'htmx:sseBeforeMessage'" in sse
+
+
 def test_scroll_positions_are_memory_only():
     """Neither the keeper nor the fleet tables persist scroll in storage."""
     client, _ = make_client([("up", "running"), ("down", "not running")])

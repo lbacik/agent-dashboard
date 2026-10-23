@@ -76,6 +76,12 @@
     var target = e.detail && e.detail.target;
     pending = collect(target);
   });
+  /* htmx fires htmx:beforeSwap only for AJAX responses; the `fleet` table
+     arrives over SSE (htmx.swap), so record before that swap too. The
+     sse-swap element is its own swap target here. */
+  document.addEventListener("htmx:sseBeforeMessage", function (e) {
+    pending = collect(e.target);
+  });
   document.addEventListener("htmx:afterSwap", function (e) {
     var target = e.detail && e.detail.target;
     restore(target);
