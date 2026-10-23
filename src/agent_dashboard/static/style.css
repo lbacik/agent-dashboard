@@ -610,6 +610,24 @@ details.activity > summary {
   display: flex;
   gap: 0.5rem;
   align-items: baseline;
+  list-style: none;
+}
+details.activity > summary::-webkit-details-marker {
+  display: none;
+}
+/* The summary is a flex row (label plus live state side by side), so the
+   browser drops its native disclosure marker. The arrow is drawn here
+   instead: the same right/down triangle as the Fleet overview summary,
+   in the same size and colour, turning open via rotation. */
+details.activity > summary::before {
+  content: "▸";
+  flex: none;
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1;
+}
+details.activity[open] > summary::before {
+  transform: rotate(90deg);
 }
 details.activity[open] > summary { border-bottom: 1px solid var(--line); }
 details.activity > summary .activity-sum { color: var(--muted); font-size: 0.85rem; }

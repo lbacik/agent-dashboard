@@ -581,3 +581,31 @@ def test_drawer_recent_events_no_current_log_link_when_idle():
     assert "Recent events" in body
     assert "Attempt history" in body
     assert "Current attempt log" not in body
+
+
+def test_drawer_activity_disclosure_markup_is_unchanged():
+    """The Activity disclosure arrow is CSS-only: markup stays as-is.
+
+    The summary is a flex row (label plus live state side by side), so
+    the browser drops its native marker and the stylesheet draws the
+    arrow (`details.activity > summary::before`). This locks the
+    `<details>`/`<summary>` markup so the toggle, remembered open state
+    and live refreshes keep working.
+    """
+    snap = load_snapshot("snapshot-attempt-in-progress.json")
+    snap["control"]["active_attempt"]["started_at"] = "2026-09-30T09:30:00.123456Z"
+    client, _, _ = make_fleet_client({"work": snap})
+    body = client.get("/instances/work").text
+    assert '<details class="activity" open data-activity-group="activity">' in body
+    assert (
+        '<summary><span class="activity-label">Activity</span>'
+        ' <span id="activity-work-sum" class="activity-sum"></span></summary>'
+        in body
+    )
+    summary = body.partition("<summary>")[2].partition("</summary>")[0]
+    assert "<svg" not in summary
+    assert "▸" not in summary
+    assert "▾" not in summary
+    assert '<div class="activity-body" data-scroll-key="activity-body"' in body
+    assert 'hx-get="/instances/work/activity"' in body
+    assert 'hx-trigger="load, sse:fleet"' in body
