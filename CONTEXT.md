@@ -20,6 +20,14 @@ _Avoid_: Summary, status message, state
 The order in which the dashboard lists managed instances: those needing the operator first (unreachable, recovery hold, consecutive errors, handoff in progress), then those approaching the soft threshold, then working, idle, and offline ones.
 _Avoid_: Priority, severity, sort order
 
+**Control action**:
+An operator action the dashboard offers on a live managed instance that issues exactly one `agentctl` command to it (stop, stop after N attempts, resume, handoff now, next issue), bound to the container and repository the operator was looking at.
+_Avoid_: Button, command (the agent's term for what it records), operation
+
+**Control audit**:
+The dashboard's own append-only record of every Control action submission and its outcome at submission time, including those the dashboard refused before reaching the agent; one submission's record is a Control audit entry. The agent's command record remains the authority for what happened to an accepted command afterwards.
+_Avoid_: Audit log, command log, history
+
 **Attempt log**:
 One implementation attempt's event history on the managed instance's `/data` volume (`/data/logs/<issue>/<started_at>/`): the `attempt.json` summary, the `agent_output.json` event stream, and the numbered evidence files.
 _Avoid_: Session, run log
