@@ -153,23 +153,53 @@ def test_review_resume_uses_primary_tone():
     assert "<code>agentctl resume</code>" in response.text
 
 
-def test_review_confirmation_includes_expect_repo_when_allowed(monkeypatch):
-    client, _, _, cids = live_client()
-    monkeypatch.setattr(control_routes, "supports_expect_repo", lambda version: True)
+def versioned_client(version: str | None):
+    """A review client whose snapshot reports ``version`` as the agent version.
+
+    ``None`` removes the version (an unreadable version, which counts as
+    old). The fixture default (``0.4.5``) predates the guard.
+    """
+    snap = load_snapshot("snapshot-attempt-in-progress.json")
+    if version is None:
+        snap["identity"].pop("agent_version", None)
+    else:
+        snap["identity"]["agent_version"] = version
+    return make_review_client({"work": snap})
+
+
+@pytest.mark.parametrize(
+    ("version", "want_guard"),
+    [
+        ("v0.8.0", True),  # at the release that ships --expect-repo
+        ("v0.9.0", True),  # above it
+        ("v0.7.2", False),  # below it
+        ("garbage", False),  # unreadable versions count as old
+        (None, False),
+    ],
+)
+def test_review_confirmation_expect_repo_version_gate(version, want_guard):
+    client, _, _, cids = versioned_client(version)
     response = post_review(client, "work", {"action": "stop"})
     assert response.status_code == 200
     match = re.search(r"dash-[0-9a-f]{16}", response.text)
     assert match is not None
-    expected = " ".join(
-        argv_control(
-            cids["work"],
-            "stop",
-            request_id=match.group(0),
-            expect_repo="example-owner/example-repo",
+    if want_guard:
+        expected = " ".join(
+            argv_control(
+                cids["work"],
+                "stop",
+                request_id=match.group(0),
+                expect_repo="example-owner/example-repo",
+            )
         )
-    )
-    assert expected in response.text
-    assert "--expect-repo=example-owner/example-repo" in response.text
+        assert expected in response.text
+        assert "--expect-repo=example-owner/example-repo" in response.text
+    else:
+        expected = " ".join(
+            argv_control(cids["work"], "stop", request_id=match.group(0))
+        )
+        assert expected in response.text
+        assert "--expect-repo" not in response.text
 
 
 def test_cancel_restores_the_composer():

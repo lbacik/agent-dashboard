@@ -682,25 +682,34 @@ def test_submit_retry_goes_through_every_check_again():
     assert len(gateway.control_calls) == 1
 
 
-def test_submit_expect_repo_never_passed_until_version_allows():
-    client, _, gateway, cids = live_client()
-    gateway.set_control(
-        cids["work"],
-        (
-            f"repository: {REPO}\nrequest_id: {RID}\nsequence: 1\n"
-            "acknowledgement: accepted\neffect: ok\n"
-        ).encode(),
-        b"",
-        0,
-    )
-    submit(client, "work", base_form(cids))
-    assert gateway.control_calls[0]["expect_repo"] is None
-    assert audit_entries()[0]["expect_repo_guard"] is False
+def versioned_client(version: str | None):
+    """A submit client whose snapshot reports ``version`` as the agent version.
+
+    ``None`` removes the version (an unreadable version, which counts as
+    old). The fixture default (``0.4.5``) predates the guard.
+    """
+    snap = load_snapshot("snapshot-attempt-in-progress.json")
+    if version is None:
+        snap["identity"].pop("agent_version", None)
+    else:
+        snap["identity"]["agent_version"] = version
+    return make_submit_client({"work": snap})
 
 
-def test_submit_expect_repo_passed_when_version_allows(monkeypatch):
-    monkeypatch.setattr(control_routes, "supports_expect_repo", lambda version: True)
-    client, _, gateway, cids = live_client()
+@pytest.mark.parametrize(
+    ("version", "want_guard"),
+    [
+        ("v0.8.0", True),  # at the release that ships --expect-repo
+        ("v0.8.1", True),  # above it
+        ("v1.2.3", True),
+        ("v0.7.2", False),  # below it
+        ("v0.5.0", False),
+        ("garbage", False),  # unreadable versions count as old
+        (None, False),
+    ],
+)
+def test_submit_expect_repo_version_gate(version, want_guard):
+    client, _, gateway, cids = versioned_client(version)
     gateway.set_control(
         cids["work"],
         (
@@ -712,9 +721,50 @@ def test_submit_expect_repo_passed_when_version_allows(monkeypatch):
     )
     response = submit(client, "work", base_form(cids))
     assert response.status_code == 200
+    call = gateway.control_calls[0]
+    if want_guard:
+        assert call["expect_repo"] == REPO
+        assert f"--expect-repo={REPO}" in gateway.control_argvs[0]
+    else:
+        assert call["expect_repo"] is None
+        assert all("--expect-repo" not in part for part in gateway.control_argvs[0])
+    # The confirmation's argv line and the audit agree on whether the flag
+    # was passed: both audit entries carry the same guard.
+    entries = audit_entries()
+    assert entries[0]["expect_repo_guard"] is want_guard
+    assert entries[-1]["expect_repo_guard"] is want_guard
+
+
+def test_submit_expect_repo_mismatch_rejected_with_agent_reason():
+    # A scripted agent-side --expect-repo mismatch (simple-coding-agent
+    # #317): exit 1, the `repository:` stderr line naming the instance's
+    # target, and the agent's reason. The reason is display text only:
+    # the card still says Rejected (the Repository-mismatch card is
+    # exit-0 only) while the audit records the differing reply.
+    client, _, gateway, cids = versioned_client("v0.8.0")
+    reason = f"expected repository {REPO}, this instance targets other-owner/other-repo"
+    gateway.set_control(
+        cids["work"],
+        b"",
+        (
+            f"repository: other-owner/other-repo\n{RID} rejected — {reason}. "
+            "No control change was accepted.\n"
+        ).encode(),
+        1,
+    )
+    response = submit(client, "work", base_form(cids))
+    assert response.status_code == 200
+    assert "Rejected" in response.text
+    assert "Repository mismatch" not in response.text
+    assert reason in response.text
+    assert "No control change was accepted." in response.text
     assert gateway.control_calls[0]["expect_repo"] == REPO
-    assert f"--expect-repo={REPO}" in gateway.control_argvs[0]
-    assert audit_entries()[0]["expect_repo_guard"] is True
+    outcome = audit_entries()[-1]
+    assert outcome["outcome"] == "rejected"
+    assert outcome["expect_repo_guard"] is True
+    assert outcome["reply_repository"] == "other-owner/other-repo"
+    assert outcome["repository_mismatch"] is True
+    assert reason in (outcome["error"] or "")
 
 
 def test_submit_agent_text_is_escaped():

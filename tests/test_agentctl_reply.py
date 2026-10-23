@@ -481,8 +481,31 @@ def test_unreadable_version_counts_as_old():
         MINIMUM_VERSIONS.update(minimums)
 
 
-def test_pending_expect_repo_never_enables_the_flag():
-    assert MINIMUM_VERSIONS["expect_repo"] is None
-    for version in ["v0.5.0", "v0.7.2", "v99.0.0", "", None, "garbage", "v1.2.3-rc1"]:
-        assert supports_expect_repo(version) is False
-        assert agent_supports("expect_repo", version) is False
+def test_expect_repo_minimum_version_is_v0_8_0():
+    # The simple-coding-agent release shipping issue #317, "since v0.8.0"
+    # in the reply contract.
+    assert MINIMUM_VERSIONS["expect_repo"] == (0, 8, 0)
+
+
+@pytest.mark.parametrize(
+    ("version", "want"),
+    [
+        ("v0.8.0", True),  # at the release that ships --expect-repo
+        ("0.8.0", True),
+        ("v0.8.1", True),  # above it
+        ("v0.9.0", True),
+        ("v1.0.0", True),
+        ("v99.0.0", True),
+        ("v0.8.0-rc1", True),  # leading triple only; pre-release still counts
+        ("v0.7.2", False),  # below it
+        ("v0.5.0", False),
+        ("v0.7.99", False),
+        ("", False),  # unreadable or missing versions count as old
+        (None, False),
+        ("garbage", False),
+        ("v1.2", False),
+    ],
+)
+def test_expect_repo_version_gate(version, want):
+    assert supports_expect_repo(version) is want
+    assert agent_supports("expect_repo", version) is want

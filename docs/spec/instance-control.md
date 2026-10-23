@@ -173,7 +173,7 @@ A minimum-version table maps agent-side flags to the first agent version that su
 
 | Feature | Minimum agent version |
 |---|---|
-| `--expect-repo` | pending: the simple-coding-agent release that ships change 4 (section 12). Until it is filled in, the flag is never passed. |
+| `--expect-repo` | v0.8.0: the simple-coding-agent release that ships change 4 (section 12), "since v0.8.0" in the reply contract. |
 
 - The version is parsed from a leading `v?<major>.<minor>.<patch>`. An unreadable or missing version counts as old.
 - When the agent supports the guard and the repository passes `validate_*`, the dashboard passes `--expect-repo=<identity.repository>`. Otherwise it omits the flag, and the dashboard-side check above still applies. The Control audit records which happened.

@@ -41,8 +41,9 @@ Control audit; the card still says Rejected.
 
 Version gating (spec section 5.4): :data:`MINIMUM_VERSIONS` maps
 agent-side flags to the first agent version supporting them. The
-``--expect-repo`` entry is pending, so it never enables the flag. The
-version is parsed from a leading ``v?<major>.<minor>.<patch>``; an
+``--expect-repo`` entry is ``(0, 8, 0)``: the simple-coding-agent release
+that ships change 4 (issue #317, "since v0.8.0" in the reply contract).
+The version is parsed from a leading ``v?<major>.<minor>.<patch>``; an
 unreadable or missing version counts as old.
 """
 
@@ -81,11 +82,13 @@ FAILED = "failed"
 RECORD = "record"
 NOT_RECORDED = "not_recorded"
 
-#: Agent-side flags gated by agent version (spec section 5.4). A value of
-#: ``None`` means pending: the release that ships the flag is not known
-#: yet, so the flag is never passed.
+#: Agent-side flags gated by agent version (spec section 5.4). Each value
+#: is the first agent version shipping the flag; a value of ``None`` would
+#: mean pending (the release is not known yet, so the flag is never
+#: passed). ``expect_repo`` is v0.8.0: the simple-coding-agent release
+#: shipping issue #317 ("since v0.8.0" in the reply contract).
 MINIMUM_VERSIONS: dict[str, tuple[int, int, int] | None] = {
-    "expect_repo": None,
+    "expect_repo": (0, 8, 0),
 }
 
 #: Leading ``v?<major>.<minor>.<patch>`` (spec section 5.4). Anything
@@ -455,10 +458,10 @@ def agent_supports(feature: str, agent_version: str | None) -> bool:
 
 
 def supports_expect_repo(agent_version: str | None) -> bool:
-    """Whether the agent supports ``--expect-repo`` (pending: never yet).
+    """Whether the agent supports ``--expect-repo`` (since v0.8.0).
 
-    Until the agent release that ships the guard is known, the
-    ``--expect-repo`` entry stays pending and this is always false, so
-    the dashboard never passes the flag.
+    True for an agent at or above v0.8.0 (the release shipping
+    simple-coding-agent#317); older agents, and agents with an unreadable
+    or missing version, count as old and run without the flag.
     """
     return agent_supports("expect_repo", agent_version)
