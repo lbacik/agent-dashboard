@@ -1,0 +1,8 @@
+repository: acme-corp/web-app
+repository: acme-corp/other-app
+request_id: dash-0123456789abcdef
+request_id: dash-ffffffffffffffff
+sequence: 12
+acknowledgement: accepted
+effect: first effect wins
+effect: second effect ignored

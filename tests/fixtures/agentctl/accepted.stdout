@@ -1,0 +1,5 @@
+repository: acme-corp/web-app
+request_id: dash-0123456789abcdef
+sequence: 12
+acknowledgement: accepted
+effect: stop will begin after the current attempt finishes
