@@ -146,6 +146,9 @@ def test_track_stop_after_progress_then_completed():
     submit_accepted(
         client, gateway, cids, base_form(cids, action="stop_after", extra={"n": "3"})
     )
+    # The submit above already ran one control exec; track must add none.
+    submitted_controls = len(gateway.control_calls)
+    submitted_statuses = len(gateway.command_status_calls)
     params = track_params(cids, action="stop_after", n="3")
     now = time.time() + 10.0
     snap = fresh_control_mutation(
@@ -173,8 +176,8 @@ def test_track_stop_after_progress_then_completed():
     assert "following…" in response.text
     assert "control/track" in response.text
     # Track reads the snapshot only: no control or command-status exec ran.
-    assert gateway.control_calls == []
-    assert gateway.command_status_calls == []
+    assert len(gateway.control_calls) == submitted_controls
+    assert len(gateway.command_status_calls) == submitted_statuses
 
     later = time.time() + 20.0
     done = fresh_control_mutation(
@@ -201,8 +204,8 @@ def test_track_stop_after_progress_then_completed():
     assert "stop completed after 3 attempts" in terminal.text
     assert "control/track" not in terminal.text
     assert "following…" not in terminal.text
-    assert gateway.control_calls == []
-    assert gateway.command_status_calls == []
+    assert len(gateway.control_calls) == submitted_controls
+    assert len(gateway.command_status_calls) == submitted_statuses
 
 
 def test_track_handoff_progress_then_superseded():
@@ -334,7 +337,8 @@ def test_track_replaced_container_stops_with_gone_message():
     response = track(client, "work", track_params(cids, container_id="abc123"))
     assert response.status_code == 200
     assert "Instance replaced or unavailable" in response.text
-    assert "the agent's record of this command is on its /data volume." in response.text
+    # Autoescape renders the apostrophe as &#39;, so match the tail.
+    assert "record of this command is on its /data volume." in response.text
     assert "control/track" not in response.text
 
 
@@ -453,20 +457,49 @@ def test_status_accepted_record_keeps_following_without_audit():
 
 
 @pytest.mark.parametrize(
-    "acknowledgement,title,tone",
+    "acknowledgement,title,tone,stdout_kwargs,expected_body",
     [
-        ("completed", "Completed", "ctl-tone-ok"),
-        ("superseded", "Superseded", "ctl-tone-muted"),
-        ("not fulfilled", "Not fulfilled", "ctl-tone-warn"),
+        # Completed shows the record's effect when present.
+        (
+            "completed",
+            "Completed",
+            "ctl-tone-ok",
+            {"effect": "the stop committed", "detail": "older detail line"},
+            "the stop committed",
+        ),
+        # Completed falls back to the record's detail without an effect.
+        (
+            "completed",
+            "Completed",
+            "ctl-tone-ok",
+            {"effect": "", "detail": "the stop committed"},
+            "the stop committed",
+        ),
+        # Superseded shows the record's detail, not the effect.
+        (
+            "superseded",
+            "Superseded",
+            "ctl-tone-muted",
+            {"effect": "stale effect line", "detail": "the stop committed"},
+            "the stop committed",
+        ),
+        # Not fulfilled shows the record's detail, not the effect.
+        (
+            "not fulfilled",
+            "Not fulfilled",
+            "ctl-tone-warn",
+            {"effect": "stale effect line", "detail": "the stop committed"},
+            "the stop committed",
+        ),
     ],
 )
 def test_status_terminal_record_renders_without_following(
-    acknowledgement, title, tone
+    acknowledgement, title, tone, stdout_kwargs, expected_body
 ):
     client, _, gateway, cids = live_client()
     gateway.set_command_status(
         cids["work"],
-        record_stdout(acknowledgement=acknowledgement, detail="the stop committed"),
+        record_stdout(acknowledgement=acknowledgement, **stdout_kwargs),
         b"",
         0,
     )
@@ -474,7 +507,7 @@ def test_status_terminal_record_renders_without_following(
     assert response.status_code == 200
     assert title in response.text
     assert tone in response.text
-    assert "the stop committed" in response.text
+    assert expected_body in response.text
     assert "control/track" not in response.text
     assert "following…" not in response.text
     assert audit_entries() == []

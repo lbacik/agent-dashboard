@@ -1492,8 +1492,12 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
         if reply.kind == "record":
             acknowledgement = reply.acknowledgement
             # The record carries `effect` as a first-class field; its
-            # `detail` line survives in the raw mapping only.
+            # `detail` line survives in the raw mapping only. Per the spec
+            # cards table, Completed shows `effect` or the record's
+            # `detail`; Superseded and Not fulfilled show the record's
+            # `detail` (a missing value renders as an em dash).
             record_text = reply.effect or reply.raw.get("detail") or None
+            record_detail = reply.raw.get("detail") or None
             if isinstance(acknowledgement, str) and acknowledgement in (
                 "completed",
                 "superseded",
@@ -1509,13 +1513,17 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     "superseded": "muted",
                     "not fulfilled": "warn",
                 }
+                if acknowledgement == "completed":
+                    terminal_body = record_text or "—"
+                else:
+                    terminal_body = record_detail or "—"
                 return HTMLResponse(
                     render_card(
                         templates,
                         command=command,
                         tone=tones[acknowledgement],
                         title=titles[acknowledgement],
-                        body=record_text or "—",
+                        body=terminal_body,
                         request_id=request_id,
                         sequence=reply.sequence,
                     ),
