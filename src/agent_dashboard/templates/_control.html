@@ -1,27 +1,36 @@
 {# Control console body (spec sections 5, 8.2): the "Controls unavailable"
-   line, or the read-only composer. Fetched by the console slot in the
-   drawer on load and on every filtered `sse:fleet` event. Review is not
-   wired up yet: the Review button posts to the review route, which a
-   later slice adds. #}
+   line, or the composer. Fetched by the console slot in the
+   drawer on load and on every filtered `sse:fleet` event. A validation or
+   disabled-action refusal from the review route re-renders this composer
+   with `review_error` and the entered values (`entered_action`,
+   `entered_n`, `entered_issue`); the live preview script re-syncs from
+   the checked radio and the typed values after the swap. #}
 {% if error %}
 <p class="hint">{{ error }}</p>
 {% elif av.unavailable %}
 <p class="ctl-unavailable">Controls unavailable: {{ av.unavailable }}</p>
 {% else %}
 {% if av.stale_note %}<p class="ctl-stale">{{ av.stale_note }}</p>{% endif %}
+{% if review_error is defined and review_error %}<p class="ctl-error">{{ review_error }}</p>{% endif %}
+{% set ns = namespace(checked_key=None) %}
+{% if entered_action is defined and entered_action %}
+{% set ns.checked_key = entered_action %}
+{% else %}
+{% for a in av.actions %}{% if a.checked and ns.checked_key is none %}{% set ns.checked_key = a.key %}{% endif %}{% endfor %}
+{% endif %}
 <form class="ctl-composer" hx-post="{{ review_url }}" hx-target="closest .ctl-body" hx-swap="innerHTML">
   <div class="ctl-actions" role="radiogroup" aria-label="Control action">
     {% for a in av.actions %}
     <label class="ctl-opt{% if not a.enabled %} is-disabled{% endif %}">
-      <input type="radio" name="action" value="{{ a.key }}"{% if not a.enabled %} disabled{% endif %}{% if a.checked %} checked{% endif %} data-cmd="{{ ACTION_COMMANDS[a.key] }}">
+      <input type="radio" name="action" value="{{ a.key }}"{% if not a.enabled %} disabled{% endif %}{% if a.key == ns.checked_key %} checked{% endif %} data-cmd="{{ ACTION_COMMANDS[a.key] }}">
       <span class="ctl-label">{{ a.label }}</span>
       {% if a.reason %}<span class="ctl-reason">{{ a.reason }}</span>{% elif a.note %}<span class="ctl-note">{{ a.note }}</span>{% endif %}
     </label>
     {% endfor %}
   </div>
   <div class="ctl-params">
-    <label data-for="stop_after"{% if not (av.actions | selectattr("key", "equalto", "stop_after") | selectattr("checked") | list) %} hidden{% endif %}>Attempts before stopping <input name="n" inputmode="numeric" size="3" value="1"></label>
-    <label data-for="next_issue"{% if not (av.actions | selectattr("key", "equalto", "next_issue") | selectattr("checked") | list) %} hidden{% endif %}>Issue number <input name="issue" inputmode="numeric" size="7" value="" placeholder="e.g. 123"></label>
+    <label data-for="stop_after"{% if ns.checked_key != "stop_after" %} hidden{% endif %}>Attempts before stopping <input name="n" inputmode="numeric" size="3" value="{% if entered_n is defined and entered_n is not none %}{{ entered_n }}{% else %}1{% endif %}"></label>
+    <label data-for="next_issue"{% if ns.checked_key != "next_issue" %} hidden{% endif %}>Issue number <input name="issue" inputmode="numeric" size="7" value="{% if entered_issue is defined and entered_issue is not none %}{{ entered_issue }}{% else %}{% endif %}" placeholder="e.g. 123"></label>
   </div>
   {% set first = av.actions | selectattr("enabled") | first %}
   <p class="ctl-preview"><span class="ctl-prompt">$</span> <code>agentctl <span data-preview>{% if first %}{{ first.command }}{% else %}(choose an action){% endif %}</span></code></p>
