@@ -1,0 +1,24 @@
+{# PROTOTYPE (#97) variant A: grouped buttons, inputs inline, reason under each. #}
+{% from "proto_ctl/_m.html" import hidden, unavailable, param_input %}
+{% if av.unavailable %}{{ unavailable(av) }}{% else %}
+<div class="ctl-a-groups">
+  {% for title, keys in proto.groups %}
+  <div class="ctl-a-group">
+    <div class="ctl-a-group-title">{{ title }}</div>
+    {% for a in av.group(keys) %}
+    <div class="ctl-a-row{% if not a.enabled %} is-disabled{% endif %}">
+      {{ hidden(av, where) }}
+      <button type="button" class="btn ctl-btn-{{ a.key }}" {% if not a.enabled %}disabled{% endif %}
+              hx-post="/proto/ctl/{{ row.name | urlencode }}/confirm"
+              hx-vals='{"action": "{{ a.key }}"}' hx-include="closest .ctl-a-row"
+              hx-target="closest .ctl-body" hx-swap="innerHTML">{{ a.label }}</button>
+      {{ param_input(a, error) }}
+      {% if error and error.action == a.key %}<span class="ctl-error">{{ error.text }}</span>
+      {% elif a.reason %}<span class="ctl-reason">{{ a.reason }}</span>
+      {% elif a.note %}<span class="ctl-note">{{ a.note }}</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}

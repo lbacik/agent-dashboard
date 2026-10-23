@@ -1,0 +1,15 @@
+{# PROTOTYPE (#97): response to a submit. Drawer: the result goes to the
+   preserved feedback slot and the action list comes back out of band.
+   Dialog (B): the sheet closes (HX-Trigger) and the result becomes a toast. #}
+{% if retry %}
+{% include "proto_ctl/_result.html" %}
+{% elif where == "dialog" %}
+<div hx-swap-oob="afterbegin:#proto-toasts">{% include "proto_ctl/_result.html" %}</div>
+{% else %}
+{% include "proto_ctl/_result.html" %}
+{% if row and av and proto.variant != "B" %}
+<div id="ctl-body-{{ proto.slug(row.name) }}" hx-swap-oob="innerHTML">
+  {% with error = none %}{% include "proto_ctl/" ~ proto.variant | lower ~ "_body.html" %}{% endwith %}
+</div>
+{% endif %}
+{% endif %}

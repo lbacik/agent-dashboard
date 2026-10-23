@@ -1,0 +1,47 @@
+{# PROTOTYPE (#97): one issued command's feedback. While not terminal it
+   re-reads its state from telemetry on every `fleet` event. #}
+{% set q = {"request_id": res.request_id, "action": res.action, "container_id": res.container_id,
+            "repository": res.repository, "where": where, "n": res.payload.get("n", ""),
+            "issue": res.payload.get("issue", "")} %}
+{% set tracking = res.kind in ("accepted",) %}
+{% set titles = {
+  "accepted": "Accepted", "completed": "Completed", "superseded": "Superseded",
+  "not_fulfilled": "Not fulfilled", "rejected": "Rejected", "unreachable": "Not sent",
+  "ambiguous": "Unknown outcome", "mismatch": "Repository mismatch", "refused": "Refused",
+  "audit_fail": "Not sent", "unknown": "Not recorded"} %}
+{% set tone = {"accepted": "info", "completed": "ok", "superseded": "muted", "not_fulfilled": "warn",
+  "unknown": "muted"}.get(res.kind, "error") %}
+<div class="ctl-result tone-{{ tone }}{% if where == 'dialog' %} is-toast{% endif %}"
+     {% if res.kind == "completed" and where == "dialog" %}data-autodismiss="8000"{% endif %}
+     {% if tracking %}hx-get="/proto/ctl/{{ res.instance | urlencode }}/track?{{ q | urlencode }}"
+     hx-trigger="sse:fleet" hx-swap="outerHTML"{% endif %}>
+  <div class="ctl-result-head">
+    <span class="ctl-result-title">{{ titles.get(res.kind, res.kind) }}</span>
+    <code>agentctl {{ res.cmd }}</code>
+    {% if where == "dialog" %}<span class="ctl-result-inst">on {{ res.instance }}</span>{% endif %}
+    <button type="button" class="ctl-dismiss" data-dismiss aria-label="Dismiss">×</button>
+  </div>
+  <div class="ctl-result-body">
+    {% if res.text %}{{ res.text }}{% else %}{{ res.detail }}{% endif %}
+    {% if res.extra %} · {{ res.extra }}{% endif %}
+  </div>
+  <div class="ctl-result-meta">
+    <code>{{ res.request_id }}</code>{% if res.sequence %} · seq {{ res.sequence }}{% endif %}
+    {% if res.via %} · via {{ res.via }}{% endif %}
+    {% if tracking %} · <span class="ctl-following">following…</span>{% endif %}
+  </div>
+  {% if res.kind in ("unreachable", "ambiguous") %}
+  <form class="ctl-result-actions" hx-post="/proto/ctl/{{ res.instance | urlencode }}/submit"
+        hx-target="closest .ctl-result" hx-swap="outerHTML"
+        hx-disabled-elt="find button" hx-indicator="find .ctl-sending">
+    {% for k, v in q.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <input type="hidden" name="retry" value="1">
+    <button type="submit" class="btn">Retry with the same request ID</button>
+    {% if res.kind == "ambiguous" %}
+    <button type="button" class="btn" hx-post="/proto/ctl/{{ res.instance | urlencode }}/status"
+            hx-include="closest form" hx-target="closest .ctl-result" hx-swap="outerHTML">Check status</button>
+    {% endif %}
+    <span class="ctl-sending htmx-indicator">Sending…</span>
+  </form>
+  {% endif %}
+</div>

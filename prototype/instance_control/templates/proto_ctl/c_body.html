@@ -1,0 +1,27 @@
+{# PROTOTYPE (#97) variant C: composer with the exact command preview. #}
+{% from "proto_ctl/_m.html" import hidden, unavailable %}
+{% if av.unavailable %}{{ unavailable(av) }}{% else %}
+<form class="ctl-c-composer" hx-post="/proto/ctl/{{ row.name | urlencode }}/confirm"
+      hx-target="closest .ctl-body" hx-swap="innerHTML">
+  {{ hidden(av, where) }}
+  <div class="ctl-c-seg" role="radiogroup" aria-label="Control action">
+    {% set first = (av.actions | selectattr("enabled") | first) %}
+    {% for a in av.actions %}
+    <label class="ctl-c-opt{% if not a.enabled %} is-disabled{% endif %}">
+      <input type="radio" name="action" value="{{ a.key }}" {% if not a.enabled %}disabled{% endif %}
+             {% if (error and error.action == a.key) or (not error and first and a.key == first.key) %}checked{% endif %}
+             data-cmd="{{ ACTIONS[a.key][1] }}">
+      <span class="ctl-c-opt-label">{{ a.label }}</span>
+      {% if a.reason %}<span class="ctl-reason">{{ a.reason }}</span>{% elif a.note %}<span class="ctl-note">{{ a.note }}</span>{% endif %}
+    </label>
+    {% endfor %}
+  </div>
+  <div class="ctl-c-params">
+    <label data-for="stop_after">Attempts before stopping <input name="n" inputmode="numeric" size="3" value="{{ error.n if error else '1' }}"></label>
+    <label data-for="next_issue">Issue number <input name="issue" inputmode="numeric" size="7" value="{{ error.issue if error else '' }}" placeholder="e.g. 123"></label>
+  </div>
+  {% if error %}<p class="ctl-error">{{ error.text }}</p>{% endif %}
+  <div class="ctl-c-preview"><span class="ctl-c-prompt">$</span> <code>agentctl <span data-preview></span></code></div>
+  <button type="submit" class="btn ctl-c-review">Review…</button>
+</form>
+{% endif %}

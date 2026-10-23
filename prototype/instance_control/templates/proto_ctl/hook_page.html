@@ -1,0 +1,26 @@
+{# PROTOTYPE (#97): page-level pieces outside the SSE-swapped regions:
+   the B sheet and toast stack, the in-memory Control audit, the switcher. #}
+<link rel="stylesheet" href="/proto-static/proto.css">
+<dialog id="proto-ctl-dialog" class="ctl-dialog" aria-label="Control action">
+  <div id="proto-ctl-dialog-body"></div>
+</dialog>
+<div id="proto-toasts" class="ctl-toasts" aria-live="polite"></div>
+<details class="proto-audit">
+  <summary>PROTOTYPE · Control audit (in memory, newest first)</summary>
+  <div hx-get="/proto/audit" hx-trigger="load, sse:fleet" hx-swap="innerHTML"></div>
+</details>
+<nav class="proto-switcher" aria-label="Prototype variant switcher"
+     data-variants="{{ proto.variants.keys() | join(',') }}" data-current="{{ proto.variant }}">
+  <button type="button" data-step="-1" aria-label="Previous variant">←</button>
+  <span class="proto-switcher-label">{{ proto.variant }} <span>({{ proto.variants[proto.variant] }})</span></span>
+  <button type="button" data-step="1" aria-label="Next variant">→</button>
+  <label>next reply
+    <select name="outcome" data-scenario>
+      {% for k, v in proto.outcomes.items() %}<option value="{{ k }}" {% if k == proto.next_outcome %}selected{% endif %}>{{ v }}</option>{% endfor %}
+    </select></label>
+  <label>mode
+    <select name="mode" data-scenario data-reload>
+      {% for k, v in proto.modes.items() %}<option value="{{ k }}" {% if k == proto.mode %}selected{% endif %}>{{ v }}</option>{% endfor %}
+    </select></label>
+</nav>
+<script src="/proto-static/proto.js" defer></script>

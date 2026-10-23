@@ -1,0 +1,29 @@
+{# PROTOTYPE (#97): the one two-step confirmation (ADR 0007), every variant. #}
+{% from "proto_ctl/_m.html" import hidden %}
+{% set s = proto.slug(row.name) %}
+{% set danger = action in ("stop", "stop_after", "handoff") %}
+<div class="ctl-confirm{% if danger %} is-danger{% endif %}">
+  <form hx-post="/proto/ctl/{{ row.name | urlencode }}/submit"
+        {% if where == "dialog" %}hx-target="#proto-ctl-dialog-body" hx-swap="innerHTML"
+        {% else %}hx-target="#ctl-fb-{{ s }}" hx-swap="afterbegin"{% endif %}
+        hx-disabled-elt="find button" hx-indicator="find .ctl-sending">
+    {{ hidden(av, where) }}
+    <input type="hidden" name="action" value="{{ action }}">
+    <input type="hidden" name="n" value="{{ payload.get('n', '') }}">
+    <input type="hidden" name="issue" value="{{ payload.get('issue', '') }}">
+    <input type="hidden" name="request_id" value="{{ request_id }}">
+    <p class="ctl-confirm-line">Confirm: <code>agentctl {{ cmd }}</code> on <strong>{{ row.name }}</strong> ({{ av.repository }})</p>
+    {% if proto.variant == "C" %}
+    <pre class="ctl-argv">docker exec {{ av.container_id[:12] }} /usr/local/bin/agentctl {{ cmd }} --request-id={{ request_id }}</pre>
+    {% endif %}
+    <div class="ctl-confirm-actions">
+      <button type="submit" class="btn {% if danger %}btn-danger{% else %}btn-primary{% endif %}" autofocus>Confirm</button>
+      <button type="button" class="btn"
+              {% if where == "dialog" %}hx-get="/proto/ctl/{{ row.name | urlencode }}/body?where=dialog" hx-target="#proto-ctl-dialog-body"
+              {% else %}hx-get="/proto/ctl/{{ row.name | urlencode }}/body" hx-target="closest .ctl-body"{% endif %}
+              hx-swap="innerHTML">Cancel</button>
+      <span class="ctl-sending htmx-indicator">Sending… waiting for the agent to accept</span>
+    </div>
+    <p class="ctl-rid-line">Request ID <code>{{ request_id }}</code></p>
+  </form>
+</div>

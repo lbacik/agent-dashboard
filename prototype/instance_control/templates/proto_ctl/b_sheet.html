@@ -1,0 +1,29 @@
+{# PROTOTYPE (#97) variant B: the in-page sheet listing every action. #}
+{% from "proto_ctl/_m.html" import hidden, unavailable, param_input %}
+<div class="ctl-sheet">
+  <header class="ctl-sheet-head">
+    <div><strong>{{ row.name }}</strong><div class="hint">{{ av.repository }} · container {{ av.container_id[:12] }}</div></div>
+    <button type="button" class="drawer-close" data-close-dialog aria-label="Close">×</button>
+  </header>
+  {% if av.unavailable %}{{ unavailable(av) }}{% else %}
+  <ul class="ctl-sheet-list">
+    {% for a in av.actions %}
+    <li class="ctl-sheet-item{% if not a.enabled %} is-disabled{% endif %}{% if request.query_params.get('focus') == a.key %} is-focus{% endif %}">
+      {{ hidden(av, "dialog") }}
+      <div class="ctl-sheet-main">
+        <span class="ctl-sheet-label">{{ a.label }}</span>
+        <code class="ctl-sheet-cmd">agentctl {{ ACTIONS[a.key][1].format(n="N", issue="<n>") }}</code>
+        {% if error and error.action == a.key %}<span class="ctl-error">{{ error.text }}</span>
+        {% elif a.reason %}<span class="ctl-reason">{{ a.reason }}</span>
+        {% elif a.note %}<span class="ctl-note">{{ a.note }}</span>{% endif %}
+      </div>
+      {{ param_input(a, error) }}
+      <button type="button" class="btn ctl-btn-{{ a.key }}" {% if not a.enabled %}disabled{% endif %}
+              hx-post="/proto/ctl/{{ row.name | urlencode }}/confirm"
+              hx-vals='{"action": "{{ a.key }}"}' hx-include="closest .ctl-sheet-item"
+              hx-target="#proto-ctl-dialog-body" hx-swap="innerHTML">Continue</button>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>

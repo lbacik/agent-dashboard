@@ -34,7 +34,7 @@
       <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{{ row.detail.repository_display }}</div></td>
       <td class="headline">{{ row.headline }}</td>
       <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.reach != "live" and row.age_text %} <span class="age">{{ row.age_text }} ago</span>{% endif %}</td>
-      <td>{{ row.detail.intake_text }}{% if row.detail.intake_stale %} <span class="stale-tag">stale</span>{% endif %}</td>
+      <td>{{ row.detail.intake_text }}{% if row.detail.intake_stale %} <span class="stale-tag">stale</span>{% endif %}{% include "proto_ctl/hook_row_intake.html" ignore missing %}</td>
       <td>{{ row.detail.attempt_text }}{% if row.detail.attempt_stale %} <span class="stale-tag">stale</span>{% endif %}</td>
       <td>
         {% if row.detail.budget_has_bar %}
@@ -52,6 +52,7 @@
       <td class="row-actions"><div class="row-actions-inner">
         <a class="btn" href="/instances/{{ row.name | urlencode }}/history" onclick="event.stopPropagation()">{{ logs_icon() }} Logs</a>
         {% if row.live_url %}<a class="btn btn-live" href="{{ row.live_url }}" onclick="event.stopPropagation()">{{ live_icon() }} Live #{{ row.live_issue }}</a>{% endif %}
+        {% include "proto_ctl/hook_row_actions.html" ignore missing %}
       </div></td>
     </tr>
     {% endfor %}

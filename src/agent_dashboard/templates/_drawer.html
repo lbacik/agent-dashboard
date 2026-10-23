@@ -53,6 +53,7 @@
     </div>
     <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
   </div>
+  {% include "proto_ctl/hook_drawer_head.html" ignore missing %}
   {% set slot_id = "stats-" ~ (row.name | replace(" ", "-") | replace(".", "-")) %}
   <div id="{{ slot_id }}" hx-preserve
        hx-get="/instances/{{ row.name | urlencode }}/stats" hx-trigger="load" hx-swap="innerHTML">
@@ -151,6 +152,7 @@
       <div><dt>Consecutive errors</dt><dd>{{ d.errors_text }}</dd></div>
     </dl>
     {% endif %}
+    {% include "proto_ctl/hook_drawer_control.html" ignore missing %}
     <h4>Last finished attempt</h4>
     {% if d.last_present %}
     <dl class="facts">

@@ -1,0 +1,38 @@
+{# PROTOTYPE (#97): drawer slot under the head; B toolbar, C console. #}
+{% from "proto_ctl/_m.html" import unavailable %}
+{% set av = proto.avail(row) %}{% set s = proto.slug(row.name) %}
+{% if proto.variant == "B" %}
+<div class="ctl-b-toolbar">
+  {% if av.unavailable %}{{ unavailable(av) }}{% else %}
+  <span class="ctl-b-label">Control</span>
+  {% for a in av.actions %}
+  {% if a.param %}
+  <button type="button" class="btn ctl-btn-{{ a.key }}" {% if not a.enabled %}disabled title="{{ a.reason }}"{% endif %}
+          hx-get="/proto/ctl/{{ row.name | urlencode }}/body?where=dialog&focus={{ a.key }}"
+          hx-target="#proto-ctl-dialog-body" hx-swap="innerHTML">{{ a.label }}…</button>
+  {% else %}
+  <button type="button" class="btn ctl-btn-{{ a.key }}" {% if not a.enabled %}disabled title="{{ a.reason }}"{% endif %}
+          hx-post="/proto/ctl/{{ row.name | urlencode }}/confirm"
+          hx-vals='{"action": "{{ a.key }}", "where": "dialog"}'
+          hx-target="#proto-ctl-dialog-body" hx-swap="innerHTML">{{ a.label }}</button>
+  {% endif %}
+  {% endfor %}
+  {% set off = av.actions | rejectattr("enabled") | list %}
+  {% if off %}<p class="ctl-b-off">{% for a in off %}<span>{{ a.label }}: {{ a.reason }}</span>{% endfor %}</p>{% endif %}
+  {% endif %}
+</div>
+{% elif proto.variant == "C" %}
+<section class="drawer-section ctl ctl-c" id="ctl-{{ s }}" hx-preserve>
+  <h3>Control console</h3>
+  <div class="ctl-feedback" id="ctl-fb-{{ s }}"></div>
+  <div class="ctl-body" id="ctl-body-{{ s }}"
+       hx-get="/proto/ctl/{{ row.name | urlencode }}/body"
+       hx-trigger="sse:fleet[!this.querySelector('.ctl-confirm') && !this.contains(document.activeElement)]"
+       hx-swap="innerHTML">
+    {% with where = "drawer", error = none %}{% include "proto_ctl/c_body.html" %}{% endwith %}
+  </div>
+  <div class="ctl-timeline" hx-get="/proto/ctl/{{ row.name | urlencode }}/body?part=timeline" hx-trigger="sse:fleet" hx-swap="innerHTML">
+    {% include "proto_ctl/c_timeline.html" %}
+  </div>
+</section>
+{% endif %}

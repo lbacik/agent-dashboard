@@ -1,0 +1,26 @@
+{# PROTOTYPE (#97) variant C: telemetry control.commands as lifecycle steppers. #}
+{% set items = proto.timeline(row) %}
+<h4>Commands <span class="hint">(last 10 from telemetry)</span></h4>
+{% if not items %}<p class="hint">No commands recorded.</p>{% endif %}
+<ol class="ctl-c-tl">
+  {% for it in items %}
+  <li class="ctl-c-tl-item ack-{{ it.acknowledgement | replace(' ', '-') }}">
+    <div class="ctl-c-tl-head">
+      <span class="ctl-c-seq">#{{ it.sequence }}</span>
+      <strong>{{ it.kind | replace("_", " ") }}</strong>
+      <span class="ctl-origin">{{ "dashboard" if it.by_dashboard else "CLI" }}</span>
+      <code class="ctl-rid">{{ it.request_id }}</code>
+      <span class="ctl-time">{{ it.updated_at[11:19] }}</span>
+    </div>
+    <ol class="ctl-steps">
+      {% set ns = namespace(past=true) %}
+      {% for st in it.steps %}
+      {% set is_cur = (st == it.current) or (loop.last and it.acknowledgement in ("completed", "superseded", "not fulfilled")) %}
+      <li class="ctl-step{% if is_cur %} is-current{% elif ns.past %} is-done{% endif %}">{{ st | replace("_", " ") }}</li>
+      {% if is_cur %}{% set ns.past = false %}{% endif %}
+      {% endfor %}
+    </ol>
+    <div class="ctl-c-detail">{{ it.detail }}</div>
+  </li>
+  {% endfor %}
+</ol>

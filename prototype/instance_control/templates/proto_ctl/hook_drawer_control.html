@@ -1,0 +1,14 @@
+{# PROTOTYPE (#97): variant A lives inside the drawer's Control section. #}
+{% if proto.variant == "A" %}
+{% set av = proto.avail(row) %}{% set s = proto.slug(row.name) %}
+<div class="ctl ctl-a" id="ctl-{{ s }}" hx-preserve>
+  <h4>Control actions</h4>
+  <div class="ctl-feedback" id="ctl-fb-{{ s }}"></div>
+  <div class="ctl-body" id="ctl-body-{{ s }}"
+       hx-get="/proto/ctl/{{ row.name | urlencode }}/body"
+       hx-trigger="sse:fleet[!this.querySelector('.ctl-confirm') && !this.contains(document.activeElement)]"
+       hx-swap="innerHTML">
+    {% with where = "drawer", error = none %}{% include "proto_ctl/a_body.html" %}{% endwith %}
+  </div>
+</div>
+{% endif %}

@@ -1,0 +1,13 @@
+{# PROTOTYPE (#97): the Control audit kept in memory, to surface state. #}
+{% if not proto.audit %}<p class="hint">No entries yet.</p>{% else %}
+<table class="proto-audit-table">
+  <thead><tr><th>time</th><th>instance</th><th>Control action</th><th>request ID</th><th>outcome</th><th>details</th></tr></thead>
+  <tbody>
+  {% for e in proto.audit %}
+  <tr><td>{{ e.time[11:19] }}</td><td>{{ e.instance }}</td><td><code>{{ e.action }}</code></td><td><code>{{ e.request_id }}</code></td>
+      <td>{{ e.outcome }}</td>
+      <td>{% for k in ("reason", "exit", "sequence", "acknowledgement", "error", "reply_repository", "mismatch") %}{% if e[k] is defined %}{{ k }}={{ e[k] }} {% endif %}{% endfor %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}

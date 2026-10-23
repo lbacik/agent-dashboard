@@ -1,0 +1,8 @@
+{# PROTOTYPE (#97): variant B puts an Actions button on every running row. #}
+{% if proto.variant == "B" %}
+{% set av = proto.avail(row) %}
+<button type="button" class="btn ctl-b-actions" onclick="event.stopPropagation()"
+        {% if av.unavailable %}disabled title="Controls unavailable: {{ av.unavailable }}"{% endif %}
+        hx-get="/proto/ctl/{{ row.name | urlencode }}/body?where=dialog"
+        hx-target="#proto-ctl-dialog-body" hx-swap="innerHTML">Actions ▾</button>
+{% endif %}

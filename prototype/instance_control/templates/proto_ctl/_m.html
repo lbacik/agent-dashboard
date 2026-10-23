@@ -1,0 +1,20 @@
+{# PROTOTYPE (#97): shared bits for the Control action fragments. #}
+{% macro hidden(av, where) -%}
+<input type="hidden" name="container_id" value="{{ av.container_id }}">
+<input type="hidden" name="repository" value="{{ av.repository }}">
+<input type="hidden" name="where" value="{{ where }}">
+{%- endmacro %}
+{% macro unavailable(av) -%}
+<p class="ctl-unavailable">Controls unavailable: {{ av.unavailable }}.</p>
+{%- endmacro %}
+{% macro param_input(a, error=none, size="sm") -%}
+{% if a.param == "n" %}
+<label class="ctl-param">N <input name="n" inputmode="numeric" autocomplete="off" size="3"
+  value="{{ error.n if error and error.action == a.key else '1' }}" {% if not a.enabled %}disabled{% endif %}
+  aria-label="Attempts before stopping (1–99)"></label>
+{% elif a.param == "issue" %}
+<label class="ctl-param">#<input name="issue" inputmode="numeric" autocomplete="off" size="6"
+  value="{{ error.issue if error and error.action == a.key else '' }}" placeholder="issue" {% if not a.enabled %}disabled{% endif %}
+  aria-label="Issue number"></label>
+{% endif %}
+{%- endmacro %}

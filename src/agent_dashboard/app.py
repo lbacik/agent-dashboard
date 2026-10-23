@@ -258,6 +258,7 @@ def create_app(
         )
     app.mount("/static", RevalidatedStaticFiles(directory=STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    app.state.templates = templates  # PROTOTYPE hook (#97): prototype/instance_control
 
     def context(request: Request) -> dict:
         return {"request": request, "poll_interval": int(cfg.poll_interval)}
