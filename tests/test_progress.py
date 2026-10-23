@@ -721,3 +721,91 @@ def test_history_rows_link_to_progress():
     body = client.get("/instances/work/history?window=all").text
     assert f"/instances/work/attempts/98/{STARTED_DASH}/progress" in body
     assert ">Progress</a>" in body
+
+
+# --- sticky breadcrumb top bar ------------------------------------------------
+
+
+STARTED_COLON = "2026-09-27T16:33:43.385090Z"
+
+
+def test_progress_page_has_sticky_breadcrumb_topbar():
+    client, _, _ = make_progress_client(
+        [("work", "running")],
+        {
+            "id-work": _progress_payload(
+                [_reading_event(1, 8, "2026-09-27T16:33:51Z")]
+            )
+        },
+    )
+    body = client.get(f"/instances/work/attempts/98/{STARTED_DASH}/progress").text
+    # Breadcrumb trail: Fleet links home, the instance links to its history,
+    # the attempt links to its log, Progress is plain current text.
+    assert '<nav aria-label="Breadcrumb">' in body
+    assert '<a href="/">Fleet</a>' in body
+    nav = body.split("Breadcrumb")[1].split("</nav>")[0]
+    assert '<a href="/instances/work/history">work</a>' in nav
+    assert (
+        f'<a href="/instances/work/attempts/98/{STARTED_DASH}">'
+        f"#98 · {STARTED_COLON}</a>"
+    ) in nav
+    assert '<span aria-current="page">Progress</span>' in body
+    # The on-demand note and Refresh live in the sticky bar.
+    subnav = body.split('<div class="subnav">', 1)[1].split("</div>", 1)[0]
+    assert "data is read on demand" in subnav
+    assert ">Refresh</a>" in subnav
+    assert f"/instances/work/attempts/98/{STARTED_DASH}/progress" in subnav.replace(
+        "&amp;", "&"
+    )
+    # The bottom escape hatches are gone.
+    assert "Back to attempt history" not in body
+    assert "Back to the fleet" not in body
+    assert ">Attempt log</a>" not in body
+
+
+def test_progress_breadcrumb_renders_for_unknown_instance_errors_and_no_data():
+    client, _, _ = make_progress_client(
+        [("work", "running")],
+        {
+            "id-work": _progress_payload(
+                [_reading_event(1, 8, "2026-09-27T16:33:51Z")]
+            )
+        },
+    )
+    unknown = client.get(f"/instances/nope/attempts/98/{STARTED_DASH}/progress").text
+    assert '<nav aria-label="Breadcrumb">' in unknown
+    assert '<a href="/">Fleet</a>' in unknown
+    assert '<a href="/instances/nope/history">nope</a>' in unknown
+    assert '<span aria-current="page">Progress</span>' in unknown
+    assert "Back to attempt history" not in unknown
+
+    invalid = client.get("/instances/work/attempts/98/not-a-timestamp/progress").text
+    assert '<nav aria-label="Breadcrumb">' in invalid
+    assert '<a href="/instances/work/history">work</a>' in invalid
+    assert '<span aria-current="page">Progress</span>' in invalid
+    assert "Invalid attempt reference" in invalid
+
+    from agent_dashboard.gateway import GatewayError
+
+    err_client, _, _ = make_progress_client(
+        [("work", "running")],
+        events_error={"id-work": GatewayError("docker exec timed out after 5 s")},
+    )
+    gateway_body = err_client.get(
+        f"/instances/work/attempts/98/{STARTED_DASH}/progress"
+    ).text
+    assert '<nav aria-label="Breadcrumb">' in gateway_body
+    assert '<span aria-current="page">Progress</span>' in gateway_body
+    assert "Could not read" in gateway_body
+
+    empty_client, _, _ = make_progress_client(
+        [("work", "running")],
+        {"id-work": _progress_payload([], attempt={"outcome": "complete"})},
+    )
+    empty = empty_client.get(
+        f"/instances/work/attempts/98/{STARTED_DASH}/progress"
+    ).text
+    assert '<nav aria-label="Breadcrumb">' in empty
+    assert '<span aria-current="page">Progress</span>' in empty
+    assert "No progress data" in empty
+    assert "Back to attempt history" not in empty

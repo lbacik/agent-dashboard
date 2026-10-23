@@ -1,5 +1,20 @@
 {% extends "base.html" %}
 {% block content %}
+<div class="subnav">
+  <nav aria-label="Breadcrumb">
+    <ol class="crumbs">
+      {% for crumb in breadcrumbs %}
+      {% if crumb.url is not none %}
+      <li><a href="{{ crumb.url }}">{{ crumb.label }}</a></li>
+      {% else %}
+      <li><span aria-current="page">{{ crumb.label }}</span></li>
+      {% endif %}
+      {% endfor %}
+    </ol>
+  </nav>
+  <span class="on-demand">data is read on demand</span>
+  <a class="refresh" href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ started | urlencode }}/progress">Refresh</a>
+</div>
 <div class="history-head">
   <h2>Attempt progress</h2>
   <p class="subtitle">Managed instance {{ name }} · Issue #{{ issue }} · Started {{ started }}</p>
@@ -104,7 +119,6 @@
 </ul>
 {% endif %}
 {% endif %}
-<p class="hint"><a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ started | urlencode }}">Attempt log</a> · <a href="/instances/{{ name | urlencode }}/history">Back to attempt history</a> · <a href="/">Back to the fleet</a> · data is read on demand; use Refresh for the latest. <a class="refresh" href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ started | urlencode }}/progress">Refresh</a></p>
 <div class="chart-tip" id="chart-tip" hidden></div>
 <script src="/static/charts.js" defer></script>
 {% endblock %}

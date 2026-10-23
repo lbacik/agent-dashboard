@@ -64,10 +64,11 @@ a:hover { text-decoration-thickness: 2px; }
   font-size: 0.9rem;
 }
 
-/* Sticky sub-navigation for pages below the fleet view (Attempt history
-   is the first). It stays pinned while scrolling and carries the
-   breadcrumb plus the on-demand note and Refresh, so the operator never
-   scrolls to the bottom. The main fleet header (.topbar) stays static. */
+/* Sticky sub-navigation for pages below the fleet view (Attempt history,
+   Attempt log, Attempt progress). It stays pinned while scrolling and
+   carries the breadcrumb plus the on-demand note and Refresh, so the
+   operator never scrolls to the bottom. The main fleet header (.topbar)
+   stays static. */
 .subnav {
   position: sticky;
   top: 0;
@@ -108,6 +109,13 @@ a:hover { text-decoration-thickness: 2px; }
 .subnav .on-demand { color: var(--muted); font-size: 0.85rem; }
 
 .subnav .refresh { margin-left: auto; }
+
+/* Jump targets below the sticky bar (opened Evidence slots, sticky table
+   headers) keep a clearance so the pinned subnav never covers them. */
+.evidence-slot,
+table.fleet thead th {
+  scroll-margin-top: 4.5rem;
+}
 
 .container {
   max-width: 1600px;

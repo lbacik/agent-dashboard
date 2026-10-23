@@ -1,12 +1,26 @@
 {% extends "base.html" %}
 {% block content %}
+<div class="subnav">
+  <nav aria-label="Breadcrumb">
+    <ol class="crumbs">
+      {% for crumb in breadcrumbs %}
+      {% if crumb.url is not none %}
+      <li><a href="{{ crumb.url }}">{{ crumb.label }}</a></li>
+      {% else %}
+      <li><span aria-current="page">{{ crumb.label }}</span></li>
+      {% endif %}
+      {% endfor %}
+    </ol>
+  </nav>
+  <span class="on-demand">data is read on demand</span>
+  <a class="refresh" href="{{ refresh_url }}">Refresh</a>
+</div>
 <div class="history-head">
   <h2>Attempt log</h2>
-  <p class="subtitle">instances / <a href="/instances/{{ name | urlencode }}/history">{{ name }}</a> / attempts / #{{ result.issue if result is not none else issue }} / {{ result.started_at if result is not none else started }}</p>
+  <p class="subtitle">Managed instance {{ name }}</p>
 </div>
 <div class="history-filters">
   <a href="/instances/{{ name | urlencode }}/attempts/{{ issue | urlencode }}/{{ dash_started | urlencode }}/progress">Progress chart</a>
-  <a class="refresh" href="{{ refresh_url }}">Refresh</a>
 </div>
 {% if error and result is none %}
 <div class="banner" role="alert">{{ error }}</div>
@@ -92,7 +106,6 @@
 {% endif %}
 <div class="paging"><span>page {{ page_num }}/{{ pages }}, {{ filtered_total }} events</span>{% if prev_url %} <a href="{{ prev_url }}">&larr; prev</a>{% endif %}{% if next_url %} <a href="{{ next_url }}">next &rarr;</a>{% endif %}</div>
 {% endif %}
-<p class="hint"><a href="/instances/{{ name | urlencode }}/history">Back to attempt history</a> · <a href="/">Back to the fleet</a> · data is read on demand; use Refresh for the latest.</p>
 <script>
 function toggleEvidence(link) {
   var slot = document.getElementById(link.getAttribute("data-slot"));
