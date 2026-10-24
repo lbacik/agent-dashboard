@@ -420,6 +420,13 @@ class CommandEntry:
     steps: tuple[CommandStep, ...] = ()
     current_step: str = "submitted"
 
+    @property
+    def ack_class(self) -> str:
+        """Tone class for the stepper: ``ack-<terminal ack>``, else ``""``."""
+        if self.acknowledgement in TERMINAL_ACKS:
+            return "ack-" + self.acknowledgement.replace(" ", "-")
+        return ""
+
 
 def _terminal_label(acknowledgement: str | None) -> str:
     """Terminal stepper label: a known acknowledgement, else ``completed``."""

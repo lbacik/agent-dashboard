@@ -182,6 +182,21 @@ def test_timeline_terminal_ack_wins_over_stale_handoff_phase():
     assert '<li class="ctl-step is-current">model work</li>' not in body
 
 
+def test_timeline_entry_carries_terminal_ack_tone():
+    """Only a known terminal acknowledgement tones the entry's stepper."""
+    control = rich_control()
+    control["commands"]["dash-aaaaaaaaaaaaaaaa"]["acknowledgement"] = "not fulfilled"
+    client, _, _ = client_with_control(control)
+    body = control_body(client).text
+    assert '<li class="ctl-entry ack-completed">' in body
+    assert '<li class="ctl-entry ack-not-fulfilled">' in body
+    control["commands"]["dash-aaaaaaaaaaaaaaaa"]["acknowledgement"] = "accepted"
+    client, _, _ = client_with_control(control)
+    body = control_body(client).text
+    assert "ack-not-fulfilled" not in body
+    assert '<li class="ctl-entry">' in body
+
+
 def test_timeline_empty_renders_message():
     client, _, _ = make_control_client(
         {"work": load_snapshot("snapshot-attempt-in-progress.json")}

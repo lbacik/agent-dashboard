@@ -250,17 +250,40 @@ table.fleet td.headline { min-width: 14rem; }
   white-space: nowrap;
 }
 
-/* Control console composer: one stacked radio per action. A disabled
-   action stays visible, greyed and struck through, with its reason under
-   the label; the state never relies on colour alone. Light theme only,
+/* Control console composer (prototype variant C): the radio group
+   renders as a grid of option tiles, the radio itself visually hidden
+   but still focusable. The chosen tile gets a thicker accent border, a
+   disabled one stays visible, greyed and struck through, with its reason
+   under the label; no state relies on colour alone. Light theme only,
    tokens from :root. */
 .ctl-unavailable, .ctl-stale { color: var(--muted); font-size: 0.88rem; }
-.ctl-actions { display: flex; flex-direction: column; gap: 0.35rem; }
-.ctl-opt { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem; }
-.ctl-opt.is-disabled { color: var(--muted); }
-.ctl-opt.is-disabled .ctl-label { text-decoration: line-through; }
-.ctl-reason, .ctl-note { font-size: 0.82rem; color: var(--muted); }
-.ctl-preview { font-family: monospace; font-size: 0.85rem; }
+.ctl-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.4rem; }
+.ctl-opt {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.4rem 0.55rem;
+  background: var(--card);
+  cursor: pointer;
+}
+.ctl-opt input { position: absolute; opacity: 0; pointer-events: none; }
+.ctl-opt:hover { background: var(--hover); border-color: var(--accent-soft); }
+.ctl-opt:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--info-bg);
+}
+.ctl-opt:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ctl-label { font-weight: 600; font-size: 0.9rem; }
+.ctl-opt.is-disabled { cursor: not-allowed; background: var(--surface-2); border-color: var(--line); }
+.ctl-opt.is-disabled .ctl-label { color: var(--muted); text-decoration: line-through; }
+.ctl-reason, .ctl-note { font-size: 0.8rem; color: var(--muted); }
+.ctl-params label:not([hidden]) { display: inline-flex; align-items: center; gap: 0.4rem; margin-top: 0.5rem; font-size: 0.85rem; }
+.ctl-params input { font: inherit; padding: 0.15rem 0.3rem; border: 1px solid var(--line); border-radius: 4px; }
+.ctl-preview { margin: 0.6rem 0; padding: 0.45rem 0.6rem; background: var(--surface-2); border-radius: 4px; font-family: monospace; font-size: 0.85rem; }
 .ctl-preview .ctl-prompt { color: var(--muted); }
 
 /* Fleet Intake command-state chips (spec 8.1): text, never colour alone.
@@ -281,8 +304,10 @@ table.fleet td.headline { min-width: 14rem; }
 }
 
 /* Command timeline under the composer (spec 8.5): a collapsible list of
-   the last 10 commands with a lifecycle stepper per entry. Steps are
-   text, never colour alone. */
+   the last 10 commands with a lifecycle stepper of pills per entry
+   (prototype variant C). The current pill takes the tone of a terminal
+   acknowledgement; steps stay text (✓ for done, bold for current), never
+   colour alone. */
 .ctl-timeline { margin-top: 1rem; }
 .ctl-timeline > summary { cursor: pointer; font-size: 0.9rem; }
 .ctl-timeline-sum { color: var(--muted); font-size: 0.82rem; }
@@ -305,11 +330,20 @@ table.fleet td.headline { min-width: 14rem; }
 }
 .ctl-req { overflow-wrap: anywhere; }
 .ctl-time { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
-.ctl-steps { list-style: none; display: flex; flex-wrap: wrap; gap: 0.25rem 0.6rem; margin: 0.35rem 0 0; padding: 0; font-size: 0.8rem; }
-.ctl-step { color: var(--muted); }
-.ctl-step.is-done { color: var(--ink); }
+.ctl-steps { list-style: none; display: flex; flex-wrap: wrap; gap: 0.2rem; margin: 0.35rem 0 0.2rem; padding: 0; }
+.ctl-step {
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.ctl-step.is-done { background: var(--surface-2); color: var(--ink); }
 .ctl-step.is-done::before { content: "✓ "; }
-.ctl-step.is-current { color: var(--ink); font-weight: 700; text-decoration: underline; }
+.ctl-step.is-current { border-color: var(--accent); background: var(--info-bg); color: var(--info-ink); font-weight: 700; }
+.ack-completed .ctl-step.is-current { border-color: var(--ok-ink); background: var(--ok-bg); color: var(--ok-ink); }
+.ack-not-fulfilled .ctl-step.is-current { border-color: var(--warn-ink); background: var(--warn-bg); color: var(--warn-ink); }
+.ack-superseded .ctl-step.is-current { border-color: var(--off-ink); background: var(--off-bg); color: var(--off-ink); }
 .ctl-detail { margin: 0.35rem 0 0; overflow-wrap: anywhere; }
 
 /* Feedback cards above the composer (spec 8.4): one tone per outcome plus

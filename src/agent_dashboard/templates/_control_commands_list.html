@@ -7,7 +7,7 @@
 {% else %}
 <ol class="ctl-entries">
   {% for c in commands %}
-  <li class="ctl-entry">
+  <li class="ctl-entry{% if c.ack_class %} {{ c.ack_class }}{% endif %}">
     <span class="ctl-seq">#{{ c.sequence if c.sequence is not none else "—" }}</span>
     <span class="ctl-kind">{{ c.kind_label }}</span>
     <span class="ctl-origin">{{ c.origin }}</span>
