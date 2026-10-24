@@ -9,7 +9,6 @@
 <div class="ctl-confirm ctl-tone-{{ tone }}">
   <p class="ctl-confirm-head">Confirm: <code>agentctl {{ display_command }}</code> on <strong>{{ name }}</strong> ({{ repository }})</p>
   <p class="ctl-argv"><code>{{ argv_text }}</code></p>
-  <p class="ctl-request-id">Request ID <code>{{ request_id }}</code></p>
   <form class="ctl-confirm-form" hx-post="{{ submit_url }}" hx-target="#ctl-feedback-{{ slug }}" hx-swap="afterbegin" hx-disabled-elt=".ctl-confirm-form button">
     <input type="hidden" name="action" value="{{ action }}">
     {% if n_value is not none %}<input type="hidden" name="n" value="{{ n_value }}">{% endif %}
@@ -21,4 +20,5 @@
     <button type="button" class="btn ctl-confirm-no" hx-get="{{ console_url }}" hx-target="closest .ctl-body" hx-swap="innerHTML">Cancel</button>
     <p class="ctl-sending htmx-indicator">Sending… waiting for the agent to accept</p>
   </form>
+  <p class="ctl-request-id">Request ID <code>{{ request_id }}</code></p>
 </div>
