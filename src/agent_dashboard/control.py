@@ -107,21 +107,20 @@ def compute_control_mode(
     host: str = "127.0.0.1",
     host_guard_disabled: bool = False,
 ) -> ControlMode:
-    """First matching unavailable reason (spec section 2), else available."""
+    """First matching unavailable reason (spec section 2), else available.
+
+    A disabled Host guard skips the bind check (ADR 0008): the operator has
+    opted out of the loopback posture, so Controls stay available.
+    """
     if not control_enabled:
         return ControlMode(
             available=False,
             reason="control is off (AGENT_DASHBOARD_CONTROL=off, read-only mode)",
         )
-    if not is_loopback(host or ""):
+    if not host_guard_disabled and not is_loopback(host or ""):
         return ControlMode(
             available=False,
             reason=f"the dashboard is bound to a non-loopback address ({host})",
-        )
-    if host_guard_disabled:
-        return ControlMode(
-            available=False,
-            reason="the Host guard is disabled (AGENT_DASHBOARD_DISABLE_HOST_GUARD=1)",
         )
     return ControlMode(available=True, reason=None)
 

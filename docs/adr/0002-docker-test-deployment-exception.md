@@ -68,4 +68,5 @@ rather than `0.0.0.0`, and restrict the port with the host firewall.
 - Revisited for Control actions in
   [ADR 0007](0007-control-actions-on-a-loopback-only-dashboard.md): this
   exception stays read-only; Control actions are refused under a
-  non-loopback bind.
+  non-loopback bind. [ADR 0008](0008-disabled-host-guard-allows-control-actions.md)
+  lifts that when `AGENT_DASHBOARD_DISABLE_HOST_GUARD=1` is set.

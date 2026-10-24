@@ -110,20 +110,26 @@ def test_control_mode_unavailable_in_drawer(label, settings, line):
     assert control_body(client).text.count(line) >= 1
 
 
-def test_control_mode_host_guard_disabled_in_drawer(monkeypatch):
+@pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0"])
+def test_host_guard_disabled_keeps_controls_available(monkeypatch, host):
+    # ADR 0008: the escape hatch skips the bind check as well as the Host check.
     monkeypatch.setenv("AGENT_DASHBOARD_DISABLE_HOST_GUARD", "1")
     client, _, _ = make_control_client(
         {"work": load_snapshot("snapshot-attempt-in-progress.json")},
-        Settings(poll_interval=5.0),
+        Settings(poll_interval=5.0, host=host, allow_non_loopback=True),
     )
-    line = (
-        "Controls unavailable: the Host guard is disabled "
-        "(AGENT_DASHBOARD_DISABLE_HOST_GUARD=1)"
+    body = control_body(client).text
+    assert "Controls unavailable" not in body
+    assert "ctl-composer" in body
+
+
+def test_control_off_wins_over_disabled_host_guard(monkeypatch):
+    monkeypatch.setenv("AGENT_DASHBOARD_DISABLE_HOST_GUARD", "1")
+    client, _, _ = make_control_client(
+        {"work": load_snapshot("snapshot-attempt-in-progress.json")},
+        Settings(poll_interval=5.0, host="0.0.0.0", allow_non_loopback=True, control=False),
     )
-    assert f'id="control-console-{control_slug("work")}"' in (
-        client.get("/instances/work").text
-    )
-    assert line in control_body(client).text
+    assert "Controls unavailable: control is off" in control_body(client).text
 
 
 def test_control_mode_unavailable_in_every_fixture_drawer():
