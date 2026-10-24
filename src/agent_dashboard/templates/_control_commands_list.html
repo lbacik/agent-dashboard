@@ -8,11 +8,13 @@
 <ol class="ctl-entries">
   {% for c in commands %}
   <li class="ctl-entry{% if c.ack_class %} {{ c.ack_class }}{% endif %}">
-    <span class="ctl-seq">#{{ c.sequence if c.sequence is not none else "—" }}</span>
-    <span class="ctl-kind">{{ c.kind_label }}</span>
-    <span class="ctl-origin">{{ c.origin }}</span>
-    <code class="ctl-req">{{ c.request_id }}</code>
-    <span class="ctl-time">{{ c.short_time }}</span>
+    <div class="ctl-entry-head">
+      <span class="ctl-seq">#{{ c.sequence if c.sequence is not none else "—" }}</span>
+      <span class="ctl-kind">{{ c.kind_label }}</span>
+      <span class="ctl-origin">{{ c.origin }}</span>
+      <code class="ctl-req">{{ c.request_id }}</code>
+      <span class="ctl-time">{{ c.short_time }}</span>
+    </div>
     <ol class="ctl-steps">
       {% for s in c.steps %}
       <li class="ctl-step is-{{ s.state }}">{{ s.label }}</li>

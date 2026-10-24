@@ -37,7 +37,7 @@
   <button type="submit" class="btn ctl-review"{% if not first %} disabled{% endif %}>Review…</button>
 </form>
 <details class="ctl-timeline" data-persist="control-timeline" open>
-  <summary>Commands (last 10 from telemetry){% if commands_summary is defined %} <span id="ctl-timeline-summary-{{ slug }}" class="ctl-timeline-sum">{{ commands_summary }}</span>{% endif %}</summary>
+  <summary><span class="ctl-timeline-title">Commands (last 10 from telemetry)</span>{% if commands_summary is defined %} <span id="ctl-timeline-summary-{{ slug }}" class="ctl-timeline-sum">{{ commands_summary }}</span>{% endif %}</summary>
   <div class="ctl-timeline-list"
        hx-get="{{ commands_url }}"
        hx-trigger="sse:fleet"

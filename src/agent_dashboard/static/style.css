@@ -256,7 +256,21 @@ table.fleet td.headline { min-width: 14rem; }
    disabled one stays visible, greyed and struck through, with its reason
    under the label; no state relies on colour alone. Light theme only,
    tokens from :root. */
-.ctl-unavailable, .ctl-stale { color: var(--muted); font-size: 0.88rem; }
+.drawer-section.ctl {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.75rem 0.9rem;
+  background: var(--card);
+}
+.ctl-unavailable {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: var(--off-bg);
+  color: var(--off-ink);
+  font-size: 0.9rem;
+}
+.ctl-stale { color: var(--muted); font-size: 0.88rem; }
 .ctl-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.4rem; }
 .ctl-opt {
   position: relative;
@@ -280,11 +294,40 @@ table.fleet td.headline { min-width: 14rem; }
 .ctl-label { font-weight: 600; font-size: 0.9rem; }
 .ctl-opt.is-disabled { cursor: not-allowed; background: var(--surface-2); border-color: var(--line); }
 .ctl-opt.is-disabled .ctl-label { color: var(--muted); text-decoration: line-through; }
-.ctl-reason, .ctl-note { font-size: 0.8rem; color: var(--muted); }
+.ctl-reason { font-size: 0.8rem; color: var(--muted); }
+.ctl-note { font-size: 0.8rem; color: var(--info-ink); }
 .ctl-params label:not([hidden]) { display: inline-flex; align-items: center; gap: 0.4rem; margin-top: 0.5rem; font-size: 0.85rem; }
 .ctl-params input { font: inherit; padding: 0.15rem 0.3rem; border: 1px solid var(--line); border-radius: 4px; }
-.ctl-preview { margin: 0.6rem 0; padding: 0.45rem 0.6rem; background: var(--surface-2); border-radius: 4px; font-family: monospace; font-size: 0.85rem; }
+.ctl-preview { margin: 0.6rem 0; padding: 0.45rem 0.6rem; background: var(--surface-2); border-radius: 4px; font-size: 0.85rem; }
 .ctl-preview .ctl-prompt { color: var(--muted); }
+
+/* Step 2 confirmation (spec 8.3), replacing the composer: an info box,
+   or a danger box for Stop, Stop after N and Handoff now. The argv line
+   sits in its own white box; "Sending…" shows only while the submit is
+   in flight. */
+.ctl-confirm {
+  border: 1px solid var(--accent-soft);
+  border-radius: 8px;
+  padding: 0.75rem 0.9rem;
+  background: var(--info-bg);
+}
+.ctl-confirm.ctl-tone-danger { border-color: var(--danger-line); background: var(--danger-bg); }
+.ctl-confirm-head { margin: 0 0 0.6rem; }
+.ctl-argv {
+  margin: 0 0 0.6rem;
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--card);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ctl-confirm-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.ctl-sending { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.ctl-sending.htmx-indicator { display: none; }
+.htmx-request .ctl-sending.htmx-indicator { display: inline; }
+.ctl-request-id { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.75rem; }
 
 /* Fleet Intake command-state chips (spec 8.1): text, never colour alone.
    They take the Intake cell's stale styling when the control state is
@@ -308,28 +351,25 @@ table.fleet td.headline { min-width: 14rem; }
    (prototype variant C). The current pill takes the tone of a terminal
    acknowledgement; steps stay text (✓ for done, bold for current), never
    colour alone. */
-.ctl-timeline { margin-top: 1rem; }
-.ctl-timeline > summary { cursor: pointer; font-size: 0.9rem; }
-.ctl-timeline-sum { color: var(--muted); font-size: 0.82rem; }
-.ctl-entries { list-style: none; margin: 0.5rem 0 0; padding: 0; }
-.ctl-entry {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.5rem 0.65rem;
-  margin-bottom: 0.5rem;
-  font-size: 0.85rem;
-}
-.ctl-seq { font-weight: 700; }
-.ctl-kind { font-weight: 600; }
+.ctl-timeline { margin-top: 0.75rem; }
+.ctl-timeline > summary { cursor: pointer; font-size: 0.9rem; padding: 0.3rem 0; }
+.ctl-timeline-title { font-weight: 700; }
+.ctl-timeline-sum { color: var(--muted); font-size: 0.8rem; }
+.ctl-timeline[open] .ctl-timeline-sum { display: none; }
+.ctl-entries { list-style: none; margin: 0; padding: 0; }
+.ctl-entry { padding: 0.5rem 0; border-top: 1px solid var(--line); font-size: 0.85rem; }
+.ctl-entry-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; }
+.ctl-seq { color: var(--muted); font-size: 0.75rem; }
+.ctl-kind { font-weight: 700; }
 .ctl-origin {
-  display: inline-block;
-  padding: 0.05rem 0.45rem;
-  border: 1px solid var(--line);
+  padding: 0 0.4rem;
   border-radius: 999px;
-  font-size: 0.75rem;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.7rem;
 }
-.ctl-req { overflow-wrap: anywhere; }
-.ctl-time { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+.ctl-req { color: var(--muted); font-size: 0.75rem; overflow-wrap: anywhere; }
+.ctl-time { color: var(--muted); font-size: 0.75rem; white-space: nowrap; }
 .ctl-steps { list-style: none; display: flex; flex-wrap: wrap; gap: 0.2rem; margin: 0.35rem 0 0.2rem; padding: 0; }
 .ctl-step {
   padding: 0.05rem 0.45rem;
@@ -344,20 +384,19 @@ table.fleet td.headline { min-width: 14rem; }
 .ack-completed .ctl-step.is-current { border-color: var(--ok-ink); background: var(--ok-bg); color: var(--ok-ink); }
 .ack-not-fulfilled .ctl-step.is-current { border-color: var(--warn-ink); background: var(--warn-bg); color: var(--warn-ink); }
 .ack-superseded .ctl-step.is-current { border-color: var(--off-ink); background: var(--off-bg); color: var(--off-ink); }
-.ctl-detail { margin: 0.35rem 0 0; overflow-wrap: anywhere; }
+.ctl-detail { margin: 0.35rem 0 0; color: var(--muted); overflow-wrap: anywhere; }
 
 /* Feedback cards above the composer (spec 8.4): one tone per outcome plus
    a text title, so no state relies on colour alone. Light theme only,
    tokens from :root. */
-.ctl-feedback { display: flex; flex-direction: column; gap: 0.5rem; }
+.ctl-feedback { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.5rem; }
 .ctl-feedback:empty { display: none; }
 .ctl-card {
   position: relative;
   border: 1px solid var(--line);
   border-left-width: 4px;
   border-radius: 6px;
-  padding: 0.5rem 0.65rem;
-  margin-bottom: 0.5rem;
+  padding: 0.45rem 2rem 0.45rem 0.6rem;
   font-size: 0.85rem;
   background: var(--card);
 }
@@ -371,21 +410,32 @@ table.fleet td.headline { min-width: 14rem; }
   font-size: 1rem;
   cursor: pointer;
 }
-.ctl-card-head { margin: 0; }
+.ctl-card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; margin: 0; }
 .ctl-card-head code { font-family: monospace; }
-.ctl-card-title { margin: 0.2rem 0 0; font-weight: 700; }
+.ctl-card-title { font-weight: 700; }
 .ctl-card-body { margin: 0.2rem 0 0; overflow-wrap: anywhere; }
 .ctl-card-progress { margin: 0.2rem 0 0; color: var(--muted); overflow-wrap: anywhere; }
 .ctl-card-note { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.8rem; }
-.ctl-card-meta { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.8rem; }
+.ctl-card-meta { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.75rem; }
 .ctl-card-meta code { font-family: monospace; }
-.ctl-card-retry, .ctl-card-status { margin-top: 0.35rem; }
+.ctl-following::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin-left: 0.3em;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: ctl-pulse 1.2s infinite;
+}
+@keyframes ctl-pulse { 50% { opacity: 0.2; } }
+.ctl-card-retry, .ctl-card-status { display: inline-block; margin: 0.4rem 0.4rem 0 0; }
 .ctl-tone-info { border-left-color: var(--accent); }
 .ctl-tone-ok { border-left-color: var(--oc-complete); background: var(--ok-bg); }
 .ctl-tone-muted { border-left-color: var(--muted); background: var(--surface-2); }
 .ctl-tone-warn { border-left-color: var(--oc-incomplete); background: var(--warn-bg); }
 .ctl-tone-error { border-left-color: var(--oc-infra); background: var(--danger-bg); }
-.ctl-error { color: var(--danger-ink); }
+.ctl-error { color: var(--danger-ink); font-size: 0.85rem; font-weight: 600; }
 
 .budget-bar {
   position: relative;
@@ -767,6 +817,10 @@ ul.events.handoffs { margin-top: 1rem; }
 .btn:hover { background: var(--hover); border-color: var(--accent-soft); }
 .btn .icon { width: 1em; height: 1em; }
 .btn-live { border-color: var(--accent); color: var(--link); }
+button.btn:not([disabled]) { cursor: pointer; }
+.btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.btn-primary { border-color: var(--accent); color: var(--link); font-weight: 600; }
+.btn-danger { border-color: var(--danger-ink); color: var(--danger-ink); font-weight: 600; }
 
 /* Drawer log links under Recent events: icon buttons like the fleet rows. */
 .drawer-links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0 0; }
