@@ -57,5 +57,8 @@ after "not submitted" is the agent's idempotent identical retry.
 - The UI never reads the Control audit; command progress comes from the
   telemetry `control` section.
 - The test deployment of ADR 0002 shows the "Controls unavailable" line.
+- Partly superseded by
+  [ADR 0008](0008-disabled-host-guard-allows-control-actions.md): with
+  `AGENT_DASHBOARD_DISABLE_HOST_GUARD=1` Control actions stay available.
 
 Decided in [Decide request protection, confirmations and the audit trail](https://github.com/lbacik/agent-dashboard/issues/96).

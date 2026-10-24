@@ -11,7 +11,7 @@ Inputs, all resolved on the map:
 - Request protection, confirmation, Control audit: ticket "Decide request protection, confirmations and the audit trail", ADR 0007.
 - Look and behaviour: variant C of ticket "Prototype control actions in the drawer and fleet table" (throwaway code `prototype/instance_control/` on branch `prototype/instance-control`; reuse the copy and the rules, not the code).
 - Agent-side changes and the reply contract rules: ticket "Decide the agent-side changes for dashboard control".
-- Constraints: ADR 0001, 0002, 0006, 0007. `gateway.py` is the only module that builds Docker argv and every argv it can produce is pinned by a test. Templates consume framework-free view models only.
+- Constraints: ADR 0001, 0002, 0006, 0007, 0008. `gateway.py` is the only module that builds Docker argv and every argv it can produce is pinned by a test. Templates consume framework-free view models only.
 
 Settled while writing this spec (ticket "Write the instance control spec"): the gateway parameters in section 3 (control timeout, one control exec per instance, telemetry polls skipped during it, operator-driven retry only), one "Outcome unknown" state for every ambiguous result, the `agentctl command <id>` fallback behind a button rather than automatic, and `AGENT_DASHBOARD_CONTROL` defaulting to on.
 
@@ -41,10 +41,9 @@ At startup the app computes one **dashboard control mode**: available, or unavai
 | Condition | Reason shown after "Controls unavailable:" |
 |---|---|
 | `control` is off | `control is off (AGENT_DASHBOARD_CONTROL=off, read-only mode)` |
-| bound to a non-loopback address (`--allow-non-loopback`, ADR 0002) | `the dashboard is bound to a non-loopback address (<host>)` |
-| `AGENT_DASHBOARD_DISABLE_HOST_GUARD=1` | `the Host guard is disabled (AGENT_DASHBOARD_DISABLE_HOST_GUARD=1)` |
+| bound to a non-loopback address (`--allow-non-loopback`, ADR 0002) and `AGENT_DASHBOARD_DISABLE_HOST_GUARD` is not `1` | `the dashboard is bound to a non-loopback address (<host>)` |
 
-When the mode is unavailable, every drawer shows only that line in the console and every Control action route answers 403 (section 6). The ADR 0002 test deployment therefore shows "Controls unavailable" and never runs a control exec.
+When the mode is unavailable, every drawer shows only that line in the console and every Control action route answers 403 (section 6). The ADR 0002 test deployment shows "Controls unavailable" and never runs a control exec unless it also sets `AGENT_DASHBOARD_DISABLE_HOST_GUARD=1`, which skips both the bind and the Host checks and keeps Controls available (ADR 0008).
 
 ## 3. Gateway operations
 

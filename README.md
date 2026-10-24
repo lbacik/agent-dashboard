@@ -88,9 +88,9 @@ shows only "Controls unavailable: control is off
 (`AGENT_DASHBOARD_CONTROL=off`, read-only mode)" and every Control action
 route answers 403. Controls also switch themselves off when the dashboard
 is bound to a non-loopback address (`--allow-non-loopback`, the Docker test
-deployment below) or when the Host guard is disabled
-(`AGENT_DASHBOARD_DISABLE_HOST_GUARD=1`); each state names its reason after
-"Controls unavailable:".
+deployment below); each state names its reason after "Controls unavailable:".
+Setting `AGENT_DASHBOARD_DISABLE_HOST_GUARD=1` skips both the bind and the
+Host checks, so Controls stay available on a trusted test LAN (ADR 0008).
 
 **Timeout.** `--control-exec-timeout` (or
 `AGENT_DASHBOARD_CONTROL_EXEC_TIMEOUT`, default 15 s) bounds one control
