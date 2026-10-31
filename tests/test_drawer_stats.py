@@ -345,8 +345,11 @@ def test_stats_stopped_instance_reads_via_copy():
 
     from fake_gateway import make_logs_tree
 
-    started_dash = "2026-09-27T16-33-43.385090Z"
-    started_colon = "2026-09-27T16:33:43.385090Z"
+    # A day old, so it stays inside the default 30d range whenever this runs.
+    started_colon = (
+        time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 86400)) + ".385090Z"
+    )
+    started_dash = started_colon.replace(":", "-")
     attempt = {
         "outcome": "complete",
         "started_at": started_colon,

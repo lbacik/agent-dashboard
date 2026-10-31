@@ -841,10 +841,10 @@ def test_history_page_stopped_instance():
 
     from fake_gateway import make_logs_tree
 
-    started = "2026-09-27T16-33-43.385090Z"
-    attempt = dict(
-        COMPLETE, started_at="2026-09-27T16:33:43.385090Z", duration_seconds=60
-    )
+    # A day old, so it stays inside the default history window whenever this runs.
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 86400)) + ".385090Z"
+    started = started_at.replace(":", "-")
+    attempt = dict(COMPLETE, started_at=started_at, duration_seconds=60)
     tree = make_logs_tree(
         {
             f"logs/98/{started}/attempt.json": _json.dumps(attempt).encode(),
