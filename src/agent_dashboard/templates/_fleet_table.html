@@ -15,7 +15,11 @@
    hides and the rail shows beside the cockpit (see style.css `#live:has`).
    `selected` names the inspected instance: its rail item carries
    `is-selected` plus `aria-current="true"`, reapplied client-side after
-   every `fleet` SSE swap from the `?instance=` URL. #}
+   every `fleet` SSE swap from the `?instance=` URL.
+   Under the rail head a scaled-down copy of the four filters (`.vc-chip`,
+   same `data-vc-filter` keys) shares the matrix filter state: rail rows
+   carry the same `data-vc-*` attributes and hide with their matrix rows,
+   except the selected unit, which always stays listed. #}
 {% macro logs_icon() -%}
 <svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 1.5h6L13 5v9.5H3.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9.5 1.5V5H13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8h5M5.5 10.5h5M5.5 13h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
 {%- endmacro %}
@@ -28,13 +32,23 @@
 {% set selected = selected | default("") %}
 {% set running = rows | selectattr("state", "equalto", "running") | list %}
 {% set stopped = rows | rejectattr("state", "equalto", "running") | list %}
+{% set selected_offline = selected in (stopped | map(attribute="name") | list) %}
 {% set ns = namespace(alerts=0, working=0) %}
 {% for row in running %}
 {% if row.rank <= 4 %}{% set ns.alerts = ns.alerts + 1 %}{% endif %}
 {% if row.detail is not none and row.detail.attempt_kind == "active" %}{% set ns.working = ns.working + 1 %}{% endif %}
 {% endfor %}
+{% set filter_specs = [
+  ("online", "Online units", "Online", running | length, "running instances"),
+  ("alerts", "Operator alerts", "Alerts", ns.alerts, "hold / handoff / stale"),
+  ("working", "Active executions", "Active", ns.working, "attempt in progress"),
+  ("offline", "Offline units", "Offline", stopped | length, "not running / exited"),
+] %}
+{% macro filter_attrs(row) -%}
+{%- if row.state == "running" %} data-vc-online="1"{% if row.rank <= 4 %} data-vc-alerts="1"{% endif %}{% if row.detail is not none and row.detail.attempt_kind == "active" %} data-vc-working="1"{% endif %}{% else %} data-vc-offline="1"{% endif -%}
+{%- endmacro %}
 {% macro rail_item(row, attempt) -%}
-<li class="vc-rail-row">
+<li class="vc-rail-row"{{ filter_attrs(row) }}{% if row.state != "running" and row.name != selected %} hidden{% endif %}>
   <button type="button" class="vc-rail-item {{ stripe_class(row) }}{% if row.name == selected %} is-selected{% endif %}"{% if row.name == selected %} aria-current="true"{% endif %}
     data-instance="{{ row.name }}"
     hx-get="/instances/{{ row.name | urlencode }}"
@@ -67,6 +81,17 @@
     <button type="button" class="vc-rail-matrix" onclick="closeDrawer()">⊞ Matrix</button>
   </div>
   {% if rows %}
+  <div class="vc-rail-filters" role="group" aria-label="Fleet units filters">
+    {% for key, name, short, count, hint in filter_specs %}
+    <button type="button" class="vc-chip{% if key == "online" %} is-on{% endif %}{% if key == "alerts" and ns.alerts > 0 %} has-alert{% endif %}" data-vc-filter="{{ key }}" aria-pressed="{{ "true" if key == "online" else "false" }}" title="{{ name }} · filter: {{ hint }}">
+      <span class="vc-chip-name">{{ short }}</span>
+      <span class="vc-chip-bottom">
+        <span class="vc-chip-count">{{ count }}</span>
+        <span class="vc-led" aria-hidden="true"></span>
+      </span>
+    </button>
+    {% endfor %}
+  </div>
   {% if running %}
   <ul class="vc-rail-list">
     {% for row in running %}
@@ -75,7 +100,7 @@
   </ul>
   {% endif %}
   {% if stopped %}
-  <details class="vc-rail-stopped" open>
+  <details class="vc-rail-stopped" open{% if not selected_offline %} hidden{% endif %}>
     <summary>Offline units ({{ stopped | length }})</summary>
     <ul class="vc-rail-list">
       {% for row in stopped %}
@@ -85,6 +110,7 @@
     </ul>
   </details>
   {% endif %}
+  <p class="hint vc-rail-empty" data-vc-rail-empty{% if running or selected_offline %} hidden{% endif %}>No units match the active filters.</p>
   {% else %}
   <p class="hint vc-rail-empty">No managed instances found.</p>
   {% endif %}
@@ -94,12 +120,7 @@
 <div class="banner" role="alert">Discovery failed: {{ error }}</div>
 {% endif %}
 <div class="vc-filters" role="group" aria-label="Fleet filters">
-  {% for key, name, count, hint in [
-    ("online", "Online units", running | length, "running instances"),
-    ("alerts", "Operator alerts", ns.alerts, "hold / handoff / stale"),
-    ("working", "Active executions", ns.working, "attempt in progress"),
-    ("offline", "Offline units", stopped | length, "not running / exited"),
-  ] %}
+  {% for key, name, short, count, hint in filter_specs %}
   <button type="button" class="vc-tile{% if key == "online" %} is-on{% endif %}{% if key == "alerts" and ns.alerts > 0 %} has-alert{% endif %}" data-vc-filter="{{ key }}" aria-pressed="{{ "true" if key == "online" else "false" }}">
     <span class="vc-tile-top">
       <span class="vc-led" aria-hidden="true"></span>
@@ -127,7 +148,7 @@
     {% for row in rows %}
     {% if row.state == "running" %}
     <tr class="fleet-row {{ stripe_class(row) }}"
-        data-vc-online="1"{% if row.rank <= 4 %} data-vc-alerts="1"{% endif %}{% if row.detail is not none and row.detail.attempt_kind == "active" %} data-vc-working="1"{% endif %}
+       {{ filter_attrs(row) }}
         hx-get="/instances/{{ row.name | urlencode }}"
         hx-target="#drawer-holder"
         hx-swap="innerHTML"
@@ -158,7 +179,7 @@
     {% else %}
     {% set d = row.drawer %}
     <tr class="fleet-row {{ stripe_class(row) }}"
-        data-vc-offline="1"
+       {{ filter_attrs(row) }}
         hidden
         hx-get="/instances/{{ row.name | urlencode }}"
         hx-target="#drawer-holder"

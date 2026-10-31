@@ -376,6 +376,18 @@ def test_cockpit_idle_drawer_keeps_facts_without_live_links():
     assert "Live #" not in body
 
 
+def test_cockpit_idle_drawer_keeps_every_module_number():
+    client = make_cockpit_client_for("snapshot-idle-with-last-finished.json")
+    body = client.get("/instances/work").text
+    titles = re.findall(r'class="vc-module-bar">(?:<span class="activity-label">)?([^<]+)<', body)
+    assert [t.partition(" //")[0] for t in titles] == ["01", "02", "03", "04", "05", "06"]
+    # The idle Activity slot is a static placeholder: no polling and no
+    # hx-preserve id that would pin it once an attempt starts.
+    assert "No attempt in progress." in body
+    assert 'id="activity-work"' not in body
+    assert 'hx-get="/instances/work/activity"' not in body
+
+
 def make_cockpit_client_for_snapshot(snap):
     """A cockpit client with one running instance on an explicit snapshot dict."""
     import asyncio
@@ -459,7 +471,7 @@ def test_rail_head_counts_and_offline_group():
         body = client.get(path).text
         head = body.partition("vc-rail-head")[2].partition("</div>")[0]
         assert "Fleet units (1 on · 1 off)" in head
-        stopped = body.partition('<details class="vc-rail-stopped" open>')[2]
+        stopped = body.partition('<details class="vc-rail-stopped" open')[2]
         assert "<summary>Offline units (1)</summary>" in stopped
         assert 'data-instance="down"' in stopped.partition("</details>")[0]
         assert '<span class="vc-rail-rank">OFF</span>' in body

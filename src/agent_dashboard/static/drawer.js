@@ -43,6 +43,8 @@ function syncRailSelection() {
       el.removeAttribute("aria-current");
     }
   }
+  /* The selected unit stays listed even when the rail filters exclude it. */
+  if (window.applyVcFilters) { window.applyVcFilters(document); }
 }
 
 /* Closing the cockpit is explicit: the drawer's back/close buttons call

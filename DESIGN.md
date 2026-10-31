@@ -79,7 +79,10 @@ Semantic tokens (every text pair meets WCAG AA, 4.5:1 or better):
   stripe; boxed rank tag (`R3`, `OFF`), name, Reach pill, mono repository
   and attempt, mini budget bar, one-line headline. Offline units sit in a
   collapsible group. The selected unit is `--info-bg` with an accent
-  stripe.
+  stripe. Under the rail head the four Fleet Matrix filters repeat as one
+  row of scaled-down chips (mono label, count, LED; no badge or hint) that
+  share the matrix filter state; the selected unit stays listed whatever
+  the filters say.
 - **Instance cockpit**: the drawer has no chrome of its own. A header card
   (4px accent left edge) carries back button, kicker, name, Reach pill,
   status headline box, Logs/Live links and close. Below it three columns
@@ -134,6 +137,13 @@ the main page):
   position before the swap and reapplies it to the container with the
   same key afterwards. The browser clamps an out-of-range value to the
   new content, so a shorter list settles at its end.
+- The page itself is kept too: the Fleet Matrix and the cockpit
+  scroll with the window, and a swap can briefly shorten the page
+  (the fresh fleet HTML carries the default filter set until
+  `fleet.js` reapplies the active one), which clamps the window
+  towards the top. The keeper records the window position with the
+  keyed boxes and restores everything in a microtask, after every
+  other `htmx:afterSwap` listener has rebuilt the page.
 - Positions live in page memory only. A full page reload starts every
   view at its initial position; nothing is written to browser storage
   (`localStorage`/`sessionStorage`).

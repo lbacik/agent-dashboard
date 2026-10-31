@@ -15,7 +15,9 @@
    variant C): 01 Control console and 02 Identity & last attempt; 03 Activity
    and 04 Current attempt; 05 Attempt statistics and 06 Recent events. Each
    module is a `.vc-module` card with a mono `.vc-module-bar` title (see
-   style.css breakpoints). #}
+   style.css breakpoints). Every module renders in every state, so a number
+   always names the same module (03 Activity is a placeholder without a
+   current attempt). #}
 {% macro fig(f) -%}
 <span class="figure">{{ f.text }}{% if f.basis and f.basis != f.text %} <span class="basis">{{ f.basis }}</span>{% endif %}</span>
 {%- endmacro %}
@@ -172,6 +174,16 @@
       </div>
     </details>
   </div>
+  {% else %}
+  {# Without a current Attempt log the module keeps its slot and number but
+     neither polls nor preserves: the live widget above carries the
+     `hx-preserve` id, so it swaps in fresh once an attempt starts. #}
+  <section class="drawer-section vc-module" data-activity-idle>
+    <h3 class="vc-module-bar">03 // Activity</h3>
+    <div class="vc-module-body">
+    <p class="hint">No attempt in progress.</p>
+    </div>
+  </section>
   {% endif %}
   <section class="drawer-section vc-module">
     <h3 class="vc-module-bar">04 // Current attempt</h3>

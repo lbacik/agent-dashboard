@@ -665,6 +665,71 @@ tr.fleet-row:hover td { background: var(--hover); }
   cursor: pointer;
 }
 .vc-rail-empty { margin: 0; padding: 0.65rem; }
+/* Rail filters: the four Fleet Matrix tiles scaled down to one row of
+   chips under the rail head. Same `data-vc-filter` keys and pressed
+   colours as the tiles; the ON/OFF badge and hint drop out (the hint
+   moves to the title), the LED and border carry the state. */
+.vc-rail-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.25rem;
+  padding: 0.4rem;
+  border-bottom: 1px solid var(--line);
+}
+.vc-chip {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  padding: 0.25rem 0.35rem;
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--radius);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.vc-chip:hover { background: var(--hover); border-color: var(--accent-soft); }
+.vc-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.vc-chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--info-bg);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.vc-chip.has-alert { border-left-color: var(--oc-infra); }
+.vc-chip[data-vc-filter="alerts"][aria-pressed="true"] {
+  border-color: var(--oc-infra);
+  background: var(--warn-bg);
+  box-shadow: inset 0 0 0 1px var(--oc-infra);
+}
+.vc-chip[data-vc-filter="offline"][aria-pressed="true"] {
+  border-color: var(--off-ink);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--off-ink);
+}
+.vc-chip-name {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vc-chip[aria-pressed="true"] .vc-chip-name { color: var(--ink); }
+.vc-chip-bottom { display: flex; align-items: center; justify-content: space-between; gap: 0.25rem; }
+.vc-chip-count {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
 .vc-matrix-pane { min-width: 0; }
 
 /* Instance cockpit (prototype variant C): the drawer itself carries no
@@ -1194,8 +1259,8 @@ button.btn:not([disabled]) { cursor: pointer; }
   background: var(--line);
   border: 1px solid var(--muted);
 }
-.vc-tile[aria-pressed="true"] .vc-led { background: var(--oc-complete); border-color: var(--oc-complete); }
-.vc-tile[data-vc-filter="alerts"][aria-pressed="true"] .vc-led { background: var(--oc-infra); border-color: var(--oc-infra); }
+[data-vc-filter][aria-pressed="true"] .vc-led { background: var(--oc-complete); border-color: var(--oc-complete); }
+[data-vc-filter="alerts"][aria-pressed="true"] .vc-led { background: var(--oc-infra); border-color: var(--oc-infra); }
 .vc-name {
   flex: 1;
   min-width: 0;

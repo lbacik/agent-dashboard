@@ -2,7 +2,10 @@
    rows are shown. Every `fleet` SSE re-render replaces the buttons and rows,
    so the active filter set lives in page memory only (a full reload resets
    to Online units) and is reapplied after every swap. No browser storage is
-   used here. */
+   used here. The Fleet units rail carries a scaled-down copy of the same
+   buttons and the same `data-vc-*` rows, so one filter set drives both;
+   the selected rail unit always stays listed (`drawer.js` re-applies the
+   filters after every selection change). */
 (function () {
   var vcFilters = { online: true, alerts: false, working: false, offline: false };
 
@@ -49,7 +52,26 @@
     return document;
   }
 
+  function applyRailFilters() {
+    var items = document.querySelectorAll("li.vc-rail-row");
+    var shown = 0;
+    for (var i = 0; i < items.length; i++) {
+      var keep = rowMatches(items[i]) || !!items[i].querySelector(".vc-rail-item.is-selected");
+      items[i].hidden = !keep;
+      if (keep) { shown++; }
+    }
+    var groups = document.querySelectorAll(".vc-rail-stopped");
+    for (var g = 0; g < groups.length; g++) {
+      groups[g].hidden = !groups[g].querySelector("li.vc-rail-row:not([hidden])");
+    }
+    var empties = document.querySelectorAll("[data-vc-rail-empty]");
+    for (var e = 0; e < empties.length; e++) {
+      empties[e].hidden = items.length === 0 || shown > 0;
+    }
+  }
+
   function applyVcFilters(scope) {
+    applyRailFilters();
     var root = scopeOf(scope);
     var rows = root.querySelectorAll
       ? root.querySelectorAll("tr.fleet-row")
@@ -114,6 +136,8 @@
       norunning[n].hidden = shown > 0 || allOff;
     }
   }
+
+  window.applyVcFilters = applyVcFilters;
 
   document.addEventListener("click", function (e) {
     var tile = e.target && e.target.closest
