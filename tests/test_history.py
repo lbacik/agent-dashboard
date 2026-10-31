@@ -1371,7 +1371,8 @@ def test_pinned_header_wraps_without_horizontal_scroll_and_uses_tokens():
     client, _ = make_client([("worker-a", "running")])
     css = client.get("/static/style.css").text
     block = css.split(".topbar.pinned {", 1)[1].split("}", 1)[0]
-    assert "flex-wrap: wrap" in block
+    topbar = css.split(".topbar {", 1)[1].split("}", 1)[0]
+    assert "flex-wrap: wrap" in topbar
     assert "max-width: 100%" in block
     crumbs = css.split(".crumbs li {", 1)[1].split("}", 1)[0]
     assert "overflow-wrap: anywhere" in crumbs

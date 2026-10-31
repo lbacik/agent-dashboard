@@ -10,11 +10,16 @@
   <script src="/static/sse.js" defer></script>
 </head>
 <body>
-  {# Pages below the fleet view pass a breadcrumb trail; their header pins
-     and carries the trail plus the page's on-demand note and Refresh. #}
+  {# Instrument top bar in three cells: status LED plus the canonical title;
+     the fleet subtitle or, on pages below the fleet view, the breadcrumb
+     trail (that header pins); then chips with real values only (SSE poll
+     interval, Control mode) followed by the page's topbar actions. #}
   <header class="topbar{% if breadcrumbs is defined %} pinned{% endif %}">
-    <div class="topbar-title">
+    <div class="topbar-brand">
+      <span class="topbar-led" aria-hidden="true"></span>
       <h1>Agent fleet dashboard</h1>
+    </div>
+    <div class="topbar-title">
       {% if breadcrumbs is defined %}
       <nav aria-label="Breadcrumb">
         <ol class="crumbs">
@@ -30,6 +35,10 @@
       {% else %}
       <p class="subtitle">Managed instances on this Docker host</p>
       {% endif %}
+    </div>
+    <div class="topbar-chips">
+      {% if poll_interval is defined %}<span class="topbar-chip">Stream <strong>{{ poll_interval }}s</strong></span>{% endif %}
+      {% if control_available is defined %}<span class="topbar-chip">Control <strong>{{ "on" if control_available else "off" }}</strong></span>{% endif %}
     </div>
     {% block topbar_actions %}{% endblock %}
   </header>

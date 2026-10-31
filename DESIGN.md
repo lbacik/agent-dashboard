@@ -3,66 +3,89 @@
 Visual rules for the dashboard UI (`src/agent_dashboard/static/style.css`
 and the Jinja templates).
 
-## Palette: Crisp Technical Daylight
+## Palette: Crisp Technical Daylight (prototype variant C)
 
 Every dashboard page (the fleet view and the Attempt History, Attempt Log
 and Attempt Progress pages) uses the **Crisp Technical Daylight**
-instrument palette: a light slate surface with a white card chrome and a
-slim instrument-style top bar. The top bar keeps the canonical title
-`Agent fleet dashboard`, the breadcrumb trail on sub-pages, the fleet-page
-subtitle and the existing `topbar_actions` block (on-demand note /
-Refresh); it shows only real values, never prototype host/schema/mode
-chips.
+instrument palette of prototype variant C ("Ops Mission Control
+Cockpit"): a cool grey surface, white cards with square corners and mono
+uppercase panel bars.
 
 Base tokens on `:root`:
 
-- `--bg: #eef2f6`, `--card: #ffffff`, `--surface-2: #e2e8f0`,
-  `--hover: #f8fafc`
-- `--ink: #0f172a`, `--muted: #475569`, `--line: #cbd5e1`
-- `--accent: #0284c7`, `--link: #0369a1`
-
-New tokens on `:root`:
-
+- `--bg: #e5e7eb`, `--card: #ffffff`, `--surface-2: #f3f4f6`,
+  `--hover: #f0f9ff`
+- `--ink: #111827`, `--muted: #4b5563`, `--line: #cbd5e1`
+- `--accent: #0284c7`, `--accent-soft: #38bdf8`, `--link: #0369a1`,
+  `--on-accent: #ffffff` (text on a filled badge)
+- `--shadow: rgba(17, 24, 39, 0.12)`: drawer and tooltip shadows.
+- `--radius: 2px`: every card, panel, button, input and bar. Only pills
+  (`.pill`, `.stale-tag`, chips) stay fully rounded.
 - `--font-sans`: system geometric sans stack for labels
   (`system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
   sans-serif`; no web-font fetch, the dashboard is loopback-only per
   ADR 0001).
-- `--font-mono`: system monospace stack for figures
-  (`ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas,
+- `--font-mono`: system monospace stack for figures and instrument
+  labels (`ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas,
   "Liberation Mono", monospace`) with `font-variant-numeric:
   tabular-nums` on figures (budget, context, turns, cache, counts), chart
   axis and segment labels, and paging counts.
-- `--accent-soft: #7dd3fc`: hover/focus borders and the light half of the
-  hatched partly-estimated budget bar.
-- `--shadow: rgba(15, 23, 42, 0.12)`: drawer and tooltip shadows, keyed to
-  the ink colour.
 
-Semantic tokens (unchanged hues, checked against the surfaces above; every
-text pair meets WCAG AA, 4.5:1 or better):
+Semantic tokens (every text pair meets WCAG AA, 4.5:1 or better):
 
-- Reach pills: live `var(--ok-ink)` on `var(--ok-bg)` (5.24:1), stale
-  `var(--warn-ink)` on `var(--warn-bg)` (6.80:1), unreachable
-  `var(--danger-ink)` on `var(--danger-bg)` (7.96:1), not running
-  `var(--off-ink)` on `var(--off-bg)` (6.94:1), unsupported
-  `var(--info-ink)` on `var(--info-bg)` (6.46:1).
-- Figure basis tags and stale markers: `var(--muted)` on `var(--card)`
-  (7.58:1); `.stale-tag` is warn ink on warn bg (6.80:1).
-- Danger/ok/warn/info/off surfaces: `--danger-ink #8c1d1d` on
-  `--danger-bg #fdecec` (7.96:1), `--ok-ink #137333` on `--ok-bg #e6f4ea`
-  (5.24:1), `--warn-ink #7a4b00` on `--warn-bg #fff4e0` (6.80:1),
-  `--info-ink #3949ab` on `--info-bg #e8eaf6` (6.46:1), `--off-ink #45525e`
-  on `--off-bg #eceff1` (6.94:1).
-- ADR 0004 outcome series (`--oc-complete #1a7f37`, `--oc-incomplete
-  #9a6700`, `--oc-handoff #1f6feb`, `--oc-infra #cf222e`,
-  `--oc-nochanges #6e7781`, `--oc-other #8250df`): legend glyphs on
-  `var(--card)` read 5.08/4.87/4.63/5.36/4.55/5.05:1, and the white
-  segment labels on the same fills read the same ratios in reverse; token
-  chart categories reuse these fills (`tok-input` handoff, `tok-cache-read`
-  complete, `tok-cache-creation` incomplete, `tok-output` other).
-  Chart series keep their distinct shapes/patterns alongside colour
-  (ADR 0004).
-- Links use `var(--link)` (`#0369a1` on white, 5.93:1); `var(--accent)`
-  (`#0284c7`) is never body text, only borders, fills and focus rings.
+- Reach pills: live `var(--ok-ink) #166534` on `var(--ok-bg) #dcfce7`
+  (6.49:1), stale `var(--warn-ink) #9a3412` on `var(--warn-bg) #ffedd5`
+  (6.38:1), unreachable `var(--danger-ink) #991b1b` on
+  `var(--danger-bg) #fee2e2` (6.80:1), not running `var(--off-ink)
+  #374151` on `var(--off-bg) #e5e7eb` (8.33:1), unsupported
+  `var(--info-ink) #075985` on `var(--info-bg) #e0f2fe` (6.59:1).
+  `--danger-line: #fca5a5` borders danger surfaces.
+- Muted text: `#4b5563` on card 7.56:1, on `--surface-2` 6.87:1, on
+  `--bg` 6.10:1. Links: `#0369a1` on card 5.93:1, on `--info-bg` 5.17:1.
+- ADR 0004 outcome series: `--oc-complete #15803d`, `--oc-incomplete
+  #b45309`, `--oc-handoff #0369a1`, `--oc-infra #dc2626`,
+  `--oc-nochanges #6b7280`, `--oc-other #7c3aed`; on white they read
+  5.02/5.02/5.93/4.83/4.83/5.70:1, and white segment labels on the same
+  fills read the same ratios. **Deliberate deviation from the prototype:**
+  its `#16a34a`, `#d97706` and `#0284c7` read only 3.30/3.19/4.10:1, so
+  these three use the next darker step of the same hue. Token chart
+  categories reuse these fills (`tok-input` handoff, `tok-cache-read`
+  complete, `tok-cache-creation` incomplete, `tok-output` other). Chart
+  series keep their distinct shapes/patterns alongside colour (ADR 0004).
+- Attention-rank stripes (`--vc-stripe-*`, non-text, beside the Reach pill
+  and headline): alert `#dc2626`, warning `#b45309`, working `#15803d`,
+  idle `#cbd5e1`, offline `#374151`.
+- A filled ON badge uses `--link` (5.93:1 with `--on-accent`), not
+  `--accent` (4.10:1). `var(--accent)` is never body text, only borders,
+  fills and focus rings.
+
+## Instrument chrome (prototype variant C)
+
+- **Top bar**: white, `border-top: 3px solid var(--accent)`, mono. Three
+  cells: a square status LED plus the canonical title `Agent fleet
+  dashboard` (uppercase by CSS); the fleet subtitle or the breadcrumb
+  trail; chips with **real values only** (`Stream <poll>s`, `Control
+  on/off`) followed by the page's `topbar_actions` (on-demand note,
+  Refresh). Never prototype host/schema chips.
+- **Panel bar**: the title strip of every panel (fleet overview summary,
+  rail head, Operations matrix bar, cockpit modules) is mono, 0.72rem,
+  bold, uppercase with 0.04em tracking, on `--surface-2` with a bottom
+  `--line` border.
+- **Fleet Matrix**: four KPI tiles (cards with a 4px left edge, square
+  LED, ON/OFF badge, large mono count and a `filter: …` hint) above the
+  table; the matrix sits in one scroll box opened by the
+  `Operations matrix // <filter summary>` bar.
+- **Fleet units rail**: a flat list with row separators and a 3px rank
+  stripe; boxed rank tag (`R3`, `OFF`), name, Reach pill, mono repository
+  and attempt, mini budget bar, one-line headline. Offline units sit in a
+  collapsible group. The selected unit is `--info-bg` with an accent
+  stripe.
+- **Instance cockpit**: the drawer has no chrome of its own. A header card
+  (4px accent left edge) carries back button, kicker, name, Reach pill,
+  status headline box, Logs/Live links and close. Below it three columns
+  of numbered module cards (`.vc-module` + `.vc-module-bar`):
+  01 Control console, 02 Identity & last attempt; 03 Activity,
+  04 Current attempt; 05 Attempt statistics, 06 Recent events.
 
 ## Theme: light only (for now)
 
@@ -78,8 +101,8 @@ Until we deliberately revisit dark mode:
   `<meta name="color-scheme">` in `base.html`), so the browser keeps form
   controls and scrollbars light.
 - Palette changes are tuned and checked against the light background only.
-- Chrome (top bar, drawer, tooltip) stays light; hierarchy comes from
-  borders, the `--surface-2` tint and shadows.
+- Chrome (top bar, cockpit modules, tooltip) stays light; hierarchy comes
+  from borders, the `--surface-2` panel bars and shadows.
 - Text meets WCAG AA contrast against its surface, and no status or chart
   series relies on colour alone (see
   [ADR 0004](docs/adr/0004-history-charts-inline-svg.md)).

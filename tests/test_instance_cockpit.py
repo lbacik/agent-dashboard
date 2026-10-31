@@ -451,3 +451,33 @@ def test_cockpit_grid_style_rules():
     assert cockpit_rules
     assert _re.search(r"#[0-9a-fA-F]{3,8}\b", cockpit_rules) is None
     assert "rgb(" not in cockpit_rules
+
+
+def test_rail_head_counts_and_offline_group():
+    client, _, _ = make_cockpit_client()
+    for path in ("/", "/partials/fleet"):
+        body = client.get(path).text
+        head = body.partition("vc-rail-head")[2].partition("</div>")[0]
+        assert "Fleet units (1 on · 1 off)" in head
+        stopped = body.partition('<details class="vc-rail-stopped" open>')[2]
+        assert "<summary>Offline units (1)</summary>" in stopped
+        assert 'data-instance="down"' in stopped.partition("</details>")[0]
+        assert '<span class="vc-rail-rank">OFF</span>' in body
+
+
+def test_cockpit_modules_are_numbered_cards_in_order():
+    client = make_live_cockpit_client()
+    body = client.get("/instances/work").text
+    titles = re.findall(r'class="vc-module-bar">(?:<span class="activity-label">)?([^<]+)<', body)
+    assert titles == [
+        "01 // Control console",
+        "02 // Identity &amp; last attempt",
+        "03 // Activity",
+        "04 // Current attempt",
+        "05 // Attempt statistics",
+        "06 // Recent events",
+    ]
+    assert body.count('class="vc-module-body"') == 5
+    head = body.partition('class="drawer-head"')[2].partition("vc-cockpit-grid")[0]
+    assert '<span class="vc-hl-label">Status headline</span>' in head
+    assert "Unit cockpit // example-owner/example-repo" in head

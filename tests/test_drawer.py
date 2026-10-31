@@ -503,7 +503,9 @@ def test_drawer_wide_layout_rules():
     drawer_block = css.partition(".drawer {")[2].partition("}")[0]
     assert "fixed" not in drawer_block
     assert "width: min(92vw, max(30rem, 50vw))" not in css
-    assert "repeat(auto-fill, minmax(min(100%, 24rem), 1fr))" in css
+    # Inside a cockpit module the facts read as one label/value column.
+    facts = css.partition(".drawer dl.facts {")[2].partition("}")[0]
+    assert "grid-template-columns: minmax(0, 1fr)" in facts
     assert "text-overflow: ellipsis" in css
     assert ".drawer dl.facts dt, .drawer dl.facts dd { min-width: 0;" in css
 
@@ -607,13 +609,16 @@ def test_drawer_activity_disclosure_markup_is_unchanged():
     snap["control"]["active_attempt"]["started_at"] = "2026-09-30T09:30:00.123456Z"
     client, _, _ = make_fleet_client({"work": snap})
     body = client.get("/instances/work").text
-    assert '<details class="activity" open data-activity-group="activity">' in body
     assert (
-        '<summary><span class="activity-label">Activity</span>'
+        '<details class="activity vc-module" open data-activity-group="activity">'
+        in body
+    )
+    assert (
+        '<summary class="vc-module-bar"><span class="activity-label">03 // Activity</span>'
         ' <span id="activity-work-sum" class="activity-sum"></span></summary>'
         in body
     )
-    summary = body.partition("<summary>")[2].partition("</summary>")[0]
+    summary = body.partition('<summary class="vc-module-bar">')[2].partition("</summary>")[0]
     assert "<svg" not in summary
     assert "▸" not in summary
     assert "▾" not in summary

@@ -226,3 +226,23 @@ def test_matrix_colours_are_root_tokens():
     assert matrix_rules
     assert _re.search(r"#[0-9a-fA-F]{3,8}\b", matrix_rules) is None
     assert "rgb(" not in matrix_rules
+
+
+def test_kpi_tiles_and_matrix_panel_bar_follow_variant_c():
+    client, _, _ = make_matrix_client()
+    for path in ("/", "/fleet"):
+        body = client.get(path).text
+        # Each tile has a label row and a count row with its filter hint.
+        assert body.count('<span class="vc-tile-top">') == 4
+        assert body.count('<span class="vc-tile-bottom">') == 4
+        assert "filter: hold / handoff / stale" in body
+        # The alerts tile carries the alert edge while alerts exist.
+        alerts = re.search(r'<button[^>]*data-vc-filter="alerts"[^>]*>', body).group(0)
+        assert "has-alert" in alerts
+        # A mono panel bar inside the scroll box names the matrix and its
+        # live filter summary.
+        box = body.partition('data-scroll-key="fleet-running"')[2]
+        bar = box.partition('<div class="vc-panel-bar">')[2].partition("</div>")[0]
+        assert "Operations matrix //" in bar
+        assert "data-vc-summary" in bar
+        assert box.index('class="vc-panel-bar"') < box.index('<table class="fleet">')
