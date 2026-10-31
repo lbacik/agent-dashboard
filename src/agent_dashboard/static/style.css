@@ -659,6 +659,25 @@ dl.facts dd { margin: 0; }
 }
 .drawer dl.facts dt .sub-kind { display: block; font-size: 0.78rem; }
 
+/* Instance cockpit grid: Control & Identity, live telemetry and 90-day
+   statistics sit side by side above 1360px; below that the columns wrap
+   (two, then one below 960px) with no horizontal page overflow. */
+.vc-cockpit-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 1.5rem;
+  align-items: start;
+  min-width: 0;
+}
+.vc-cockpit-col { min-width: 0; }
+.drawer-head > div { min-width: 0; flex: 1 1 auto; }
+@media (max-width: 1360px) {
+  .vc-cockpit-grid { grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); }
+}
+@media (max-width: 960px) {
+  .vc-cockpit-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 ul.events { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
 ul.events li {
   padding: 0.3rem 0;
