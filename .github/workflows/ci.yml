@@ -15,8 +15,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
+      - name: Check lockfile is up to date
+        run: uv lock --check
       - name: Sync dependencies
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev
       - name: Lint
         run: uv run ruff check
       - name: Test
