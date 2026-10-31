@@ -6,6 +6,43 @@ function closeDrawer() {
   var url = new URL(window.location.href);
   url.searchParams.delete("instance");
   history.replaceState(null, "", url.pathname + url.search + url.hash);
+  syncRailSelection();
+}
+
+/* The inspected rail item stays highlighted across `fleet` SSE swaps: the
+   server marks it on the initial `?instance=` render and this reapplies it
+   from the URL after every swap. Rail buttons carry their instance name in
+   `data-instance`, so the sync never parses URLs. */
+function syncRailSelection() {
+  var params;
+  try {
+    params = new URLSearchParams(window.location.search);
+  } catch (e) { return; }
+  var name = params.get("instance") || "";
+  var items = document.querySelectorAll(".vc-rail-item");
+  for (var i = 0; i < items.length; i++) {
+    var el = items[i];
+    var itemName = el.getAttribute("data-instance") || "";
+    if (!itemName) {
+      var href = el.getAttribute("hx-get") || "";
+      var prefix = "/instances/";
+      if (href.indexOf(prefix) === 0) {
+        try {
+          itemName = decodeURIComponent(href.slice(prefix.length));
+        } catch (err) {
+          itemName = href.slice(prefix.length);
+        }
+      }
+    }
+    var on = !!name && itemName === name;
+    if (on) {
+      el.classList.add("is-selected");
+      el.setAttribute("aria-current", "true");
+    } else {
+      el.classList.remove("is-selected");
+      el.removeAttribute("aria-current");
+    }
+  }
 }
 
 /* Closing the cockpit is explicit: the drawer's back/close buttons call
@@ -24,6 +61,7 @@ window.addEventListener("popstate", function () {
   var name = params.get("instance") || "";
   if (!name) {
     holder.innerHTML = "";
+    syncRailSelection();
     return;
   }
   if (window.htmx && window.htmx.ajax) {
@@ -34,44 +72,12 @@ window.addEventListener("popstate", function () {
   } else {
     fetch("/instances/" + encodeURIComponent(name))
       .then(function (r) { return r.text(); })
-      .then(function (html) { holder.innerHTML = html; })
+      .then(function (html) { holder.innerHTML = html; syncRailSelection(); })
       .catch(function () { /* keep the current workspace on fetch failure */ });
   }
 });
 
-/* The inspected rail item stays highlighted across `fleet` SSE swaps: the
-   server marks it on the initial `?instance=` render and this reapplies it
-   from the URL after every swap. */
 (function () {
-  function syncRailSelection() {
-    var params;
-    try {
-      params = new URLSearchParams(window.location.search);
-    } catch (e) { return; }
-    var name = params.get("instance") || "";
-    var items = document.querySelectorAll(".vc-rail-item");
-    for (var i = 0; i < items.length; i++) {
-      var el = items[i];
-      var href = el.getAttribute("hx-get") || "";
-      var prefix = "/instances/";
-      var itemName = "";
-      if (href.indexOf(prefix) === 0) {
-        try {
-          itemName = decodeURIComponent(href.slice(prefix.length));
-        } catch (e) {
-          itemName = href.slice(prefix.length);
-        }
-      }
-      var on = !!name && itemName === name;
-      if (on) {
-        el.classList.add("is-selected");
-        el.setAttribute("aria-current", "true");
-      } else {
-        el.classList.remove("is-selected");
-        el.removeAttribute("aria-current");
-      }
-    }
-  }
   document.addEventListener("htmx:afterSwap", syncRailSelection);
   document.addEventListener("htmx:afterSettle", syncRailSelection);
   document.addEventListener("htmx:sseMessage", syncRailSelection);

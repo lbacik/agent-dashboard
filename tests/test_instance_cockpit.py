@@ -91,6 +91,8 @@ def test_rail_lists_running_and_stopped_with_stripes():
         # Every rail item switches the cockpit like a matrix row.
         assert body.count('hx-target="#drawer-holder"') >= 2
         assert body.count('hx-push-url="/?instance=') >= 2
+        assert 'data-instance="work"' in body
+        assert 'data-instance="down"' in body
 
 
 def test_fleet_scroll_keys_are_rail_and_running():

@@ -495,10 +495,11 @@ tr.fleet-row:hover td { background: var(--hover); }
    drawer the matrix pane spans the full width and the rail hides; with a
    drawer the matrix hides and the rail shows beside the inline cockpit. */
 #live:not(:has(#drawer)) .vc-rail { display: none; }
-#live:not(:has(#drawer)) .vc-matrix-pane { min-width: 0; }
+#live:not(:has(#drawer)) .vc-matrix-pane { width: 100%; min-width: 0; }
 #live:has(#drawer) .vc-matrix-pane { display: none; }
 #live:has(#drawer) .vc-rail { display: block; }
 #live:has(#drawer) #fleet, #live:has(#drawer) #drawer-holder { min-width: 0; }
+#live:has(#drawer) { display: block; }
 @media (min-width: 960px) {
   #live:has(#drawer) { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 1rem; align-items: start; }
 }

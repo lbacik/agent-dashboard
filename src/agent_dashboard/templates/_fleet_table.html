@@ -44,6 +44,7 @@
     {% for row in running %}
     <li class="vc-rail-row">
       <button type="button" class="vc-rail-item {{ stripe_class(row) }}{% if row.name == selected %} is-selected{% endif %}"{% if row.name == selected %} aria-current="true"{% endif %}
+        data-instance="{{ row.name }}"
         hx-get="/instances/{{ row.name | urlencode }}"
         hx-target="#drawer-holder"
         hx-swap="innerHTML"
@@ -61,6 +62,7 @@
     {% set d = row.drawer %}
     <li class="vc-rail-row">
       <button type="button" class="vc-rail-item {{ stripe_class(row) }}{% if row.name == selected %} is-selected{% endif %}"{% if row.name == selected %} aria-current="true"{% endif %}
+        data-instance="{{ row.name }}"
         hx-get="/instances/{{ row.name | urlencode }}"
         hx-target="#drawer-holder"
         hx-swap="innerHTML"
