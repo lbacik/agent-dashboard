@@ -6,6 +6,8 @@
 #   DASHBOARD_BIND=<pi-lan-ip>  AGENT_DASHBOARD_ALLOWED_HOSTS=<hostname>,<ip>
 # Defaults publish on loopback only.
 
+name: fleet-dashboard
+
 services:
   dashboard:
     build: .

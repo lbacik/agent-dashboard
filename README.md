@@ -123,6 +123,29 @@ docker compose build
 docker compose up -d
 ```
 
+The deployment runs as the fixed Compose project `fleet-dashboard`
+(top-level `name:` in `docker-compose.yml`), whatever directory the
+repository is checked out in. Without a fixed name Compose derives the
+project from the directory name, so an agent instance deployed from a
+same-named directory lands in the same project: each deployment then
+reports the other's container as an orphan, and `docker compose
+up/down --remove-orphans` in either directory removes the other
+deployment's container. Do not override the name with `-p` /
+`--project-name` or `COMPOSE_PROJECT_NAME` for this deployment — those
+take precedence over `name:` and reintroduce the collision.
+
+One-time migration for hosts already running the deployment under the
+old derived name (`agent-dashboard`): stop the old project first, then
+start the new one:
+
+```sh
+docker compose -p agent-dashboard down
+docker compose up -d
+```
+
+Do not add `--remove-orphans` to the stop command: that flag would also
+remove a co-located agent instance's container.
+
 Then open `http://<host>:<port>` from another machine on the LAN; the fleet
 table is filled by label discovery plus `docker exec agentctl telemetry
 --json`, both executed by the host daemon through the mounted socket.
