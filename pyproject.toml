@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-dashboard"
-version = "0.3.2"
+version = "0.3.3"
 description = "Web dashboard for a fleet of simple-coding-agent containers on one Docker host, with optional control actions (read-only with control off)."
 readme = "README.md"
 requires-python = ">=3.11"
