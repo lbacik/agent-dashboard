@@ -1,32 +1,73 @@
-{# Fleet table: running instances in the main table, each row ending with
-   labelled log buttons; stopped instances in a collapsed details section
-   below it with a slim table. Rows open the instance drawer; the log
-   buttons stop propagation so they follow their link instead. Each table
-   sits in a .table-scroll box so a viewport narrower than the table
-   scrolls the table, not the page. Each box opts into the shared scroll
-   keeper (`scroll-keep.js`) with a stable key (`fleet-running` and
-   `fleet-not-running`), so the `fleet` SSE re-render keeps the horizontal
-   position. #}
+{# Fleet Matrix: running and stopped managed instances live in one table,
+   filtered by the KPI strip above it. The strip holds four toggle buttons
+   (`Online units`, `Operator alerts`, `Active executions`, `Offline units`)
+   with server-rendered counts; the fleet script (`fleet.js`) shows a row
+   when any active filter matches its `data-vc-*` attributes. By default only
+   `Online units` is ON, so stopped rows render with `hidden` in the initial
+   HTML. The single `.table-scroll` box keeps `data-scroll-key="fleet-running"`.
+   Every row carries a rank-tier stripe class (`stripe-alert`, `stripe-warning`,
+   `stripe-working`, `stripe-idle`, `stripe-offline`) keyed to its Attention
+   rank; the stripe adds to the Reach pill and Status headline, never replacing
+   them. Rows open the instance drawer; the log buttons stop propagation. #}
 {% macro logs_icon() -%}
 <svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 1.5h6L13 5v9.5H3.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9.5 1.5V5H13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8h5M5.5 10.5h5M5.5 13h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
 {%- endmacro %}
 {% macro live_icon() -%}
 <svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M1 8.5h3l1.8-5 3.4 9 1.8-4H15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
 {%- endmacro %}
+{% macro stripe_class(row) -%}
+{%- if row.state != "running" %}stripe-offline{%- elif row.rank <= 2 %}stripe-alert{%- elif row.rank <= 4 %}stripe-warning{%- elif row.rank == 5 or (row.detail is not none and row.detail.attempt_kind == "active") %}stripe-working{%- else %}stripe-idle{%- endif %}
+{%- endmacro %}
 {% if error %}
 <div class="banner" role="alert">Discovery failed: {{ error }}</div>
 {% endif %}
 {% set running = rows | selectattr("state", "equalto", "running") | list %}
 {% set stopped = rows | rejectattr("state", "equalto", "running") | list %}
-{% if running %}
+{% set ns = namespace(alerts=0, working=0) %}
+{% for row in running %}
+{% if row.rank <= 4 %}{% set ns.alerts = ns.alerts + 1 %}{% endif %}
+{% if row.detail is not none and row.detail.attempt_kind == "active" %}{% set ns.working = ns.working + 1 %}{% endif %}
+{% endfor %}
+<div class="vc-bar">
+  <div class="vc-filters" role="group" aria-label="Fleet filters">
+    <button type="button" class="vc-tile is-on" data-vc-filter="online" aria-pressed="true">
+      <span class="vc-led" aria-hidden="true"></span>
+      <span class="vc-name">Online units</span>
+      <span class="vc-count">{{ running | length }}</span>
+      <span class="vc-state">ON</span>
+    </button>
+    <button type="button" class="vc-tile" data-vc-filter="alerts" aria-pressed="false">
+      <span class="vc-led" aria-hidden="true"></span>
+      <span class="vc-name">Operator alerts</span>
+      <span class="vc-count">{{ ns.alerts }}</span>
+      <span class="vc-state">OFF</span>
+    </button>
+    <button type="button" class="vc-tile" data-vc-filter="working" aria-pressed="false">
+      <span class="vc-led" aria-hidden="true"></span>
+      <span class="vc-name">Active executions</span>
+      <span class="vc-count">{{ ns.working }}</span>
+      <span class="vc-state">OFF</span>
+    </button>
+    <button type="button" class="vc-tile" data-vc-filter="offline" aria-pressed="false">
+      <span class="vc-led" aria-hidden="true"></span>
+      <span class="vc-name">Offline units</span>
+      <span class="vc-count">{{ stopped | length }}</span>
+      <span class="vc-state">OFF</span>
+    </button>
+  </div>
+  <div class="vc-summary" aria-live="polite"><span data-vc-summary>ONLINE ({{ running | length }} SHOWN)</span></div>
+</div>
+{% if rows %}
 <div class="table-scroll" data-scroll-key="fleet-running">
 <table class="fleet">
   <thead>
     <tr><th>Instance</th><th>Status headline</th><th>Reach</th><th>Intake</th><th>Attempt</th><th>Budget</th><th>Main context</th><th>Turns</th><th>Cache hit rate</th><th>Errors</th><th><span class="sr-only">Logs</span></th></tr>
   </thead>
   <tbody>
-    {% for row in running %}
-    <tr class="fleet-row"
+    {% for row in rows %}
+    {% if row.state == "running" %}
+    <tr class="fleet-row {{ stripe_class(row) }}"
+        data-vc-online="1"{% if row.rank <= 4 %} data-vc-alerts="1"{% endif %}{% if row.detail is not none and row.detail.attempt_kind == "active" %} data-vc-working="1"{% endif %}
         hx-get="/instances/{{ row.name | urlencode }}"
         hx-target="#drawer-holder"
         hx-swap="innerHTML"
@@ -54,41 +95,38 @@
         {% if row.live_url %}<a class="btn btn-live" href="{{ row.live_url }}" onclick="event.stopPropagation()">{{ live_icon() }} Live #{{ row.live_issue }}</a>{% endif %}
       </div></td>
     </tr>
+    {% else %}
+    {% set d = row.drawer %}
+    <tr class="fleet-row {{ stripe_class(row) }}"
+        data-vc-offline="1"
+        hidden
+        hx-get="/instances/{{ row.name | urlencode }}"
+        hx-target="#drawer-holder"
+        hx-swap="innerHTML"
+        hx-push-url="/?instance={{ row.name | urlencode }}">
+      <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{{ row.detail.repository_display }}</div></td>
+      <td class="headline">{{ row.headline }}</td>
+      <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.age_text %} <span class="age">last seen {{ row.age_text }} ago</span>{% endif %}</td>
+      <td><span class="hint">n/a</span></td>
+      <td>{% if d and d.last_present %}{% if d.last_issue is not none %}#{{ d.last_issue }} · {% endif %}{{ d.last_outcome or "n/a" }}{% if d.last_finished_at %} <span class="age">{{ d.last_finished_at }}</span>{% endif %}{% else %}<span class="hint">n/a</span>{% endif %}</td>
+      <td><div class="figure"><span class="hint">n/a</span></div></td>
+      <td><div class="figure"><span class="hint">n/a</span></div></td>
+      <td><div class="figure"><span class="hint">n/a</span></div></td>
+      <td><div class="figure"><span class="hint">n/a</span></div></td>
+      <td><span class="hint">n/a</span></td>
+      <td class="row-actions">
+        <a class="btn" href="/instances/{{ row.name | urlencode }}/history" onclick="event.stopPropagation()">{{ logs_icon() }} Logs</a>
+      </td>
+    </tr>
+    {% endif %}
     {% endfor %}
   </tbody>
 </table>
 </div>
-{% elif rows %}
-<p class="empty">No running managed instances.</p>
+<p class="vc-empty" data-vc-empty hidden>No filters active — the matrix is hiding every unit. <button type="button" data-vc-reset>Reset to Online units</button></p>
+{% if not running %}
+<p class="empty" data-vc-no-running>No running managed instances.</p>
+{% endif %}
 {% else %}
 <p class="empty">No managed instances found.</p>
-{% endif %}
-{% if stopped %}
-<details class="not-running" data-persist="not-running">
-  <summary>Not running ({{ stopped | length }})</summary>
-  <div class="table-scroll" data-scroll-key="fleet-not-running">
-  <table class="fleet">
-    <thead>
-      <tr><th>Instance</th><th>Reach</th><th>Last finished attempt</th><th><span class="sr-only">Logs</span></th></tr>
-    </thead>
-    <tbody>
-      {% for row in stopped %}
-      {% set d = row.drawer %}
-      <tr class="fleet-row"
-          hx-get="/instances/{{ row.name | urlencode }}"
-          hx-target="#drawer-holder"
-          hx-swap="innerHTML"
-          hx-push-url="/?instance={{ row.name | urlencode }}">
-        <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{{ row.detail.repository_display }}</div></td>
-        <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.age_text %} <span class="age">last seen {{ row.age_text }} ago</span>{% endif %}</td>
-        <td>{% if d and d.last_present %}{% if d.last_issue is not none %}#{{ d.last_issue }} · {% endif %}{{ d.last_outcome or "n/a" }}{% if d.last_finished_at %} <span class="age">{{ d.last_finished_at }}</span>{% endif %}{% else %}<span class="hint">n/a</span>{% endif %}</td>
-        <td class="row-actions">
-          <a class="btn" href="/instances/{{ row.name | urlencode }}/history" onclick="event.stopPropagation()">{{ logs_icon() }} Logs</a>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-</details>
 {% endif %}

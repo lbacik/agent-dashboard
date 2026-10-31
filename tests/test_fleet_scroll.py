@@ -1,11 +1,11 @@
-"""Fleet tables keep their horizontal scroll position across live refreshes.
+"""The Fleet Matrix keeps its horizontal scroll position across live refreshes.
 
-Both `.table-scroll` boxes in the fleet fragment (running instances and the
-collapsed "Not running" section) opt into the shared scroll keeper
-(`scroll-keep.js`) with a stable key, so every `fleet` SSE re-render —
-poll cycles and the fresh table sent when the stream reconnects —
-reapplies the saved horizontal position. Positions live in page memory
-only, so a reload starts both tables at the left edge.
+The single `.table-scroll` box in the fleet fragment opts into the shared
+scroll keeper (`scroll-keep.js`) with a stable key (`fleet-running`), so every
+`fleet` SSE re-render — poll cycles and the fresh table sent when the stream
+reconnects — reapplies the saved horizontal position. Positions live in page
+memory only, so a reload starts the table at the left edge. There is no
+"Not running" section and no `fleet-not-running` key anymore.
 """
 
 import re
@@ -13,7 +13,6 @@ import re
 from test_web import make_client, make_live_client
 
 RUNNING_KEY = '<div class="table-scroll" data-scroll-key="fleet-running">'
-NOT_RUNNING_KEY = '<div class="table-scroll" data-scroll-key="fleet-not-running">'
 
 SCROLL_BOX = re.compile(r'<div[^>]*class="table-scroll"[^>]*>')
 
@@ -38,22 +37,22 @@ def test_running_table_scroll_container_carries_stable_key():
         assert_keyed_boxes(body, ["fleet-running"])
 
 
-def test_not_running_table_scroll_container_carries_stable_key():
+def test_stopped_rows_share_the_single_scroll_container():
     client, _ = make_client([("up", "running"), ("down", "not running")])
     for path in ("/", "/fleet"):
         body = client.get(path).text
-        assert NOT_RUNNING_KEY in body
-        _, _, details = body.partition('<details class="not-running"')
-        assert "Not running (1)" in body
-        assert NOT_RUNNING_KEY in details
-        assert_keyed_boxes(body, ["fleet-running", "fleet-not-running"])
+        assert RUNNING_KEY in body
+        assert "data-scroll-key=\"fleet-not-running\"" not in body
+        assert '<details class="not-running"' not in body
+        assert_keyed_boxes(body, ["fleet-running"])
 
 
-def test_not_running_only_fragment_still_keys_its_scroll_container():
+def test_stopped_only_fragment_still_keys_its_scroll_container():
     client, _ = make_client([("down", "not running")])
     body = client.get("/fleet").text
     assert "No running managed instances." in body
-    assert_keyed_boxes(body, ["fleet-not-running"])
+    assert RUNNING_KEY in body
+    assert_keyed_boxes(body, ["fleet-running"])
 
 
 def test_stream_reconnect_table_carries_scroll_keys():
@@ -66,10 +65,9 @@ def test_stream_reconnect_table_carries_scroll_keys():
     client, _, _, _ = make_live_client()
     index = client.get("/").text
     partial = client.get("/fleet").text
-    assert_keyed_boxes(index, ["fleet-running", "fleet-not-running"])
+    assert_keyed_boxes(index, ["fleet-running"])
     assert RUNNING_KEY in partial
-    assert NOT_RUNNING_KEY in partial
-    assert_keyed_boxes(partial, ["fleet-running", "fleet-not-running"])
+    assert_keyed_boxes(partial, ["fleet-running"])
 
 
 def test_scroll_keeper_restores_both_axes_without_moving_page():
