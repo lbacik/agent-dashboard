@@ -444,6 +444,52 @@ def test_read_file_timeout_kills_and_reaps(monkeypatch):
     assert proc_holder["proc"].reaped == [True]
 
 
+def test_read_file_cancellation_kills_and_reaps(monkeypatch):
+    """Cancelling a ``read_file`` kills the ``docker cp`` child as well.
+
+    The cancellation propagates as ``CancelledError``, never as a gateway
+    timeout error, and the child is reaped before it propagates.
+    """
+
+    class HangingReader:
+        async def read(self, n: int = -1) -> bytes:
+            await asyncio.sleep(3600)
+            return b""
+
+    class HangingProcess(_FakeCpProcess):
+        def __init__(self):
+            super().__init__(b"")
+            self.returncode = None
+            self.stdout = HangingReader()
+
+    started = asyncio.Event()
+    holder: dict = {}
+
+    async def fake_create(*argv, **kwargs):
+        holder["proc"] = HangingProcess()
+        started.set()
+        return holder["proc"]
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+
+    async def scenario():
+        task = asyncio.create_task(
+            DockerGateway(log_timeout=30.0).read_file(
+                "abc123", 98, STARTED_DASH, FILE_JSON
+            )
+        )
+        await started.wait()
+        await asyncio.sleep(0)
+        task.cancel()
+        # CancelledError propagates unwrapped: never a gateway timeout error.
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert holder["proc"].killed == [True]
+    assert holder["proc"].reaped == [True]
+
+
 def test_read_file_missing_cli(monkeypatch):
     async def fake_create(*argv, **kwargs):
         raise FileNotFoundError("no docker")

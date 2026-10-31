@@ -1140,6 +1140,49 @@ class FileResult:
     truncated: bool
 
 
+async def _kill_and_reap(proc) -> None:
+    """Kill a still-running Docker CLI child and reap it.
+
+    A child that already exited (``returncode`` set, so the transport has
+    reaped it) is left alone; a child that disappears mid-cleanup is quiet
+    too, so a cancellation or error path never raises a second error.
+    Always awaited before the original error propagates, so an orphaned
+    ``docker`` child can never keep a container locked in dockerd.
+    """
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            await proc.wait()
+        except ProcessLookupError:
+            pass
+
+
+async def _bounded_wait(proc, coro, timeout: float, error_cls, message: str):
+    """Await a ``proc`` read bounded by ``timeout`` seconds, then return it.
+
+    On the gateway's own timeout the child is killed and reaped (exactly as
+    before), then the typed error raises. On cancellation or any other error
+    a still-running child is likewise killed and reaped before the original
+    error propagates (a ``CancelledError`` stays a ``CancelledError``, never
+    a gateway error), so no exit path leaks a running ``docker`` child.
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout)
+    except TimeoutError as exc:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        await proc.wait()
+        raise error_cls(message) from exc
+    except BaseException:
+        await _kill_and_reap(proc)
+        raise
+
+
 class _NeedMoreTar(Exception):
     """Internal: fewer than one tar header block read so far."""
 
@@ -1286,17 +1329,13 @@ class DockerGateway:
 
     async def list_instances(self) -> list[ManagedInstance]:
         proc = await self._run(self.argv())
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), self.timeout)
-        except TimeoutError as exc:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            await proc.wait()
-            raise DiscoveryTimeoutError(
-                f"docker ps timed out after {self.timeout:g} s"
-            ) from exc
+        stdout, stderr = await _bounded_wait(
+            proc,
+            proc.communicate(),
+            self.timeout,
+            DiscoveryTimeoutError,
+            f"docker ps timed out after {self.timeout:g} s",
+        )
         if proc.returncode != 0:
             detail = stderr.decode(errors="replace").strip()
             if "permission denied" in detail.lower():
@@ -1314,17 +1353,13 @@ class DockerGateway:
         client process.
         """
         proc = await self._run(argv_telemetry(container_id))
-        try:
-            stdout, _stderr = await asyncio.wait_for(proc.communicate(), self.timeout)
-        except TimeoutError as exc:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            await proc.wait()
-            raise TelemetryTimeoutError(
-                f"docker exec timed out after {self.timeout:g} s"
-            ) from exc
+        stdout, _stderr = await _bounded_wait(
+            proc,
+            proc.communicate(),
+            self.timeout,
+            TelemetryTimeoutError,
+            f"docker exec timed out after {self.timeout:g} s",
+        )
         return TelemetryExec(stdout=stdout, returncode=proc.returncode)
 
     def control_in_flight(self, container_id: str) -> bool:
@@ -1345,19 +1380,13 @@ class DockerGateway:
         "outcome unknown".
         """
         proc = await self._run(argv)
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), self.control_exec_timeout
-            )
-        except TimeoutError as exc:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            await proc.wait()
-            raise ControlTimeoutError(
-                f"docker exec timed out after {self.control_exec_timeout:g} s"
-            ) from exc
+        stdout, stderr = await _bounded_wait(
+            proc,
+            proc.communicate(),
+            self.control_exec_timeout,
+            ControlTimeoutError,
+            f"docker exec timed out after {self.control_exec_timeout:g} s",
+        )
         return ControlExec(stdout=stdout, stderr=stderr, returncode=proc.returncode)
 
     def _claim_control(self, container_id: str) -> None:
@@ -1444,17 +1473,13 @@ class DockerGateway:
         is spawned.
         """
         proc = await self._run(argv_attempt_events(container_id, issue, started))
-        try:
-            stdout, _stderr = await asyncio.wait_for(proc.communicate(), self.timeout)
-        except TimeoutError as exc:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            await proc.wait()
-            raise TelemetryTimeoutError(
-                f"docker exec timed out after {self.timeout:g} s"
-            ) from exc
+        stdout, _stderr = await _bounded_wait(
+            proc,
+            proc.communicate(),
+            self.timeout,
+            TelemetryTimeoutError,
+            f"docker exec timed out after {self.timeout:g} s",
+        )
         return TelemetryExec(stdout=stdout, returncode=proc.returncode)
 
     async def attempt_history(self, container_id: str) -> TelemetryExec:
@@ -1467,17 +1492,13 @@ class DockerGateway:
         raises :class:`ValueError` before anything is spawned.
         """
         proc = await self._run(argv_attempt_history(container_id))
-        try:
-            stdout, _stderr = await asyncio.wait_for(proc.communicate(), self.timeout)
-        except TimeoutError as exc:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            await proc.wait()
-            raise TelemetryTimeoutError(
-                f"docker exec timed out after {self.timeout:g} s"
-            ) from exc
+        stdout, _stderr = await _bounded_wait(
+            proc,
+            proc.communicate(),
+            self.timeout,
+            TelemetryTimeoutError,
+            f"docker exec timed out after {self.timeout:g} s",
+        )
         return TelemetryExec(stdout=stdout, returncode=proc.returncode)
 
     async def attempt_log(
@@ -1496,19 +1517,13 @@ class DockerGateway:
         argv = argv_attempt_log(container_id, issue, started)
         async with self._log_semaphore:
             proc = await self._run(argv)
-            try:
-                stdout, _stderr = await asyncio.wait_for(
-                    proc.communicate(), self.log_timeout
-                )
-            except TimeoutError as exc:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                await proc.wait()
-                raise AttemptLogTimeoutError(
-                    f"docker exec timed out after {self.log_timeout:g} s"
-                ) from exc
+            stdout, _stderr = await _bounded_wait(
+                proc,
+                proc.communicate(),
+                self.log_timeout,
+                AttemptLogTimeoutError,
+                f"docker exec timed out after {self.log_timeout:g} s",
+            )
             return TelemetryExec(stdout=stdout, returncode=proc.returncode)
 
     async def attempt_tail_log(
@@ -1527,19 +1542,13 @@ class DockerGateway:
         argv = argv_attempt_tail_log(container_id, issue, started)
         async with self._log_semaphore:
             proc = await self._run(argv)
-            try:
-                stdout, _stderr = await asyncio.wait_for(
-                    proc.communicate(), self.log_timeout
-                )
-            except TimeoutError as exc:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                await proc.wait()
-                raise AttemptLogTimeoutError(
-                    f"docker exec timed out after {self.log_timeout:g} s"
-                ) from exc
+            stdout, _stderr = await _bounded_wait(
+                proc,
+                proc.communicate(),
+                self.log_timeout,
+                AttemptLogTimeoutError,
+                f"docker exec timed out after {self.log_timeout:g} s",
+            )
             return TelemetryExec(stdout=stdout, returncode=proc.returncode)
 
     async def list_run_files(
@@ -1558,19 +1567,13 @@ class DockerGateway:
         number, dash_started = validate_attempt_ref(issue, started)
         async with self._log_semaphore:
             proc = await self._run(argv)
-            try:
-                stdout, _stderr = await asyncio.wait_for(
-                    proc.communicate(), self.log_timeout
-                )
-            except TimeoutError as exc:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                await proc.wait()
-                raise AttemptLogTimeoutError(
-                    f"docker exec timed out after {self.log_timeout:g} s"
-                ) from exc
+            stdout, _stderr = await _bounded_wait(
+                proc,
+                proc.communicate(),
+                self.log_timeout,
+                AttemptLogTimeoutError,
+                f"docker exec timed out after {self.log_timeout:g} s",
+            )
             if proc.returncode != 0:
                 raise FileNotFoundError(
                     f"attempt not found: {number}/{dash_started}"
@@ -1594,19 +1597,13 @@ class DockerGateway:
         """
         async with self._log_semaphore:
             proc = await self._run(argv)
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), self.log_timeout
-                )
-            except TimeoutError as exc:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                await proc.wait()
-                raise AttemptLogTimeoutError(
-                    f"docker cp timed out after {self.log_timeout:g} s"
-                ) from exc
+            stdout, stderr = await _bounded_wait(
+                proc,
+                proc.communicate(),
+                self.log_timeout,
+                AttemptLogTimeoutError,
+                f"docker cp timed out after {self.log_timeout:g} s",
+            )
             if proc.returncode != 0:
                 detail = stderr.decode(errors="replace").strip()
                 lowered = detail.lower()
@@ -1680,19 +1677,13 @@ class DockerGateway:
             raise ValueError(f"invalid cap: {cap!r}")
         async with self._log_semaphore:
             proc = await self._run(argv)
-            try:
-                return await asyncio.wait_for(
-                    self._read_cp_result(proc, filename, cap), self.log_timeout
-                )
-            except TimeoutError as exc:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                await proc.wait()
-                raise AttemptLogTimeoutError(
-                    f"docker cp timed out after {self.log_timeout:g} s"
-                ) from exc
+            return await _bounded_wait(
+                proc,
+                self._read_cp_result(proc, filename, cap),
+                self.log_timeout,
+                AttemptLogTimeoutError,
+                f"docker cp timed out after {self.log_timeout:g} s",
+            )
 
     async def _read_cp_result(
         self, proc, filename: str, cap: int | None
