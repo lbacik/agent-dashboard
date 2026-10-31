@@ -554,8 +554,7 @@ tr.fleet-row:hover td { background: var(--hover); }
 .vc-rail-item.stripe-warning { border-left-color: var(--vc-stripe-warning); }
 .vc-rail-item.stripe-working { border-left-color: var(--vc-stripe-working); }
 .vc-rail-item.stripe-idle { border-left-color: var(--vc-stripe-idle); }
-.vc-rail-item.stripe-offline { border-left-color: var(--vc-stripe-offline); }
-.vc-rail-item.stripe-offline { color: var(--muted); }
+.vc-rail-item.stripe-offline { border-left-color: var(--vc-stripe-offline); color: var(--muted); }
 .vc-rail-rank { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); margin-right: 0.35rem; }
 .vc-rail-name { font-weight: 600; overflow-wrap: anywhere; }
 .vc-rail-repo { display: block; color: var(--muted); font-size: 0.8rem; overflow-wrap: anywhere; }
