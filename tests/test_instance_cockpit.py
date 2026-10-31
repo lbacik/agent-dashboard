@@ -189,31 +189,9 @@ def test_cockpit_style_rules():
 
 def make_cockpit_client_for(fixture_name):
     """A cockpit client with one running instance on the given contract snapshot."""
-    import asyncio
-    import time
+    from test_web import load_snapshot
 
-    from fake_gateway import FakeGateway
-    from fastapi.testclient import TestClient
-    from test_web import fresh_snapshot, load_snapshot
-
-    from agent_dashboard.app import create_app
-    from agent_dashboard.collector import run_cycle
-    from agent_dashboard.config import Settings
-    from agent_dashboard.fleet import FleetState
-    from agent_dashboard.gateway import ManagedInstance
-
-    now = time.time()
-    state = FleetState()
-    gateway = FakeGateway([ManagedInstance("work", "id-work", "running")])
-    gateway.set_snapshot("id-work", fresh_snapshot(load_snapshot(fixture_name), now))
-    asyncio.run(run_cycle(state, gateway, max_concurrent_execs=4, now=now))
-    app = create_app(
-        state=state,
-        settings=Settings(poll_interval=5.0),
-        gateway=gateway,
-        start_poller=False,
-    )
-    return TestClient(app, base_url="http://localhost")
+    return make_cockpit_client_for_snapshot(load_snapshot(fixture_name))
 
 
 def cockpit_columns(body):
