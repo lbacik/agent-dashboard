@@ -56,7 +56,7 @@
     hx-swap="innerHTML"
     hx-push-url="/?instance={{ row.name | urlencode }}">
     <span class="vc-rail-line">
-      <span class="vc-rail-rank">{% if row.state == "running" %}R{{ row.rank }}{% else %}OFF{% endif %}</span>
+      <span class="vc-rail-rank" title="{{ row.rank_title }}">{% if row.state == "running" %}R{{ row.rank }}{% else %}OFF{% endif %}</span>
       <span class="vc-rail-name">{{ row.name }}</span>
       <span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>
     </span>
