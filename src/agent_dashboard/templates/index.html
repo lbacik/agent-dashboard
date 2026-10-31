@@ -2,7 +2,7 @@
 {% block content %}
 {# The overview panel loads from /overview once it is visible (closed, it
    reads nothing), so the live table below never waits for attempt-summary
-   reads; its open state is remembered like "Not running" (fleet.js). #}
+   reads. #}
 <details class="overview" id="overview" data-persist="overview" open>
   <summary>Fleet overview</summary>
   <div id="overview-slot" hx-get="/overview" hx-trigger="intersect once" hx-swap="innerHTML">

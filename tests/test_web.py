@@ -378,7 +378,7 @@ def test_rows_are_ordered_by_attention_rank():
     )
     body = TestClient(app, base_url="http://localhost").get("/").text
     names = ("unreach", "rechold", "errs", "hand", "work", "idle", "down")
-    positions = [body.index(name) for name in names]
+    positions = [body.index(f'<div class="inst-name">{name}</div>') for name in names]
     assert positions == sorted(positions)
     assert "Recovery hold on #981" in body
     assert "1/3 consecutive infrastructure errors" in body
@@ -498,37 +498,41 @@ def test_live_button_hidden_without_active_attempt():
     assert "Live #" not in body
 
 
-def test_not_running_section_holds_stopped_instances():
+def test_stopped_instances_live_inside_the_single_matrix():
     client, _ = make_client([("up", "running"), ("down", "not running")])
     body = client.get("/").text
-    assert '<details class="not-running" data-persist="not-running">' in body
-    assert "Not running (1)" in body
-    main, _, details = body.partition('<details class="not-running"')
-    assert '<div class="inst-name">up</div>' in main
-    assert '<div class="inst-name">down</div>' not in main
-    assert '<div class="inst-name">down</div>' in details
-    assert "Last finished attempt" in details
-    assert 'href="/instances/down/history"' in details
-    # Slim rows still open the drawer.
-    assert 'hx-get="/instances/down"' in details
-    # The section starts collapsed.
-    assert " open" not in details.split(">", 1)[0]
+    assert '<details class="not-running"' not in body
+    assert "Not running (" not in body
+    # One table holds both rows; the stopped row is hidden until Offline units.
+    assert body.count('<table class="fleet">') == 1
+    assert '<div class="inst-name">up</div>' in body
+    assert '<div class="inst-name">down</div>' in body
+    assert 'data-vc-offline="1"' in body
+    assert 'href="/instances/down/history"' in body
+    # Stopped rows still open the drawer and keep their stripe.
+    assert 'hx-get="/instances/down"' in body
+    assert "stripe-offline" in body
+    # Telemetry cells read as n/a, never as figures.
+    assert body.count("<span class=\"hint\">n/a</span>") >= 1
 
 
 def test_no_not_running_section_without_stopped_instances():
     client, _ = make_client([("up", "running")])
     body = client.get("/").text
     assert '<details class="not-running"' not in body
-    assert "Not running" not in body
+    assert "Not running (" not in body
 
 
-def test_fleet_script_preserves_section_state():
+def test_fleet_script_filters_in_page_memory_only():
     client, _ = make_client([("up", "running"), ("down", "not running")])
     body = client.get("/").text
     assert 'src="/static/fleet.js"' in body
     script = client.get("/static/fleet.js")
     assert script.status_code == 200
-    assert "sessionStorage" in script.text
+    assert "toggleVcFilter" in script.text
+    assert "htmx:afterSwap" in script.text
+    assert "localStorage" not in script.text
+    assert "sessionStorage" not in script.text
 
 
 def test_empty_fleet_message_without_details():
@@ -536,3 +540,4 @@ def test_empty_fleet_message_without_details():
     body = client.get("/").text
     assert "No managed instances found." in body
     assert '<details class="not-running"' not in body
+    assert '<table class="fleet">' not in body

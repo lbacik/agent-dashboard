@@ -33,6 +33,11 @@
   --warn-ink: #7a4b00;
   --info-bg: #e8eaf6;
   --info-ink: #3949ab;
+  --vc-stripe-alert: #cf222e;
+  --vc-stripe-warning: #9a6700;
+  --vc-stripe-working: #1f6feb;
+  --vc-stripe-idle: #6e7781;
+  --vc-stripe-offline: #45525e;
 }
 
 * { box-sizing: border-box; }
@@ -859,20 +864,84 @@ button.btn:not([disabled]) { cursor: pointer; }
 /* Drawer log links under Recent events: icon buttons like the fleet rows. */
 .drawer-links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0 0; }
 
-/* Stopped instances live in a collapsed section below the main table; the
-   open state survives the live refresh through fleet.js. */
-details.not-running { margin-top: 1rem; }
-details.not-running > summary {
-  cursor: pointer;
-  padding: 0.6rem 0.9rem;
+/* Fleet Matrix filter strip, summary bar and attention stripes. The KPI tiles
+   are toggle buttons: the LED, the ON/OFF badge, the border highlight and
+   `aria-pressed` all read the same filter state. Every row carries a
+   rank-tier stripe on its pinned first cell, alongside the Reach pill and
+   Status headline text. All colours are :root tokens. */
+.vc-bar {
+  margin-bottom: 0.75rem;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 6px;
-  font-size: 0.9rem;
+  padding: 0.6rem 0.75rem;
 }
-details.not-running[open] > summary { border-radius: 6px 6px 0 0; }
-details.not-running .table-scroll { border-top: 0; border-radius: 0 0 6px 6px; }
-details.not-running table.fleet td { color: var(--muted); }
+.vc-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  gap: 0.5rem;
+}
+.vc-tile {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+}
+.vc-tile:hover { background: var(--hover); border-color: var(--accent-soft); }
+.vc-tile[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.vc-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.vc-led {
+  flex: none;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.vc-tile[aria-pressed="true"] .vc-led { background: var(--ok-ink); border-color: var(--ok-ink); }
+.vc-name { font-weight: 600; }
+.vc-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.vc-state {
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.vc-tile[aria-pressed="true"] .vc-state { background: var(--ok-bg); color: var(--ok-ink); }
+.vc-summary {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.vc-empty {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+}
+tr.fleet-row.stripe-alert > td:first-child { box-shadow: inset 4px 0 0 var(--vc-stripe-alert), inset -1px 0 0 var(--line); }
+tr.fleet-row.stripe-warning > td:first-child { box-shadow: inset 4px 0 0 var(--vc-stripe-warning), inset -1px 0 0 var(--line); }
+tr.fleet-row.stripe-working > td:first-child { box-shadow: inset 4px 0 0 var(--vc-stripe-working), inset -1px 0 0 var(--line); }
+tr.fleet-row.stripe-idle > td:first-child { box-shadow: inset 4px 0 0 var(--vc-stripe-idle), inset -1px 0 0 var(--line); }
+tr.fleet-row.stripe-offline > td:first-child { box-shadow: inset 4px 0 0 var(--vc-stripe-offline), inset -1px 0 0 var(--line); }
+tr.fleet-row.stripe-offline td { color: var(--muted); }
 
 /* Drawer Activity widget: what the agent is doing right now. A fixed
    height with inner scrolling keeps the drawer height stable across
