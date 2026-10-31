@@ -8,7 +8,14 @@
    Every row carries a rank-tier stripe class (`stripe-alert`, `stripe-warning`,
    `stripe-working`, `stripe-idle`, `stripe-offline`) keyed to its Attention
    rank; the stripe adds to the Reach pill and Status headline, never replacing
-   them. Rows open the instance drawer; the log buttons stop propagation. #}
+   them. Rows open the instance drawer; the log buttons stop propagation.
+   The fragment renders a wrapper holding both the `.vc-rail` Fleet units rail
+   and the `.vc-matrix-pane` (KPI strip plus matrix): without an open drawer
+   the rail hides and the matrix spans the width; with a drawer the matrix
+   hides and the rail shows beside the cockpit (see style.css `#live:has`).
+   `selected` names the inspected instance: its rail item carries
+   `is-selected` plus `aria-current="true"`, reapplied client-side after
+   every `fleet` SSE swap from the `?instance=` URL. #}
 {% macro logs_icon() -%}
 <svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 1.5h6L13 5v9.5H3.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9.5 1.5V5H13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8h5M5.5 10.5h5M5.5 13h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
 {%- endmacro %}
@@ -18,9 +25,7 @@
 {% macro stripe_class(row) -%}
 {%- if row.state != "running" %}stripe-offline{%- elif row.rank <= 2 %}stripe-alert{%- elif row.rank <= 4 %}stripe-warning{%- elif row.rank == 5 or (row.detail is not none and row.detail.attempt_kind == "active") %}stripe-working{%- else %}stripe-idle{%- endif %}
 {%- endmacro %}
-{% if error %}
-<div class="banner" role="alert">Discovery failed: {{ error }}</div>
-{% endif %}
+{% set selected = selected | default("") %}
 {% set running = rows | selectattr("state", "equalto", "running") | list %}
 {% set stopped = rows | rejectattr("state", "equalto", "running") | list %}
 {% set ns = namespace(alerts=0, working=0) %}
@@ -28,6 +33,57 @@
 {% if row.rank <= 4 %}{% set ns.alerts = ns.alerts + 1 %}{% endif %}
 {% if row.detail is not none and row.detail.attempt_kind == "active" %}{% set ns.working = ns.working + 1 %}{% endif %}
 {% endfor %}
+<div class="vc-wrap">
+<nav class="vc-rail" data-scroll-key="fleet-rail" aria-label="Fleet units">
+  <div class="vc-rail-head">
+    <span class="vc-rail-title">Fleet units</span>
+    <button type="button" class="vc-rail-matrix" onclick="closeDrawer()">⊞ Matrix</button>
+  </div>
+  {% if rows %}
+  <ul class="vc-rail-list">
+    {% for row in running %}
+    <li class="vc-rail-row">
+      <button type="button" class="vc-rail-item {{ stripe_class(row) }}{% if row.name == selected %} is-selected{% endif %}"{% if row.name == selected %} aria-current="true"{% endif %}
+        hx-get="/instances/{{ row.name | urlencode }}"
+        hx-target="#drawer-holder"
+        hx-swap="innerHTML"
+        hx-push-url="/?instance={{ row.name | urlencode }}">
+        <span class="vc-rail-rank">R{{ row.rank }}</span>
+        <span class="vc-rail-name">{{ row.name }}</span>
+        <span class="vc-rail-repo">{{ row.detail.repository_display }}</span>
+        <span class="vc-rail-attempt">{{ row.detail.attempt_text }}</span>
+        <span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>
+        <span class="vc-rail-headline">{{ row.headline }}</span>
+      </button>
+    </li>
+    {% endfor %}
+    {% for row in stopped %}
+    {% set d = row.drawer %}
+    <li class="vc-rail-row">
+      <button type="button" class="vc-rail-item {{ stripe_class(row) }}{% if row.name == selected %} is-selected{% endif %}"{% if row.name == selected %} aria-current="true"{% endif %}
+        hx-get="/instances/{{ row.name | urlencode }}"
+        hx-target="#drawer-holder"
+        hx-swap="innerHTML"
+        hx-push-url="/?instance={{ row.name | urlencode }}">
+        <span class="vc-rail-rank">R{{ row.rank }}</span>
+        <span class="vc-rail-name">{{ row.name }}</span>
+        <span class="vc-rail-repo">{{ row.detail.repository_display }}</span>
+        <span class="vc-rail-attempt">{% if d and d.last_present %}{% if d.last_issue is not none %}#{{ d.last_issue }} · {% endif %}{{ d.last_outcome or "n/a" }}{% else %}<span class="hint">n/a</span>{% endif %}</span>
+        <span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>
+        <span class="vc-rail-headline">{{ row.headline }}</span>
+        <span class="vc-rail-offline">offline</span>
+      </button>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="hint">No managed instances found.</p>
+  {% endif %}
+</nav>
+<div class="vc-matrix-pane">
+{% if error %}
+<div class="banner" role="alert">Discovery failed: {{ error }}</div>
+{% endif %}
 <div class="vc-bar">
   <div class="vc-filters" role="group" aria-label="Fleet filters">
     <button type="button" class="vc-tile is-on" data-vc-filter="online" aria-pressed="true">
@@ -130,3 +186,5 @@
 {% else %}
 <p class="empty">No managed instances found.</p>
 {% endif %}
+</div>
+</div>

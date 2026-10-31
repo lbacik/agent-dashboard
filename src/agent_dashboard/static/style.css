@@ -491,18 +491,84 @@ table.fleet td.headline { min-width: 14rem; }
 tr.fleet-row { cursor: pointer; }
 tr.fleet-row:hover td { background: var(--hover); }
 
-.drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(92vw, max(30rem, 50vw));
+/* Instance cockpit: `#live` holds `#fleet` plus `#drawer-holder`. Without a
+   drawer the matrix pane spans the full width and the rail hides; with a
+   drawer the matrix hides and the rail shows beside the inline cockpit. */
+#live:not(:has(#drawer)) .vc-rail { display: none; }
+#live:not(:has(#drawer)) .vc-matrix-pane { min-width: 0; }
+#live:has(#drawer) .vc-matrix-pane { display: none; }
+#live:has(#drawer) .vc-rail { display: block; }
+#live:has(#drawer) #fleet, #live:has(#drawer) #drawer-holder { min-width: 0; }
+@media (min-width: 960px) {
+  #live:has(#drawer) { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 1rem; align-items: start; }
+}
+
+.vc-wrap { min-width: 0; }
+.vc-rail {
   background: var(--card);
-  border-left: 1px solid var(--line);
-  box-shadow: -8px 0 24px var(--shadow);
-  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  min-width: 0;
+}
+.vc-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.vc-rail-title { font-weight: 600; font-size: 0.9rem; }
+.vc-rail-matrix {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+}
+.vc-rail-matrix:hover { background: var(--hover); border-color: var(--accent-soft); }
+.vc-rail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.vc-rail-row { margin: 0; padding: 0; }
+.vc-rail-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.5rem 0.6rem;
+  cursor: pointer;
+}
+.vc-rail-item:hover { background: var(--hover); border-color: var(--accent-soft); }
+.vc-rail-item.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: var(--hover); }
+.vc-rail-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.vc-rail-item.stripe-alert { border-left-color: var(--vc-stripe-alert); }
+.vc-rail-item.stripe-warning { border-left-color: var(--vc-stripe-warning); }
+.vc-rail-item.stripe-working { border-left-color: var(--vc-stripe-working); }
+.vc-rail-item.stripe-idle { border-left-color: var(--vc-stripe-idle); }
+.vc-rail-item.stripe-offline { border-left-color: var(--vc-stripe-offline); }
+.vc-rail-item.stripe-offline { color: var(--muted); }
+.vc-rail-rank { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); margin-right: 0.35rem; }
+.vc-rail-name { font-weight: 600; overflow-wrap: anywhere; }
+.vc-rail-repo { display: block; color: var(--muted); font-size: 0.8rem; overflow-wrap: anywhere; }
+.vc-rail-attempt { display: block; margin-top: 0.15rem; }
+.vc-rail-headline { display: block; margin-top: 0.15rem; }
+.vc-rail-offline { display: inline-block; margin-top: 0.15rem; padding: 0.05rem 0.45rem; border-radius: 999px; font-size: 0.75rem; background: var(--off-bg); color: var(--off-ink); }
+.vc-matrix-pane { min-width: 0; }
+
+.drawer {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
   padding: 1.25rem 1.5rem 2rem;
-  z-index: 20;
+  min-width: 0;
 }
 
 .drawer-head {
@@ -528,6 +594,20 @@ tr.fleet-row:hover td { background: var(--hover); }
   padding: 0.25rem 0.6rem;
   cursor: pointer;
 }
+
+.drawer-back {
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0.35rem 0.6rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.drawer-back:hover, .drawer-close:hover { background: var(--hover); border-color: var(--accent-soft); }
 
 .drawer-section { margin-bottom: 1.5rem; }
 .drawer-section h3 {

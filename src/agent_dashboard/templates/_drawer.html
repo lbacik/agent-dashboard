@@ -28,6 +28,7 @@
        hx-disinherit="*">
   <div class="drawer-inner">
   <div class="drawer-head">
+    <button type="button" class="drawer-back" onclick="closeDrawer()">← Fleet Matrix</button>
     <div>
       <h2 class="drawer-title">{{ name }}</h2>
       <p class="drawer-subtitle">This instance is gone: it is unknown or was removed.</p>
@@ -47,6 +48,7 @@
        hx-disinherit="*">
   <div class="drawer-inner">
   <div class="drawer-head">
+    <button type="button" class="drawer-back" onclick="closeDrawer()">← Fleet Matrix</button>
     <div>
       <h2 class="drawer-title">{{ row.name }}</h2>
       <p class="drawer-subtitle">{{ row.headline }} · <span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span></p>

@@ -213,12 +213,16 @@ def test_matrix_colours_are_root_tokens():
         "--vc-stripe-offline",
     ):
         assert token in css
-    # No literal colours in the matrix rules: every colour is a var().
+    # No literal colours in the matrix/rail/cockpit rules: every colour is
+    # a var(). ID selectors (`#live`, `#drawer`) contain `#` without being
+    # colours, so only hex colour literals and rgb() count.
+    import re as _re
+
     matrix_rules = "\n".join(
         line
         for line in css.splitlines()
         if (".vc-" in line or "stripe-" in line) and "--vc-stripe-" not in line
     )
     assert matrix_rules
-    assert "#" not in matrix_rules
+    assert _re.search(r"#[0-9a-fA-F]{3,8}\b", matrix_rules) is None
     assert "rgb(" not in matrix_rules
