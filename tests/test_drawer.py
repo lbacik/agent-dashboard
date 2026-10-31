@@ -39,10 +39,13 @@ def test_drawer_route_exists_for_every_contract_example():
 
 def test_drawer_section_order():
     body = open_drawer("snapshot-attempt-in-progress.json")
-    current = body.index("Current attempt")
-    control = body.index("Control", current)
-    events = body.index("Recent events", control)
-    assert current < control < events
+    console = body.index("Control console")
+    identity = body.index("Identity", console)
+    active = body.index("Active attempt", identity)
+    last = body.index("Last finished attempt", active)
+    current = body.index("Current attempt", last)
+    events = body.index("Recent events", current)
+    assert console < identity < active < last < current < events
 
 
 def test_drawer_current_attempt_in_progress():
@@ -575,8 +578,9 @@ def test_drawer_recent_events_time_with_full_timestamp_tooltip():
 def test_drawer_recent_events_links_with_active_attempt():
     body = _open_snapshot_drawer(_many_events_snapshot(3))
     assert 'href="/instances/work/history"' in body
-    assert "Attempt history" in body
-    assert "Current attempt log" in body
+    assert "Attempt history" in body  # stats slot placeholder
+    assert ">Logs<" in body  # cockpit header link to Attempt history
+    assert "Live #977" in body
     assert 'href="/instances/work/attempts/977/2026-09-30T09-30-00.123456Z"' in body
     assert "<svg" in body  # links carry icons
 
@@ -586,8 +590,8 @@ def test_drawer_recent_events_no_current_log_link_when_idle():
     client, _, _ = make_fleet_client({"work": snap})
     body = client.get("/instances/work").text
     assert "Recent events" in body
-    assert "Attempt history" in body
-    assert "Current attempt log" not in body
+    assert ">Logs<" in body
+    assert "Live #" not in body
 
 
 def test_drawer_activity_disclosure_markup_is_unchanged():
