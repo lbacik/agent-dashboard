@@ -12,15 +12,32 @@
    with the same key. The browser clamps an out-of-range value to the
    new content, so a shorter list simply settles at its end.
 
-   Positions live in page memory only (a per-swap pending list plus
+   The page's own scroll position is kept the same way: the cockpit and
+   the Fleet Matrix scroll with the window, and a swap can briefly make
+   the page shorter (the fresh fleet HTML carries the default filter set
+   until `fleet.js` reapplies the active one; drawer modules reload), so
+   the browser clamps the window towards the top. The restore therefore
+   runs in a microtask, after every other `htmx:afterSwap` listener has
+   rebuilt the page, and puts the window back only when it moved.
+
+   Positions live in page memory only (a per-swap pending snapshot plus
    nothing else): a full page reload starts every view at its initial
    position, and nothing is written to browser storage. A key whose
    container is absent after the swap is simply skipped, with no
    errors. */
 (function () {
-  var pending = [];
+  var pending = null;
+  var later = typeof queueMicrotask === "function"
+    ? queueMicrotask
+    : function (fn) { Promise.resolve().then(fn); };
   function readKey(el) {
     return el && el.getAttribute ? el.getAttribute("data-scroll-key") : null;
+  }
+  function snapshot(target) {
+    return {
+      page: { left: window.scrollX, top: window.scrollY },
+      boxes: collect(target),
+    };
   }
   function collect(target) {
     var out = [];
@@ -51,9 +68,10 @@
       return root.querySelector('[data-scroll-key="' + key + '"]');
     } catch (e) { return null; }
   }
-  function restore(target) {
-    for (var i = 0; i < pending.length; i++) {
-      var saved = pending[i];
+  function restore(target, snap) {
+    var boxes = snap.boxes;
+    for (var i = 0; i < boxes.length; i++) {
+      var saved = boxes[i];
       var el = null;
       if (readKey(target) === saved.key) {
         el = target;
@@ -70,20 +88,26 @@
         el.scrollTop = saved.top;
       } catch (e) { /* ignore: keep the live refresh quiet */ }
     }
-    pending = [];
+    var page = snap.page;
+    if (window.scrollX !== page.left || window.scrollY !== page.top) {
+      window.scrollTo(page.left, page.top);
+    }
   }
   document.addEventListener("htmx:beforeSwap", function (e) {
     var target = e.detail && e.detail.target;
-    pending = collect(target);
+    pending = snapshot(target);
   });
   /* htmx fires htmx:beforeSwap only for AJAX responses; the `fleet` table
      arrives over SSE (htmx.swap), so record before that swap too. The
      sse-swap element is its own swap target here. */
   document.addEventListener("htmx:sseBeforeMessage", function (e) {
-    pending = collect(e.target);
+    pending = snapshot(e.target);
   });
   document.addEventListener("htmx:afterSwap", function (e) {
     var target = e.detail && e.detail.target;
-    restore(target);
+    var snap = pending;
+    pending = null;
+    if (!snap) { return; }
+    later(function () { restore(target, snap); });
   });
 })();

@@ -275,7 +275,11 @@ def create_app(
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
     def context(request: Request) -> dict:
-        return {"request": request, "poll_interval": int(cfg.poll_interval)}
+        return {
+            "request": request,
+            "poll_interval": int(cfg.poll_interval),
+            "control_available": request.app.state.control_mode.available,
+        }
 
     def find_row(rows, name: str):
         """The fleet row for one instance name, or None when unknown/removed."""

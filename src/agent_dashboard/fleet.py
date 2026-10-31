@@ -19,6 +19,7 @@ from .drawer import DrawerDetail, read_drawer
 from .gateway import ManagedInstance, validate_attempt_ref
 from .presentation import (
     attention_rank,
+    attention_rank_title,
     build_row_headline,
     format_age,
     reach_for_snapshot,
@@ -58,6 +59,11 @@ class FleetRow:
     # Command-state chips for the Intake cell, from the latest good
     # snapshot's ``control`` section only (spec 8.1).
     control_chips: tuple[str, ...] = ()
+
+    @property
+    def rank_title(self) -> str:
+        """Tooltip for the rail's rank tag (``R<rank>`` or ``OFF``)."""
+        return attention_rank_title(self.rank)
 
 
 @dataclass

@@ -11,15 +11,16 @@ from pathlib import Path
 CSS = Path(__file__).resolve().parent.parent / "src" / "agent_dashboard" / "static" / "style.css"
 
 SPEC_BASE_TOKENS = {
-    "--bg": "#eef2f6",
+    "--bg": "#e5e7eb",
     "--card": "#ffffff",
-    "--surface-2": "#e2e8f0",
-    "--hover": "#f8fafc",
-    "--ink": "#0f172a",
-    "--muted": "#475569",
+    "--surface-2": "#f3f4f6",
+    "--hover": "#f0f9ff",
+    "--ink": "#111827",
+    "--muted": "#4b5563",
     "--line": "#cbd5e1",
     "--accent": "#0284c7",
     "--link": "#0369a1",
+    "--radius": "2px",
 }
 
 # Full CSS named-colour set minus the functional keywords that are not
@@ -119,7 +120,38 @@ def test_fleet_page_renders_compact_topbar():
     css = client.get("/static/style.css").text
     topbar = css.split(".topbar {", 1)[1].split("}", 1)[0]
     assert "padding: 0.5rem 1rem" in topbar
-    assert "border-top: 2px solid var(--accent)" in topbar
+    assert "border-top: 3px solid var(--accent)" in topbar
+    assert "font-family: var(--font-mono)" in topbar
+
+
+def test_topbar_chips_show_only_real_values():
+    from test_web import make_client
+
+    client, _ = make_client([("worker-a", "running")])
+    header = client.get("/").text.split("<header", 1)[1].split("</header>", 1)[0]
+    assert '<span class="topbar-led" aria-hidden="true"></span>' in header
+    assert '<span class="topbar-chip">Stream <strong>' in header
+    assert '<span class="topbar-chip">Control <strong>on</strong></span>' in header
+    # No prototype host/schema chips.
+    assert "docker.sock" not in header
+    assert "schema" not in header.lower()
+
+
+def test_topbar_chip_reports_control_off():
+    from fake_gateway import FakeGateway
+    from fastapi.testclient import TestClient
+
+    from agent_dashboard.app import create_app
+    from agent_dashboard.config import Settings
+
+    app = create_app(
+        settings=Settings(poll_interval=5.0, control=False),
+        gateway=FakeGateway(),
+        start_poller=False,
+    )
+    body = TestClient(app, base_url="http://localhost").get("/").text
+    assert '<span class="topbar-chip">Control <strong>off</strong></span>' in body
+    assert '<span class="topbar-chip">Stream <strong>5s</strong></span>' in body
 
 
 def test_history_page_renders_compact_topbar_with_breadcrumb_and_actions():

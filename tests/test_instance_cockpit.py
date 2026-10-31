@@ -10,6 +10,8 @@ import re
 
 from test_web import load_snapshot
 
+from agent_dashboard.presentation import RANK_IDLE, RANK_LABELS, attention_rank_title
+
 
 def make_cockpit_client():
     """One running plus one stopped instance with telemetry for the runner."""
@@ -376,6 +378,18 @@ def test_cockpit_idle_drawer_keeps_facts_without_live_links():
     assert "Live #" not in body
 
 
+def test_cockpit_idle_drawer_keeps_every_module_number():
+    client = make_cockpit_client_for("snapshot-idle-with-last-finished.json")
+    body = client.get("/instances/work").text
+    titles = re.findall(r'class="vc-module-bar">(?:<span class="activity-label">)?([^<]+)<', body)
+    assert [t.partition(" //")[0] for t in titles] == ["01", "02", "03", "04", "05", "06"]
+    # The idle Activity slot is a static placeholder: no polling and no
+    # hx-preserve id that would pin it once an attempt starts.
+    assert "No attempt in progress." in body
+    assert 'id="activity-work"' not in body
+    assert 'hx-get="/instances/work/activity"' not in body
+
+
 def make_cockpit_client_for_snapshot(snap):
     """A cockpit client with one running instance on an explicit snapshot dict."""
     import asyncio
@@ -451,3 +465,58 @@ def test_cockpit_grid_style_rules():
     assert cockpit_rules
     assert _re.search(r"#[0-9a-fA-F]{3,8}\b", cockpit_rules) is None
     assert "rgb(" not in cockpit_rules
+
+
+def test_rail_head_counts_and_offline_group():
+    client, _, _ = make_cockpit_client()
+    for path in ("/", "/partials/fleet"):
+        body = client.get(path).text
+        head = body.partition("vc-rail-head")[2].partition("</div>")[0]
+        assert "Fleet units (1 on · 1 off)" in head
+        stopped = body.partition('<details class="vc-rail-stopped" open')[2]
+        assert "<summary>Offline units (1)</summary>" in stopped
+        assert 'data-instance="down"' in stopped.partition("</details>")[0]
+        assert (
+            '<span class="vc-rail-rank" title="Attention rank 7: offline'
+            ' (lower needs the operator sooner)">OFF</span>'
+        ) in body
+
+
+def test_rail_rank_tag_explains_the_attention_rank():
+    """The rank tag's tooltip names the rank and what it means."""
+    client, _, _ = make_cockpit_client()
+    body = client.get("/partials/fleet").text
+    tags = re.findall(r'<span class="vc-rail-rank" title="([^"]+)">([^<]+)</span>', body)
+    by_text = {text: title for title, text in tags}
+    running = [text for text in by_text if text.startswith("R")]
+    assert running
+    for text in running:
+        assert by_text[text].startswith(f"Attention rank {text[1:]}: ")
+    assert by_text["OFF"].startswith("Attention rank 7: offline")
+
+
+def test_attention_rank_title_covers_every_rank():
+    for rank, label in RANK_LABELS.items():
+        assert attention_rank_title(rank) == (
+            f"Attention rank {rank}: {label} (lower needs the operator sooner)"
+        )
+    assert attention_rank_title(RANK_IDLE).startswith("Attention rank 6: idle")
+    assert "unknown" in attention_rank_title(99)
+
+
+def test_cockpit_modules_are_numbered_cards_in_order():
+    client = make_live_cockpit_client()
+    body = client.get("/instances/work").text
+    titles = re.findall(r'class="vc-module-bar">(?:<span class="activity-label">)?([^<]+)<', body)
+    assert titles == [
+        "01 // Control console",
+        "02 // Identity &amp; last attempt",
+        "03 // Activity",
+        "04 // Current attempt",
+        "05 // Attempt statistics",
+        "06 // Recent events",
+    ]
+    assert body.count('class="vc-module-body"') == 5
+    head = body.partition('class="drawer-head"')[2].partition("vc-cockpit-grid")[0]
+    assert '<span class="vc-hl-label">Status headline</span>' in head
+    assert "Unit cockpit // example-owner/example-repo" in head

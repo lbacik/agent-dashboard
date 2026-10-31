@@ -74,11 +74,16 @@ def make_matrix_client(now=None):
     return TestClient(app, base_url="http://localhost"), state, gateway
 
 
+def matrix_pane(body):
+    """The matrix pane alone, past the rail and its scaled-down filters."""
+    return body.partition('class="vc-matrix-pane"')[2]
+
+
 def tile_count(body, key):
     """The server-rendered count inside one KPI tile."""
     match = re.search(
         r'data-vc-filter="' + key + r'".*?<span class="vc-count">(\d+)</span>',
-        body,
+        matrix_pane(body),
         re.S,
     )
     assert match is not None, f"no vc-count for {key}"
@@ -100,7 +105,7 @@ def test_kpi_tiles_render_counts_and_defaults():
         assert tile_count(body, "working") == 3
         assert tile_count(body, "offline") == 1
         # Each tile shows its filter state as an ON/OFF badge plus an LED.
-        assert body.count('<span class="vc-led"') == 4
+        assert matrix_pane(body).count('<span class="vc-led"') == 4
         assert body.count('<span class="vc-state">ON</span>') == 1
         assert body.count('<span class="vc-state">OFF</span>') == 3
 
@@ -226,3 +231,68 @@ def test_matrix_colours_are_root_tokens():
     assert matrix_rules
     assert _re.search(r"#[0-9a-fA-F]{3,8}\b", matrix_rules) is None
     assert "rgb(" not in matrix_rules
+
+
+def test_kpi_tiles_and_matrix_panel_bar_follow_variant_c():
+    client, _, _ = make_matrix_client()
+    for path in ("/", "/fleet"):
+        body = client.get(path).text
+        # Each tile has a label row and a count row with its filter hint.
+        assert body.count('<span class="vc-tile-top">') == 4
+        assert body.count('<span class="vc-tile-bottom">') == 4
+        assert "filter: hold / handoff / stale" in body
+        # The alerts tile carries the alert edge while alerts exist.
+        alerts = re.search(
+            r'<button[^>]*data-vc-filter="alerts"[^>]*>', matrix_pane(body)
+        ).group(0)
+        assert "has-alert" in alerts
+        # A mono panel bar inside the scroll box names the matrix and its
+        # live filter summary.
+        box = body.partition('data-scroll-key="fleet-running"')[2]
+        bar = box.partition('<div class="vc-panel-bar">')[2].partition("</div>")[0]
+        assert "Operations matrix //" in bar
+        assert "data-vc-summary" in bar
+        assert box.index('class="vc-panel-bar"') < box.index('<table class="fleet">')
+
+
+def test_rail_carries_scaled_down_filters_sharing_matrix_keys():
+    client, _, _ = make_matrix_client()
+    for path in ("/", "/fleet"):
+        body = client.get(path).text
+        rail = body.partition('class="vc-rail"')[2].partition("</nav>")[0]
+        strip = rail.partition('class="vc-rail-filters"')[2].partition("</div>")[0]
+        chips = re.findall(r'<button[^>]*class="vc-chip[^"]*"[^>]*>', strip)
+        assert [re.search(r'data-vc-filter="(\w+)"', c).group(1) for c in chips] == [
+            "online",
+            "alerts",
+            "working",
+            "offline",
+        ]
+        assert 'aria-pressed="true"' in chips[0]
+        assert all('aria-pressed="false"' in c for c in chips[1:])
+        assert "has-alert" in chips[1]
+        counts = re.findall(r'<span class="vc-chip-count">(\d+)</span>', strip)
+        assert counts == ["6", "4", "3", "1"]
+        # Rail rows carry the matrix filter attributes; offline ones start
+        # hidden like their matrix rows, inside a hidden Offline group.
+        work = re.search(r'<li class="vc-rail-row"[^>]*>\s*<button[^>]*data-instance="work"', rail)
+        assert work is not None
+        assert 'data-vc-online="1"' in work.group(0)
+        assert 'data-vc-working="1"' in work.group(0)
+        assert "hidden" not in work.group(0).partition("<button")[0]
+        down = re.search(r'<li class="vc-rail-row"[^>]*>\s*<button[^>]*data-instance="down"', rail)
+        assert 'data-vc-offline="1" hidden' in down.group(0)
+        assert '<details class="vc-rail-stopped" open hidden>' in rail
+    script = client.get("/static/fleet.js").text
+    assert 'querySelectorAll("li.vc-rail-row")' in script
+    assert "window.applyVcFilters = applyVcFilters;" in script
+    assert "window.applyVcFilters" in client.get("/static/drawer.js").text
+
+
+def test_selected_offline_unit_stays_listed_in_the_rail():
+    client, _, _ = make_matrix_client()
+    body = client.get("/?instance=down").text
+    rail = body.partition('class="vc-rail"')[2].partition("</nav>")[0]
+    down = re.search(r'<li class="vc-rail-row"[^>]*>\s*<button[^>]*data-instance="down"', rail)
+    assert "hidden" not in down.group(0).partition("<button")[0]
+    assert '<details class="vc-rail-stopped" open>' in rail

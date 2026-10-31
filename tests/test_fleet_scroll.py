@@ -70,12 +70,17 @@ def test_stream_reconnect_table_carries_scroll_keys():
     assert_keyed_boxes(partial, ["fleet-running"])
 
 
-def test_scroll_keeper_restores_both_axes_without_moving_page():
-    """The shared keeper reapplies both axes on keyed boxes only.
+def test_scroll_keeper_restores_both_axes_and_holds_the_page_still():
+    """The shared keeper reapplies both axes on keyed boxes and the page.
 
-    It never calls a page-level scroll API, so re-rendering the table
-    cannot move the page's own vertical position. The fleet swap itself
-    is a plain innerHTML swap with no scroll/show directive.
+    The Fleet Matrix and the cockpit scroll with the window, and a swap can
+    briefly shorten the page (the fresh fleet HTML carries the default
+    filter set until `fleet.js` reapplies the active one), which clamps the
+    window towards the top. The keeper records the window position with the
+    keyed boxes and puts it back in a microtask, after every other
+    `htmx:afterSwap` listener ran. It never scrolls anything into view, and
+    the fleet swap itself is a plain innerHTML swap with no scroll/show
+    directive.
     """
     client, _ = make_client([("up", "running"), ("down", "not running")])
     body = client.get("/").text
@@ -89,8 +94,13 @@ def test_scroll_keeper_restores_both_axes_without_moving_page():
     assert "scrollTop" in keeper
     assert "htmx:beforeSwap" in keeper
     assert "htmx:afterSwap" in keeper
-    for page_api in ("window.scrollTo", "scrollIntoView"):
-        assert page_api not in keeper
+    assert "window.scrollY" in keeper
+    assert "window.scrollTo(page.left, page.top)" in keeper
+    assert "queueMicrotask" in keeper
+    assert "scrollIntoView" not in keeper
+    # The keeper loads before fleet.js, so its own afterSwap listener runs
+    # first; only the deferred restore sees the reapplied filters.
+    assert body.index("/static/scroll-keep.js") < body.index("/static/fleet.js")
 
 
 def test_keeper_records_positions_before_sse_swaps():

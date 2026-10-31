@@ -41,6 +41,18 @@ RANK_WORKING = 5
 RANK_IDLE = 6
 RANK_OFFLINE = 7
 
+# What each Attention rank means, for the rail's rank tag tooltip.
+RANK_LABELS = {
+    RANK_UNREACHABLE: "unreachable",
+    RANK_RECOVERY: "recovery hold",
+    RANK_ERRORS: "consecutive errors",
+    RANK_HANDOFF: "handoff in progress",
+    RANK_THRESHOLD: "near or past the soft threshold",
+    RANK_WORKING: "working",
+    RANK_IDLE: "idle",
+    RANK_OFFLINE: "offline",
+}
+
 
 def derive_reach(container_state: str, outcome_kind: str | None) -> str:
     """Map container state plus the last poll outcome kind to a reach."""
@@ -170,6 +182,12 @@ def build_row_headline(
         if derived is not None:
             return derived
     return build_headline(reach, reason=reason, age_text=age_text, has_snapshot=has_snapshot)
+
+
+def attention_rank_title(rank: int) -> str:
+    """Tooltip text for a rank tag: the rank plus what it means."""
+    label = RANK_LABELS.get(rank, "unknown")
+    return f"Attention rank {rank}: {label} (lower needs the operator sooner)"
 
 
 def attention_rank(reach: str, detail: SnapshotDetail | None, *, has_snapshot: bool) -> int:

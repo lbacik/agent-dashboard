@@ -9,10 +9,15 @@
    position. `hx-disinherit="*"` keeps children that fetch on their own
    (load-once widgets with `hx-preserve`) from inheriting the drawer's
    own fetch attributes.
-   The cockpit header carries the name, repository, Reach pill, status
+   The cockpit header card carries the name, repository, Reach pill, status
    headline, history/live links and the dismiss controls; below it the
-   `.vc-cockpit-grid` lays out Control & Identity, live telemetry and
-   90-day statistics side by side (see style.css breakpoints). #}
+   `.vc-cockpit-grid` lays out three columns of numbered modules (prototype
+   variant C): 01 Control console and 02 Identity & last attempt; 03 Activity
+   and 04 Current attempt; 05 Attempt statistics and 06 Recent events. Each
+   module is a `.vc-module` card with a mono `.vc-module-bar` title (see
+   style.css breakpoints). Every module renders in every state, so a number
+   always names the same module (03 Activity is a placeholder without a
+   current attempt). #}
 {% macro fig(f) -%}
 <span class="figure">{{ f.text }}{% if f.basis and f.basis != f.text %} <span class="basis">{{ f.basis }}</span>{% endif %}</span>
 {%- endmacro %}
@@ -32,12 +37,17 @@
        hx-disinherit="*">
   <div class="drawer-inner">
   <div class="drawer-head">
-    <button type="button" class="drawer-back" onclick="closeDrawer()">← Fleet Matrix</button>
-    <div>
-      <h2 class="drawer-title">{{ name }}</h2>
-      <p class="drawer-subtitle">This instance is gone: it is unknown or was removed.</p>
+    <div class="vc-cockpit-id">
+      <button type="button" class="drawer-back" onclick="closeDrawer()">← Fleet Matrix</button>
+      <div class="vc-unit">
+        <span class="vc-unit-kicker">Unit cockpit</span>
+        <h2 class="drawer-title">{{ name }}</h2>
+      </div>
     </div>
-    <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
+    <p class="drawer-subtitle vc-cockpit-headline">This instance is gone: it is unknown or was removed.</p>
+    <div class="vc-cockpit-actions">
+      <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
+    </div>
   </div>
   </div>
 </aside>
@@ -52,39 +62,52 @@
        hx-disinherit="*">
   <div class="drawer-inner">
   <div class="drawer-head">
-    <button type="button" class="drawer-back" onclick="closeDrawer()">← Fleet Matrix</button>
-    <div>
-      <h2 class="drawer-title">{{ row.name }}</h2>
-      <p class="drawer-subtitle">{{ d.repository }} · <span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span> {{ row.headline }}</p>
-      <p class="drawer-links">
-        <a class="btn" href="/instances/{{ row.name | urlencode }}/history">{{ logs_icon() }}<span>Logs</span></a>
-        {% if row.live_url %}<a class="btn btn-live" href="{{ row.live_url }}">{{ live_icon() }}<span>Live #{{ row.live_issue }}</span></a>{% endif %}
-      </p>
+    <div class="vc-cockpit-id">
+      <button type="button" class="drawer-back" onclick="closeDrawer()">← Fleet Matrix</button>
+      <div class="vc-unit">
+        <span class="vc-unit-kicker">Unit cockpit // {{ d.repository }}{% if d.agent_version %} · v{{ d.agent_version }}{% endif %}</span>
+        <h2 class="drawer-title">{{ row.name }}</h2>
+      </div>
+      <span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>
     </div>
-    <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
+    <p class="drawer-subtitle vc-cockpit-headline"><span class="vc-hl-label">Status headline</span> <strong>{{ row.headline }}</strong></p>
+    <div class="vc-cockpit-actions">
+      <a class="btn" href="/instances/{{ row.name | urlencode }}/history">{{ logs_icon() }}<span>Logs</span></a>
+      {% if row.live_url %}<a class="btn btn-live" href="{{ row.live_url }}">{{ live_icon() }}<span>Live #{{ row.live_issue }}</span></a>{% endif %}
+      <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
+    </div>
   </div>
   {% if d.unsupported_schema is not none %}
-  <section class="drawer-section">
-    <h3>Current attempt</h3>
+  <div class="vc-cockpit-grid">
+  <section class="drawer-section vc-module">
+    <h3 class="vc-module-bar">01 // Current attempt</h3>
+    <div class="vc-module-body">
     <p class="hint">unsupported schema v{{ d.unsupported_schema }}: showing only the
     stable fields (repository, agent version).</p>
+    </div>
   </section>
-  <section class="drawer-section">
-    <h3>Control</h3>
+  <section class="drawer-section vc-module">
+    <h3 class="vc-module-bar">02 // Control</h3>
+    <div class="vc-module-body">
     <dl class="facts">
       <div><dt>Repository</dt><dd>{{ d.repository }}</dd></div>
       <div><dt>Agent version</dt><dd>{{ d.agent_version }}</dd></div>
     </dl>
+    </div>
   </section>
-  <section class="drawer-section">
-    <h3>Recent events</h3>
+  <section class="drawer-section vc-module">
+    <h3 class="vc-module-bar">03 // Recent events</h3>
+    <div class="vc-module-body">
     <p class="hint">unavailable</p>
+    </div>
   </section>
+  </div>
   {% else %}
   <div class="vc-cockpit-grid">
   <div class="vc-cockpit-col" data-col="control">
-  <section class="drawer-section ctl" id="control-console-{{ ctl_slug }}" hx-preserve>
-    <h3>Control console</h3>
+  <section class="drawer-section ctl vc-module" id="control-console-{{ ctl_slug }}" hx-preserve>
+    <h3 class="vc-module-bar">01 // Control console</h3>
+    <div class="vc-module-body">
     <div class="ctl-feedback" id="ctl-feedback-{{ ctl_slug }}"></div>
     <div class="ctl-body" id="ctl-body-{{ ctl_slug }}"
          hx-get="/instances/{{ row.name | urlencode }}/control"
@@ -92,9 +115,12 @@
          hx-swap="innerHTML">
       <p class="hint">Loading control…</p>
     </div>
+    </div>
   </section>
-  <section class="drawer-section">
-    <h3>Identity &amp; Intake</h3>
+  <section class="drawer-section vc-module">
+    <h3 class="vc-module-bar">02 // Identity &amp; last attempt</h3>
+    <div class="vc-module-body">
+    <h4>Identity &amp; Intake</h4>
     {% if d.control_state == "missing" %}
     <p class="hint">Control unavailable</p>
     {% elif d.control_state == "na" %}
@@ -108,26 +134,20 @@
       <div><dt>Handoff</dt><dd>{{ d.handoff_text }}</dd></div>
     </dl>
     {% endif %}
-  </section>
   {% if d.recovery_present %}
-  <section class="drawer-section">
-    <h3>Recovery hold</h3>
+    <h4>Recovery hold</h4>
     <dl class="facts">
       <div><dt>Issue</dt><dd>{% if d.recovery_issue is not none %}#{{ d.recovery_issue }}{% endif %}{% if d.recovery_phase %} · {{ d.recovery_phase }}{% endif %}{% if d.recovery_branch %} · {{ d.recovery_branch }}{% endif %}</dd></div>
       <div><dt>Reason</dt><dd>{% if d.recovery_reason %}{{ d.recovery_reason }}{% else %}held{% endif %}</dd></div>
       {% if d.recovery_next_action %}<div><dt>Next action</dt><dd><code id="recovery-next-action">{{ d.recovery_next_action }}</code> <button type="button" onclick="copyNextAction()">Copy</button></dd></div>{% endif %}
     </dl>
-  </section>
   {% else %}
-  <section class="drawer-section">
-    <h3>Active attempt</h3>
+    <h4>Active attempt</h4>
     <dl class="facts">
       <div><dt>Attempt</dt><dd>{{ d.active_text }}</dd></div>
     </dl>
-  </section>
   {% endif %}
-  <section class="drawer-section">
-    <h3>Last finished attempt</h3>
+    <h4>Last finished attempt</h4>
     {% if d.last_present %}
     <dl class="facts">
       <div><dt>Issue</dt><dd>{% if d.last_issue is not none %}#{{ d.last_issue }}{% endif %}{% if d.last_title %} · {{ d.last_title }}{% endif %}</dd></div>
@@ -139,23 +159,35 @@
     {% else %}
     <p class="hint">none</p>
     {% endif %}
+    </div>
   </section>
   </div>
   <div class="vc-cockpit-col" data-col="telemetry">
   {% set activity_id = "activity-" ~ (row.name | replace(" ", "-") | replace(".", "-")) %}
   {% if row.live_url %}
   <div id="{{ activity_id }}" hx-preserve>
-    <details class="activity" open data-activity-group="activity">
-      <summary><span class="activity-label">Activity</span> <span id="{{ activity_id }}-sum" class="activity-sum"></span></summary>
+    <details class="activity vc-module" open data-activity-group="activity">
+      <summary class="vc-module-bar"><span class="activity-label">03 // Activity</span> <span id="{{ activity_id }}-sum" class="activity-sum"></span></summary>
       <div class="activity-body" data-scroll-key="activity-body"
            hx-get="/instances/{{ row.name | urlencode }}/activity" hx-trigger="load, sse:fleet" hx-target="this" hx-swap="innerHTML">
         <p class="hint">Loading activity…</p>
       </div>
     </details>
   </div>
+  {% else %}
+  {# Without a current Attempt log the module keeps its slot and number but
+     neither polls nor preserves: the live widget above carries the
+     `hx-preserve` id, so it swaps in fresh once an attempt starts. #}
+  <section class="drawer-section vc-module" data-activity-idle>
+    <h3 class="vc-module-bar">03 // Activity</h3>
+    <div class="vc-module-body">
+    <p class="hint">No attempt in progress.</p>
+    </div>
+  </section>
   {% endif %}
-  <section class="drawer-section">
-    <h3>Current attempt</h3>
+  <section class="drawer-section vc-module">
+    <h3 class="vc-module-bar">04 // Current attempt</h3>
+    <div class="vc-module-body">
     {% if d.current_state != "active" %}
     <p class="hint">{% if d.current_state == "na" %}No current attempt (n/a){% else %}Current attempt unavailable{% endif %}</p>
     {% else %}
@@ -204,16 +236,23 @@
       <div><dt>Handoff status</dt><dd>{{ d.handoff_text }}</dd></div>
     </dl>
     {% endif %}
+    </div>
   </section>
   </div>
   <div class="vc-cockpit-col" data-col="history">
   {% set slot_id = "stats-" ~ (row.name | replace(" ", "-") | replace(".", "-")) %}
+  <section class="drawer-section vc-module">
+  <h3 class="vc-module-bar">05 // Attempt statistics</h3>
+  <div class="vc-module-body">
   <div id="{{ slot_id }}" hx-preserve
        hx-get="/instances/{{ row.name | urlencode }}/stats" hx-trigger="load" hx-swap="innerHTML">
     <p class="hint"><a href="/instances/{{ row.name | urlencode }}/history">Attempt history</a> · Loading…</p>
   </div>
-  <section class="drawer-section">
-    <h3>Recent events</h3>
+  </div>
+  </section>
+  <section class="drawer-section vc-module">
+    <h3 class="vc-module-bar">06 // Recent events</h3>
+    <div class="vc-module-body">
     {% if d.events %}
     <ul class="events">
       {% for ev in d.events %}
@@ -226,6 +265,7 @@
     <p class="hint">No recent events.</p>
     {% if d.truncated %}<p class="hint">Older events were trimmed (truncated snapshot).</p>{% endif %}
     {% endif %}
+    </div>
   </section>
   </div>
   </div>
