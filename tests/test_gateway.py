@@ -456,3 +456,146 @@ def test_copy_logs_returns_bytes_and_uses_no_shell(monkeypatch):
     assert out == b"tar-bytes"
     assert seen["argv"] == argv_copy_logs("abc123")
     assert "shell" not in seen["kwargs"]
+
+
+# --- cancellation always kills and reaps -------------------------------------
+
+
+class _HangingProcess:
+    """Fake Docker child that never answers until killed or released."""
+
+    def __init__(self, release=None):
+        self.returncode = None
+        self.killed = []
+        self.reaped = []
+        self._release = release
+
+    async def communicate(self):
+        await asyncio.sleep(3600)
+        return b"", b""
+
+    def kill(self):
+        self.killed.append(True)
+        self.returncode = -9
+
+    async def wait(self):
+        self.reaped.append(True)
+        if self._release is not None:
+            await self._release.wait()
+        return self.returncode
+
+
+def _patch_hanging(monkeypatch, proc, started):
+    async def fake_create(*argv, **kwargs):
+        started.set()
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+
+
+def test_copy_logs_cancellation_kills_and_reaps(monkeypatch):
+    proc = _HangingProcess()
+    started = asyncio.Event()
+    _patch_hanging(monkeypatch, proc, started)
+
+    async def scenario():
+        task = asyncio.create_task(DockerGateway(log_timeout=30.0).copy_logs("abc123"))
+        await started.wait()
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert proc.killed == [True]
+    assert proc.reaped == [True]
+
+
+def test_telemetry_cancellation_kills_and_reaps(monkeypatch):
+    proc = _HangingProcess()
+    started = asyncio.Event()
+    _patch_hanging(monkeypatch, proc, started)
+
+    async def scenario():
+        task = asyncio.create_task(DockerGateway(timeout=30.0).telemetry("abc123"))
+        await started.wait()
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert proc.killed == [True]
+    assert proc.reaped == [True]
+
+
+def test_control_exec_cancellation_kills_and_reaps(monkeypatch):
+    proc = _HangingProcess()
+    started = asyncio.Event()
+    _patch_hanging(monkeypatch, proc, started)
+    argv = argv_control("abc123", "stop", request_id="dash-0123456789abcdef")
+
+    async def scenario():
+        task = asyncio.create_task(
+            DockerGateway()._run_control_exec(argv)
+        )
+        await started.wait()
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert proc.killed == [True]
+    assert proc.reaped == [True]
+
+
+def test_attempt_history_cancellation_kills_and_reaps(monkeypatch):
+    proc = _HangingProcess()
+    started = asyncio.Event()
+    _patch_hanging(monkeypatch, proc, started)
+
+    async def scenario():
+        task = asyncio.create_task(
+            DockerGateway(timeout=30.0).attempt_history("abc123")
+        )
+        await started.wait()
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert proc.killed == [True]
+    assert proc.reaped == [True]
+
+
+def test_cancelled_log_read_holds_semaphore_until_reaped(monkeypatch):
+    """A cancelled read frees its log semaphore slot only after the reap."""
+    release = asyncio.Event()
+    proc = _HangingProcess(release=release)
+    started = asyncio.Event()
+    _patch_hanging(monkeypatch, proc, started)
+    gateway = DockerGateway(log_timeout=30.0)
+    gateway._log_semaphore = asyncio.Semaphore(1)
+
+    async def scenario():
+        task = asyncio.create_task(gateway.copy_logs("abc123"))
+        await started.wait()
+        await asyncio.sleep(0)
+        assert gateway._log_semaphore.locked()
+        task.cancel()
+        for _ in range(100):
+            if proc.killed:
+                break
+            await asyncio.sleep(0.01)
+        # The child was killed, but reaping still blocks: the slot stays held.
+        assert proc.killed == [True]
+        assert gateway._log_semaphore.locked()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not gateway._log_semaphore.locked()
+
+    asyncio.run(scenario())
+    assert proc.reaped == [True]

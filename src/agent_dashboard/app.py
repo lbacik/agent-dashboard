@@ -334,7 +334,6 @@ def create_app(
             gw,
             spec=spec,
             now=now_ts,
-            timeout=cfg.exec_timeout,
             max_concurrent_execs=cfg.max_concurrent_execs,
         )
         strip = day_strip(overview.summaries, spec, now_ts) if rows else []
@@ -619,9 +618,7 @@ def create_app(
         # list arrives through a ``docker cp`` tree copy parsed on the
         # dashboard side, with the same tolerance rules as the exec reader.
         now_ts = time.time()
-        full = await read_full_history(
-            row, gw, now=now_ts, timeout=cfg.exec_timeout
-        )
+        full = await read_full_history(row, gw, now=now_ts)
         if isinstance(full, str):
             ctx["error"] = full
             return page()

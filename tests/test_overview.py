@@ -18,7 +18,12 @@ from fake_gateway import FakeGateway, make_logs_tree
 
 from agent_dashboard.charts import OUTCOME_ORDER
 from agent_dashboard.fleet import FleetState
-from agent_dashboard.gateway import GatewayError, ManagedInstance
+from agent_dashboard.gateway import (
+    AttemptLogTimeoutError,
+    GatewayError,
+    ManagedInstance,
+    TelemetryTimeoutError,
+)
 from agent_dashboard.history import HISTORY_LAYOUT
 from agent_dashboard.overview import collect_overview, overview_legend
 from agent_dashboard.range_stats import RangeSpec
@@ -330,23 +335,94 @@ def test_overview_slow_instance_neither_delays_nor_breaks_panel():
     gateway.set_history(
         "id-fast", _payload([_attempt(1, _started(1, now), "complete", cost=1.0)])
     )
-    gateway.set_history(
-        "id-slow", _payload([_attempt(2, _started(1, now), "complete", cost=9.0)])
+    # The gateway's own timeout fires for the slow instance: its typed
+    # error becomes that row's message, never a panel failure.
+    gateway.set_history_error(
+        "id-slow", TelemetryTimeoutError("docker exec timed out after 5 s")
     )
-    gateway.history_delays["id-slow"] = 30.0
     rows, now = make_rows(["fast", "slow"], now)
     started = time.monotonic()
-    result = asyncio.run(
-        collect_overview(rows, gateway, spec=RangeSpec("all"), now=now, timeout=0.2)
-    )
+    result = asyncio.run(collect_overview(rows, gateway, spec=RangeSpec("all"), now=now))
     elapsed = time.monotonic() - started
     assert elapsed < 10.0
     insts = by_name(result)
     assert insts["fast"].ok
     assert not insts["slow"].ok
     assert "timed out" in insts["slow"].error
+    assert "Could not read the Attempt log" in insts["slow"].error
     # The slow $9.00 stays out of the totals.
     assert result.total_cost == 1.0
+
+
+def test_overview_adds_no_timeout_of_its_own(monkeypatch):
+    """A read slower than the old 5 s budget still returns a normal row.
+
+    The overview used to wrap every gateway read in ``asyncio.wait_for``;
+    the spy fails the test if the overview ever bounds a read itself. The
+    delayed read stands in for any read slower than the removed budget but
+    within the gateway's own timeout: it must complete as a normal row.
+    """
+    now = time.time()
+    gateway = FakeGateway()
+    gateway.set_history(
+        "id-work", _payload([_attempt(1, _started(1, now), "complete", cost=1.0)])
+    )
+    gateway.history_delays["id-work"] = 0.2
+    calls = []
+    original_wait_for = asyncio.wait_for
+
+    async def spy(coro, timeout):
+        calls.append(timeout)
+        return await original_wait_for(coro, timeout)
+
+    monkeypatch.setattr(asyncio, "wait_for", spy)
+    rows, now = make_rows(["work"], now)
+    result = asyncio.run(collect_overview(rows, gateway, spec=RangeSpec("all"), now=now))
+    assert calls == []
+    assert result.rows[0].ok
+    assert result.rows[0].counts == {"complete": 1}
+    assert result.total_cost == 1.0
+
+
+def test_overview_gateway_timeout_is_error_row_for_that_instance_only():
+    """Gateway timeouts (running exec and stopped copy) read as error rows."""
+    now = time.time()
+    gateway = FakeGateway()
+    state = FleetState()
+    asyncio.run(
+        state.apply_cycle(
+            [
+                ManagedInstance("fast", "id-fast", "running"),
+                ManagedInstance("slow", "id-slow", "running"),
+                ManagedInstance("down", "id-down", "exited"),
+            ],
+            {},
+            now=now,
+        )
+    )
+    rows, _ = asyncio.run(state.snapshot(now=now))
+    gateway.set_history(
+        "id-fast", _payload([_attempt(1, _started(1, now), "complete", cost=1.5)])
+    )
+    gateway.set_history_error(
+        "id-slow", TelemetryTimeoutError("docker exec timed out after 5 s")
+    )
+    gateway.set_logs_tree(
+        "id-down", AttemptLogTimeoutError("docker cp timed out after 15 s")
+    )
+    result = asyncio.run(collect_overview(rows, gateway, spec=RangeSpec("all"), now=now))
+    insts = by_name(result)
+    assert insts["fast"].ok
+    assert not insts["slow"].ok
+    assert "Could not read the Attempt log" in insts["slow"].error
+    assert "timed out" in insts["slow"].error
+    assert not insts["down"].ok
+    assert "Could not read the Attempt log" in insts["down"].error
+    assert "timed out" in insts["down"].error
+    # Only the readable instance feeds the totals.
+    assert result.readable == 1
+    assert result.unreadable == 2
+    assert result.total_cost == 1.5
 
 
 def test_overview_reads_instances_in_parallel():
