@@ -304,6 +304,7 @@ def create_app(
                 "drawer_open": bool(wanted),
                 "row": row,
                 "name": wanted,
+                "selected": wanted,
                 "ctl_slug": control_slug(row.name) if row is not None else "",
             },
         )
@@ -1419,16 +1420,20 @@ def create_app(
         )
 
     @app.get("/fleet", response_class=HTMLResponse)
+    @app.get("/partials/fleet", response_class=HTMLResponse)
     async def fleet_partial(request: Request) -> Response:
         rows, error = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        selected = request.query_params.get("instance") or ""
         return templates.TemplateResponse(
-            request, "_fleet_table.html", {**context(request), "rows": rows, "error": error}
+            request,
+            "_fleet_table.html",
+            {**context(request), "rows": rows, "error": error, "selected": selected},
         )
 
     def render_fleet(rows, error) -> str:
         """Re-render the whole table body; ages are stamped at send time."""
         template = templates.get_template("_fleet_table.html")
-        return template.render(rows=rows, error=error)
+        return template.render(rows=rows, error=error, selected="")
 
     @app.get("/stream")
     async def stream(request: Request) -> StreamingResponse:

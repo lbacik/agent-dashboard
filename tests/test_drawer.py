@@ -487,12 +487,19 @@ def test_drawer_subagent_row_shortens_long_ids():
 
 
 def test_drawer_wide_layout_rules():
-    """The drawer widens to half the screen with multi-column facts."""
+    """The drawer renders inline in the cockpit grid with multi-column facts."""
     client, _, _ = make_fleet_client(
         {"work": load_snapshot("snapshot-attempt-in-progress.json")}
     )
     css = client.get("/static/style.css").text
-    assert "width: min(92vw, max(30rem, 50vw))" in css
+    # The cockpit is inline: two workspace states driven by :has(#drawer).
+    assert "#live:has(#drawer)" in css
+    assert "#live:not(:has(#drawer))" in css
+    assert "grid-template-columns: 280px minmax(0, 1fr)" in css
+    # The drawer is no longer a fixed overlay on the right edge.
+    drawer_block = css.partition(".drawer {")[2].partition("}")[0]
+    assert "fixed" not in drawer_block
+    assert "width: min(92vw, max(30rem, 50vw))" not in css
     assert "repeat(auto-fill, minmax(min(100%, 24rem), 1fr))" in css
     assert "text-overflow: ellipsis" in css
     assert ".drawer dl.facts dt, .drawer dl.facts dd { min-width: 0;" in css
@@ -612,23 +619,30 @@ def test_drawer_activity_disclosure_markup_is_unchanged():
 
 
 def test_drawer_outside_click_closes_like_close_button():
-    """Clicking empty space outside the drawer closes it like ×.
+    """Leaving the cockpit takes an explicit action: blank clicks never close.
 
-    Fleet rows switch instead, clicks inside the drawer never close, and
-    links, buttons, disclosure summaries and the statistics strip keep
-    their own behaviour; a text selection ending outside never closes.
+    The document click handler that closed the drawer on clicks outside it
+    is gone; Escape and Back/Forward (popstate) dismiss or resync instead,
+    while the statistics-strip drag keeps working without that listener.
     """
     client, _, _ = make_fleet_client({"work": load_snapshot(EXAMPLES[0])})
     static = client.get("/static/drawer.js")
     assert static.status_code == 200
     text = static.text
-    assert 'document.addEventListener("click"' in text
-    assert 'closest("#drawer")' in text
-    assert 'closest(".fleet-row")' in text
-    assert 'closest("a, button, summary, .stats-strip")' in text
-    assert "getSelection" in text
-    assert "isCollapsed" in text
+    assert "function closeDrawer()" in text
     assert "closeDrawer()" in text
-    # A strip range drag ending outside the strip still leaves the drawer
-    # open: the pointerup suppresses the trailing click.
-    assert "__drawerStripSuppressClick" in text
+    # No document click handler calls closeDrawer().
+    for line in text.splitlines():
+        if "closeDrawer()" in line:
+            assert 'addEventListener("click"' not in line
+    assert 'document.addEventListener("click"' not in text
+    # Escape closes the cockpit.
+    assert "Escape" in text
+    assert 'addEventListener("keydown"' in text
+    # Back/Forward keeps the workspace in step with ?instance=.
+    assert "popstate" in text
+    # The statistics-strip drag still swaps the card via htmx.
+    assert "stats-strip" in text
+    assert "pointerdown" in text
+    assert "pointerup" in text
+    assert "htmx.ajax" in text

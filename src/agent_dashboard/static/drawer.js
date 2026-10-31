@@ -6,7 +6,87 @@ function closeDrawer() {
   var url = new URL(window.location.href);
   url.searchParams.delete("instance");
   history.replaceState(null, "", url.pathname + url.search + url.hash);
+  syncRailSelection();
 }
+
+/* The inspected rail item stays highlighted across `fleet` SSE swaps: the
+   server marks it on the initial `?instance=` render and this reapplies it
+   from the URL after every swap. Rail buttons carry their instance name in
+   `data-instance`, so the sync never parses URLs. */
+function syncRailSelection() {
+  var params;
+  try {
+    params = new URLSearchParams(window.location.search);
+  } catch (e) { return; }
+  var name = params.get("instance") || "";
+  var items = document.querySelectorAll(".vc-rail-item");
+  for (var i = 0; i < items.length; i++) {
+    var el = items[i];
+    var itemName = el.getAttribute("data-instance") || "";
+    if (!itemName) {
+      var href = el.getAttribute("hx-get") || "";
+      var prefix = "/instances/";
+      if (href.indexOf(prefix) === 0) {
+        try {
+          itemName = decodeURIComponent(href.slice(prefix.length));
+        } catch (err) {
+          itemName = href.slice(prefix.length);
+        }
+      }
+    }
+    var on = !!name && itemName === name;
+    if (on) {
+      el.classList.add("is-selected");
+      el.setAttribute("aria-current", "true");
+    } else {
+      el.classList.remove("is-selected");
+      el.removeAttribute("aria-current");
+    }
+  }
+}
+
+/* Closing the cockpit is explicit: the drawer's back/close buttons call
+   closeDrawer(), Escape closes, and Back/Forward (popstate) keeps the
+   workspace in step with ?instance=. Clicking blank space never closes. */
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "Escape" && e.key !== "Esc") { return; }
+  if (!document.getElementById("drawer")) { return; }
+  closeDrawer();
+});
+
+window.addEventListener("popstate", function () {
+  var holder = document.getElementById("drawer-holder");
+  if (!holder) { return; }
+  var params = new URLSearchParams(window.location.search);
+  var name = params.get("instance") || "";
+  if (!name) {
+    holder.innerHTML = "";
+    syncRailSelection();
+    return;
+  }
+  if (window.htmx && window.htmx.ajax) {
+    window.htmx.ajax("GET", "/instances/" + encodeURIComponent(name), {
+      target: "#drawer-holder",
+      swap: "innerHTML",
+    });
+  } else {
+    fetch("/instances/" + encodeURIComponent(name))
+      .then(function (r) { return r.text(); })
+      .then(function (html) { holder.innerHTML = html; syncRailSelection(); })
+      .catch(function () { /* keep the current workspace on fetch failure */ });
+  }
+});
+
+(function () {
+  document.addEventListener("htmx:afterSwap", syncRailSelection);
+  document.addEventListener("htmx:afterSettle", syncRailSelection);
+  document.addEventListener("htmx:sseMessage", syncRailSelection);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", syncRailSelection);
+  } else {
+    syncRailSelection();
+  }
+})();
 
 /* Scroll position across the drawer's live refresh is kept by the shared
    keeper (`scroll-keep.js`): the drawer's `<aside id="drawer">` opts in
@@ -51,39 +131,7 @@ function closeDrawer() {
     var url = drag.strip.dataset.base + "from=" + days[lo] + "&to=" + days[hi];
     var target = drag.strip.dataset.target;
     drag = null;
-    try { window.__drawerStripSuppressClick = true; } catch (e) { /* ignore */ }
-    setTimeout(function () {
-      try { window.__drawerStripSuppressClick = false; } catch (e) { /* ignore */ }
-    }, 300);
     htmx.ajax("GET", url, { target: target, swap: "innerHTML" });
-  });
-})();
-
-/* Clicking empty page space outside the open drawer closes it, exactly as
-   the × button does. Fleet rows switch instead of closing, clicks inside
-   the drawer never close, and links, buttons, disclosure summaries and the
-   statistics strip keep their own behaviour. A text selection ending
-   outside the drawer does not close it either. */
-(function () {
-  document.addEventListener("click", function (e) {
-    if (window.__drawerStripSuppressClick) {
-      try { window.__drawerStripSuppressClick = false; } catch (err) { /* ignore */ }
-      return;
-    }
-    var drawer = document.getElementById("drawer");
-    if (!drawer) { return; }
-    if (e.button !== undefined && e.button !== 0) { return; }
-    var t = e.target;
-    if (!t || !t.closest) { return; }
-    if (t.closest("#drawer")) { return; }
-    if (t.closest(".fleet-row")) { return; }
-    if (t.closest("a, button, summary, .stats-strip")) { return; }
-    try {
-      var sel = window.getSelection && window.getSelection();
-      if (sel && !sel.isCollapsed) { return; }
-      if (sel && sel.toString && sel.toString() !== "") { return; }
-    } catch (err) { /* ignore */ }
-    closeDrawer();
   });
 })();
 
