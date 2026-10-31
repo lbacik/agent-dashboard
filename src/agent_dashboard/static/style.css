@@ -1,25 +1,27 @@
-/* Variant A prototype layout: narrow column, top header bar, plain table.
-   Light theme only for now (see DESIGN.md): every colour is a token on
-   :root and there is deliberately no prefers-color-scheme: dark block. */
+/* Crisp Technical Daylight instrument theme (see DESIGN.md): single
+   light-only token architecture. Every colour is a token on :root and
+   there is deliberately no prefers-color-scheme: dark block. */
 :root {
   color-scheme: light;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --oc-complete: #1a7f37;
   --oc-incomplete: #9a6700;
   --oc-handoff: #1f6feb;
   --oc-infra: #cf222e;
   --oc-nochanges: #6e7781;
   --oc-other: #8250df;
-  --card: #fff;
-  --bg: #f6f7f9;
-  --surface-2: #eef1f4;
-  --hover: #f2f6fb;
-  --ink: #1a1d21;
-  --muted: #5f6b76;
-  --line: #dfe3e8;
-  --accent: var(--oc-handoff);
-  --accent-soft: #7aa5f0;
-  --link: #0b5cd5;
-  --shadow: rgba(16, 20, 24, 0.12);
+  --card: #ffffff;
+  --bg: #eef2f6;
+  --surface-2: #e2e8f0;
+  --hover: #f8fafc;
+  --ink: #0f172a;
+  --muted: #475569;
+  --line: #cbd5e1;
+  --accent: #0284c7;
+  --accent-soft: #7dd3fc;
+  --link: #0369a1;
+  --shadow: rgba(15, 23, 42, 0.12);
   --danger-bg: #fdecec;
   --danger-ink: #8c1d1d;
   --danger-line: #f3b8b8;
@@ -39,29 +41,35 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans);
 }
 
 a { color: var(--link); }
 a:hover { text-decoration-thickness: 2px; }
 
+/* Compact instrument top bar: one slim header on every page. The fleet
+   view shows the title plus its subtitle; sub-pages swap the subtitle
+   for the breadcrumb trail and add the on-demand note plus Refresh on
+   the right. Only real values render here (no host/schema/mode chips). */
 .topbar {
   background: var(--card);
   color: var(--ink);
   border-bottom: 1px solid var(--line);
-  border-top: 3px solid var(--accent);
-  padding: 1.25rem 1.5rem;
+  border-top: 2px solid var(--accent);
+  padding: 0.5rem 1rem;
 }
 
 .topbar h1 {
   margin: 0;
-  font-size: 1.35rem;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
 }
 
 .topbar .subtitle {
-  margin: 0.25rem 0 0;
+  margin: 0.15rem 0 0;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.8rem;
 }
 
 /* Pages below the fleet view (Attempt history, Attempt log, Attempt
@@ -76,8 +84,8 @@ a:hover { text-decoration-thickness: 2px; }
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem 1rem;
-  padding: 0.75rem 1.5rem;
+  gap: 0.35rem 1rem;
+  padding: 0.4rem 1rem;
   max-width: 100%;
 }
 
@@ -96,10 +104,10 @@ a:hover { text-decoration-thickness: 2px; }
   align-items: baseline;
   gap: 0.25rem 0.5rem;
   list-style: none;
-  margin: 0.25rem 0 0;
+  margin: 0.15rem 0 0;
   padding: 0;
   min-width: 0;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
 }
 
 .crumbs li { min-width: 0; overflow-wrap: anywhere; }
@@ -110,7 +118,7 @@ a:hover { text-decoration-thickness: 2px; }
   margin-right: 0.5rem;
 }
 
-.topbar-actions .on-demand { color: var(--muted); font-size: 0.85rem; }
+.topbar-actions .on-demand { color: var(--muted); font-size: 0.8rem; }
 
 /* Jump targets below the pinned header (opened Evidence slots, sticky table
    headers) keep a clearance so the header never covers them. */
@@ -183,7 +191,14 @@ table.fleet td { vertical-align: top; font-size: 0.9rem; }
 .inst-name { font-weight: 600; }
 .inst-repo { color: var(--muted); font-size: 0.8rem; }
 
-.figure { white-space: nowrap; }
+/* Figures (budget, context, turns, cache, counts) read in a tabular
+   monospace so digits line up; labels stay in the sans stack. No
+   web-font fetch: both stacks are system fonts (loopback-only, ADR 0001). */
+.figure {
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
 .basis { color: var(--muted); font-size: 0.78rem; }
 
 /* Fleet overview panel above the table: a collapsible card whose body
@@ -411,13 +426,13 @@ table.fleet td.headline { min-width: 14rem; }
   cursor: pointer;
 }
 .ctl-card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; margin: 0; }
-.ctl-card-head code { font-family: monospace; }
+.ctl-card-head code { font-family: var(--font-mono); }
 .ctl-card-title { font-weight: 700; }
 .ctl-card-body { margin: 0.2rem 0 0; overflow-wrap: anywhere; }
 .ctl-card-progress { margin: 0.2rem 0 0; color: var(--muted); overflow-wrap: anywhere; }
 .ctl-card-note { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.8rem; }
 .ctl-card-meta { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.75rem; }
-.ctl-card-meta code { font-family: monospace; }
+.ctl-card-meta code { font-family: var(--font-mono); }
 .ctl-following::after {
   content: "";
   display: inline-block;
@@ -550,7 +565,7 @@ dl.facts dd { margin: 0; }
    the tooltip) with the kind and running state on a second line. */
 .drawer dl.facts dt .sub-id {
   display: block;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 0.8rem;
   color: var(--ink);
   white-space: nowrap;
@@ -568,7 +583,7 @@ ul.events li {
 .drawer code { overflow-wrap: anywhere; }
 .ev-time { color: var(--muted); }
 .ev-level { font-weight: 600; }
-.ev-name { font-family: ui-monospace, monospace; }
+.ev-name { font-family: var(--font-mono); }
 
 /* Attempt log levels: known levels carry a colour, unknown levels are plain. */
 .lvl-INFO { color: var(--info-ink); }
@@ -576,7 +591,15 @@ ul.events li {
 .lvl-ERROR { color: var(--danger-ink); }
 
 .attempt-title { margin: 0 0 0.5rem; font-size: 1.1rem; }
-.paging { display: flex; gap: 0.75rem; align-items: baseline; margin: 1rem 0; color: var(--muted); font-size: 0.9rem; }
+.paging {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  margin: 1rem 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
 
 .history-head h2 { margin: 0 0 0.25rem; font-size: 1.35rem; }
 .history-filters {
@@ -679,7 +702,12 @@ tr.active-row td { background: var(--hover); }
 
 .bars .grid { stroke: var(--line); stroke-width: 1; }
 .timeline .grid, .timeline .grid-v { stroke: var(--line); stroke-width: 1; }
-.bars .axis, .timeline .axis { fill: var(--muted); font-size: 11px; }
+.bars .axis, .timeline .axis {
+  fill: var(--muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
 /* Cost charts: single-series bars use the accent; the soft threshold is a
    dashed line with a text label, never colour alone (the label names it). */
 .bars .bar.cost { fill: var(--accent); }
@@ -708,7 +736,13 @@ tr.active-row td { background: var(--hover); }
   stroke-dasharray: 6 4;
 }
 .timeline .thresh-label { fill: var(--danger-ink); font-size: 11px; }
-.bars .seg-label { fill: var(--card); font-size: 11px; font-weight: 600; }
+.bars .seg-label {
+  fill: var(--card);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
 .bars .seg:focus, .timeline .mark:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .timeline .axis-line { stroke: var(--muted); stroke-width: 1.5; }
@@ -928,6 +962,7 @@ pre.activity-io {
   padding: 0.45rem 0.55rem;
   background: var(--surface-2);
   border-radius: 6px;
+  font-family: var(--font-mono);
   font-size: 0.76rem;
   line-height: 1.35;
   white-space: pre-wrap;
@@ -950,5 +985,6 @@ pre.activity-io-error { background: var(--danger-bg); color: var(--danger-ink); 
   color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 6px;
+  font-family: var(--font-mono);
   font-size: 0.8rem;
 }
