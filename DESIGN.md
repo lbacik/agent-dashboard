@@ -3,6 +3,67 @@
 Visual rules for the dashboard UI (`src/agent_dashboard/static/style.css`
 and the Jinja templates).
 
+## Palette: Crisp Technical Daylight
+
+Every dashboard page (the fleet view and the Attempt History, Attempt Log
+and Attempt Progress pages) uses the **Crisp Technical Daylight**
+instrument palette: a light slate surface with a white card chrome and a
+slim instrument-style top bar. The top bar keeps the canonical title
+`Agent fleet dashboard`, the breadcrumb trail on sub-pages, the fleet-page
+subtitle and the existing `topbar_actions` block (on-demand note /
+Refresh); it shows only real values, never prototype host/schema/mode
+chips.
+
+Base tokens on `:root`:
+
+- `--bg: #eef2f6`, `--card: #ffffff`, `--surface-2: #e2e8f0`,
+  `--hover: #f8fafc`
+- `--ink: #0f172a`, `--muted: #475569`, `--line: #cbd5e1`
+- `--accent: #0284c7`, `--link: #0369a1`
+
+New tokens on `:root`:
+
+- `--font-sans`: system geometric sans stack for labels
+  (`system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+  sans-serif`; no web-font fetch, the dashboard is loopback-only per
+  ADR 0001).
+- `--font-mono`: system monospace stack for figures
+  (`ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas,
+  "Liberation Mono", monospace`) with `font-variant-numeric:
+  tabular-nums` on figures (budget, context, turns, cache, counts), chart
+  axis and segment labels, and paging counts.
+- `--accent-soft: #7dd3fc`: hover/focus borders and the light half of the
+  hatched partly-estimated budget bar.
+- `--shadow: rgba(15, 23, 42, 0.12)`: drawer and tooltip shadows, keyed to
+  the ink colour.
+
+Semantic tokens (unchanged hues, checked against the surfaces above; every
+text pair meets WCAG AA, 4.5:1 or better):
+
+- Reach pills: live `var(--ok-ink)` on `var(--ok-bg)` (5.24:1), stale
+  `var(--warn-ink)` on `var(--warn-bg)` (6.80:1), unreachable
+  `var(--danger-ink)` on `var(--danger-bg)` (7.96:1), not running
+  `var(--off-ink)` on `var(--off-bg)` (6.94:1), unsupported
+  `var(--info-ink)` on `var(--info-bg)` (6.46:1).
+- Figure basis tags and stale markers: `var(--muted)` on `var(--card)`
+  (7.58:1); `.stale-tag` is warn ink on warn bg (6.80:1).
+- Danger/ok/warn/info/off surfaces: `--danger-ink #8c1d1d` on
+  `--danger-bg #fdecec` (7.96:1), `--ok-ink #137333` on `--ok-bg #e6f4ea`
+  (5.24:1), `--warn-ink #7a4b00` on `--warn-bg #fff4e0` (6.80:1),
+  `--info-ink #3949ab` on `--info-bg #e8eaf6` (6.46:1), `--off-ink #45525e`
+  on `--off-bg #eceff1` (6.94:1).
+- ADR 0004 outcome series (`--oc-complete #1a7f37`, `--oc-incomplete
+  #9a6700`, `--oc-handoff #1f6feb`, `--oc-infra #cf222e`,
+  `--oc-nochanges #6e7781`, `--oc-other #8250df`): legend glyphs on
+  `var(--card)` read 5.08/4.87/4.63/5.36/4.55/5.05:1, and the white
+  segment labels on the same fills read the same ratios in reverse; token
+  chart categories reuse these fills (`tok-input` handoff, `tok-cache-read`
+  complete, `tok-cache-creation` incomplete, `tok-output` other).
+  Chart series keep their distinct shapes/patterns alongside colour
+  (ADR 0004).
+- Links use `var(--link)` (`#0369a1` on white, 5.93:1); `var(--accent)`
+  (`#0284c7`) is never body text, only borders, fills and focus rings.
+
 ## Theme: light only (for now)
 
 We are currently experimenting with **light themes only**. The earlier
