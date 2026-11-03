@@ -291,18 +291,12 @@ def create_app(
         # nobody out: live sessions survive because only ended rows go.
         from . import account_store as _account_store
 
-        def _startup_session_cleanup() -> None:
-            conn = _account_store.open_store(
-                now=auth_clock(),
-                idle_timeout=cfg.sign_in_idle_timeout,
-                max_age=cfg.sign_in_max_age,
-            )
-            try:
-                pass
-            finally:
-                conn.close()
-
-        _startup_session_cleanup()
+        _cleanup_conn = _account_store.open_store(
+            now=auth_clock(),
+            idle_timeout=cfg.sign_in_idle_timeout,
+            max_age=cfg.sign_in_max_age,
+        )
+        _cleanup_conn.close()
     extra_hosts = getattr(cfg, "allowed_hosts", frozenset()) or frozenset()
     if getattr(cfg, "host_check", True):
         app.add_middleware(

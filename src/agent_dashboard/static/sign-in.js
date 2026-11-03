@@ -43,7 +43,11 @@
           }
         );
       } else {
-        checking = false;
+        // No promise to settle (older htmx): hold the single-flight guard
+        // past the current burst of SSE events, then release it.
+        window.setTimeout(function () {
+          checking = false;
+        }, 0);
       }
     } catch (err) {
       checking = false;

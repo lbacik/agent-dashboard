@@ -1122,6 +1122,18 @@ def test_stale_cookie_without_next_shows_short_info_box(lan):
     assert any("Max-Age=0" in h for h in cleared)
 
 
+def test_stale_cookie_with_invalid_next_shows_short_box(lan):
+    response = lan.client.get(
+        "/login?next=//evil",
+        headers=cookie_header("agent-dashboard-sign-in", "stale"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 200
+    assert 'data-tone="info"' in response.text
+    assert "Your sign-in session has ended. Sign in again." in response.text
+    assert "to continue where you were" not in response.text
+
+
 def test_stale_cookie_with_next_shows_full_info_box_and_keeps_next(lan):
     response = lan.client.get(
         "/login?next=/instances/work/history",
@@ -1365,6 +1377,127 @@ def test_startup_cleanup_deletes_ended_sessions(tmp_path, monkeypatch):
         assert conn.execute("SELECT COUNT(*) FROM sign_in_sessions").fetchone()[0] == 0
     finally:
         conn.close()
+
+
+def test_stream_ends_at_absolute_limit_with_injected_clock(tmp_path, monkeypatch):
+    import asyncio
+
+    env = make_lan(tmp_path, monkeypatch)
+    add_account("alice", now=T0)
+    token = set_cookies(post_login(env.client))["agent-dashboard-sign-in"]
+
+    async def is_signed_in():
+        def work():
+            conn = account_store.open_store()
+            try:
+                return (
+                    account_store.find_sign_in_session(
+                        conn,
+                        hashlib.sha256(token.encode()).digest(),
+                        now=env.clock.now,
+                        idle_timeout=env.settings.sign_in_idle_timeout,
+                        max_age=env.settings.sign_in_max_age,
+                    )
+                    is not None
+                )
+            finally:
+                conn.close()
+
+        return await asyncio.to_thread(work)
+
+    async def scenario():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        class FakeFleet:
+            def subscribe(self):
+                return queue
+
+            def unsubscribe(self, _queue):
+                pass
+
+            async def snapshot(self, poll_interval=None):
+                return ([], None)
+
+        async def connected():
+            return False
+
+        stream = fleet_event_stream(
+            FakeFleet(), lambda rows, error: "TABLE",
+            connected, None, is_signed_in=is_signed_in,
+        )
+        it = stream.__aiter__()
+        assert (await it.__anext__()).startswith("retry:")
+        assert (await it.__anext__()).startswith("event: fleet")
+        # Past the absolute limit the next fleet event ends the stream,
+        # even though idle activity kept refreshing until then.
+        env.clock.now = T0 + 43200.0 + 1
+        await queue.put(1)
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(it.__anext__(), timeout=2)
+        await stream.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_stream_fleet_event_refreshes_activity(tmp_path, monkeypatch):
+    import asyncio
+
+    env = make_lan(tmp_path, monkeypatch)
+    add_account("alice", now=T0)
+    token = set_cookies(post_login(env.client))["agent-dashboard-sign-in"]
+    digest = hashlib.sha256(token.encode()).digest()
+
+    async def is_signed_in():
+        def work():
+            conn = account_store.open_store()
+            try:
+                found = account_store.find_sign_in_session(
+                    conn,
+                    digest,
+                    now=env.clock.now,
+                    idle_timeout=env.settings.sign_in_idle_timeout,
+                    max_age=env.settings.sign_in_max_age,
+                )
+                return found is not None
+            finally:
+                conn.close()
+
+        return await asyncio.to_thread(work)
+
+    async def scenario():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        class FakeFleet:
+            def subscribe(self):
+                return queue
+
+            def unsubscribe(self, _queue):
+                pass
+
+            async def snapshot(self, poll_interval=None):
+                return ([], None)
+
+        async def connected():
+            return False
+
+        stream = fleet_event_stream(
+            FakeFleet(), lambda rows, error: "TABLE",
+            connected, None, is_signed_in=is_signed_in,
+        )
+        it = stream.__aiter__()
+        assert (await it.__anext__()).startswith("retry:")
+        assert (await it.__anext__()).startswith("event: fleet")
+        # A fleet event 91 s later re-checks (and refreshes) the session,
+        # so the stream stays alive instead of ending.
+        env.clock.now = T0 + 91
+        await queue.put(1)
+        assert (await asyncio.wait_for(it.__anext__(), timeout=2)).startswith(
+            "event: fleet"
+        )
+        assert last_seen_of("alice", token) == T0 + 91
+        await stream.aclose()
+
+    asyncio.run(scenario())
 
 
 # --- sign-in.js SSE close (spec 5.6, static asset) --------------------------------

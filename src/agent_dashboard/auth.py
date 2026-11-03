@@ -420,14 +420,10 @@ def _stale_session_view(next_param: str | None) -> SignInView:
             "Your sign-in session has ended. "
             "Sign in again to continue where you were."
         )
-        return SignInView(
-            notice_tone="info", notice_text=text, next=cleaned
-        )
-    return SignInView(
-        notice_tone="info",
-        notice_text="Your sign-in session has ended. Sign in again.",
-        next="",
-    )
+    else:
+        text = "Your sign-in session has ended. Sign in again."
+        cleaned = ""
+    return SignInView(notice_tone="info", notice_text=text, next=cleaned)
 
 
 def _render_login(
@@ -629,15 +625,13 @@ def register_auth_routes(app, templates: Jinja2Templates) -> None:
             return RedirectResponse(
                 sanitize_next(request.query_params.get("next")), status_code=303
             )
-        stale = read_session_id(request) is not None
-        if stale:
-            view = _login_view_for_query(request)
-            if view.notice_tone is None:
-                view = _stale_session_view(request.query_params.get("next"))
+        view = _login_view_for_query(request)
+        if read_session_id(request) is not None and view.notice_tone is None:
+            view = _stale_session_view(request.query_params.get("next"))
             response = _render_login(request, templates, view)
             _clear_sign_in_cookies(response)
             return response
-        return _render_login(request, templates, _login_view_for_query(request))
+        return _render_login(request, templates, view)
 
     @app.post("/login", response_class=HTMLResponse)
     async def login_submit(request: Request) -> Response:
