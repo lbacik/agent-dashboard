@@ -531,6 +531,18 @@ def consume_set_password_link(
         )
 
 
+def any_account_can_sign_in(conn: sqlite3.Connection) -> bool:
+    """True when at least one account can sign in (spec 2.3).
+
+    An account can sign in when it is not removed and has a password set.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM accounts "
+        "WHERE removed_at IS NULL AND password_hash IS NOT NULL LIMIT 1"
+    ).fetchone()
+    return row is not None
+
+
 def active_controllers(conn: sqlite3.Connection) -> list[Account]:
     """Accounts that can sign in with the ``controller`` Role."""
     return [
@@ -689,6 +701,7 @@ __all__ = [
     "StoreError",
     "UnknownAccountError",
     "active_controllers",
+    "any_account_can_sign_in",
     "check_name",
     "cleanup_ended_sessions",
     "cleanup_links",

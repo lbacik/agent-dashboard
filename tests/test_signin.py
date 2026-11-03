@@ -1,7 +1,8 @@
 """Sign-in, sign-out and the gate in LAN mode (spec 3, 4.3, 5.1-5.4, 5.6, 8, 9).
 
-LAN mode apps are built directly with LAN mode ``Settings``; the CLI still
-refuses LAN mode. The growing delay (5.5) lives in ``test_signin_delay.py``.
+LAN mode apps are built directly with LAN mode ``Settings`` and through the
+CLI entry point (see ``test_lan_mode.py`` for the end-to-end flow). The
+growing delay (5.5) lives in ``test_signin_delay.py``.
 The stale-cookie box (5.6) is a separate ticket: ``GET /login`` with a stale
 cookie clears it and shows the plain form.
 """
