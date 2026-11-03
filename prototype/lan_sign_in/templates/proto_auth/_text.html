@@ -1,0 +1,21 @@
+{# PROTOTYPE (#151): copy shared by the Set-password variants. #}
+{% macro link_message(link) -%}
+{%- if link.state == "expired" -%}
+This Set-password link has expired: links work for 24 hours. Ask whoever runs the dashboard host for a new one.
+{%- elif link.state == "used" -%}
+This Set-password link has already been used. If that was not you, or you have forgotten the password, ask for a new link.
+{%- elif link.state == "superseded" -%}
+A newer Set-password link was issued for this account, so this one no longer works. Use the newest link you received.
+{%- else -%}
+This Set-password link is not valid. Check that you copied the whole link, or ask for a new one.
+{%- endif -%}
+{%- endmacro %}
+{% macro host_command(link) -%}
+{%- if link.account -%}agent-dashboard account reset {{ link.account }}{%- else -%}agent-dashboard account reset &lt;name&gt;{%- endif -%}
+{%- endmacro %}
+{% macro field_error(code) -%}
+{%- if code == "short" -%}Use at least 15 characters.
+{%- elif code == "long" -%}Use at most 128 characters.
+{%- elif code == "mismatch" -%}The two passwords differ.
+{%- endif -%}
+{%- endmacro %}

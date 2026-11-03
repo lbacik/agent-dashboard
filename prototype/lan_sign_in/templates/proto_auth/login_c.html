@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{# PROTOTYPE (#151) variant C, Console line: the page reads like the
+   Control console, an event log of this browser's sign-in events above a
+   single-row form. #}
+{% block content %}
+<section class="vc-module proto-c-console">
+  <h2 class="vc-module-bar">Sign in // {{ "return to " ~ next if next != "/" else "fleet" }}</h2>
+  <div class="vc-module-body">
+    <ol class="proto-c-log" aria-label="Sign-in events">
+      {% if notice == "ended" %}<li class="proto-c-ev proto-c-ev-warn"><span class="proto-c-t">now</span><span class="proto-c-kind">ended</span><span>sign-in session ended; sign in to continue</span></li>{% endif %}
+      {% if notice == "signed_out" %}<li class="proto-c-ev proto-c-ev-ok"><span class="proto-c-t">now</span><span class="proto-c-kind">signed out</span><span>this browser only</span></li>{% endif %}
+      {% if notice == "password_set" %}<li class="proto-c-ev proto-c-ev-ok"><span class="proto-c-t">now</span><span class="proto-c-kind">password set</span><span>sign in with it</span></li>{% endif %}
+      {% if error == "wrong" %}<li class="proto-c-ev proto-c-ev-err" role="alert"><span class="proto-c-t">now</span><span class="proto-c-kind">failed</span><span>account name or password is incorrect · next attempt in <span data-countdown-text="{{ retry_after }}">{{ retry_after }}</span> s</span></li>
+      {% elif error == "wait" %}<li class="proto-c-ev proto-c-ev-err" role="alert"><span class="proto-c-t">now</span><span class="proto-c-kind">not checked</span><span>too many failed sign-ins · next attempt in <span data-countdown-text="{{ retry_after }}">{{ retry_after }}</span> s</span></li>
+      {% elif error == "insecure" %}<li class="proto-c-ev proto-c-ev-err" role="alert"><span class="proto-c-t">now</span><span class="proto-c-kind">refused</span><span>origin is neither https nor loopback</span></li>{% endif %}
+      {% for e in proto.log[:5] %}
+      <li class="proto-c-ev proto-c-ev-past"><span class="proto-c-t">{{ e.t }}</span><span class="proto-c-kind">{{ e.kind }}</span><span>{{ e.text }}</span></li>
+      {% endfor %}
+      <li class="proto-c-ev proto-c-ev-warn" data-insecure-note hidden><span class="proto-c-t">now</span><span class="proto-c-kind">off</span><span>sign-in requires https:// or an SSH tunnel to localhost; the form is disabled</span></li>
+    </ol>
+    <form class="proto-c-form" method="post" action="/login" data-secure-form>
+      <input type="hidden" name="next" value="{{ next }}">
+      <span class="ctl-prompt" aria-hidden="true">$</span>
+      <label class="proto-c-in"><span class="proto-c-k">account</span>
+        <input name="account" value="{{ account }}" autocomplete="username" autocapitalize="none" spellcheck="false" size="14" required{% if not account %} autofocus{% endif %}></label>
+      <label class="proto-c-in"><span class="proto-c-k">password</span>
+        <input name="password" type="password" autocomplete="current-password" size="22" required{% if account %} autofocus{% endif %}></label>
+      <button class="btn btn-primary" type="submit" data-countdown="{{ retry_after if error in ('wrong', 'wait') else 0 }}" data-label="Sign in">Sign in</button>
+    </form>
+    <p class="hint proto-small">The event log shows this browser's recent sign-in events (prototype: all of them). No account or forgot the password: ask the host for a Set-password link.</p>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{# PROTOTYPE (#151) variant A, Plain card: one narrow centred card; every
+   notice and error is one box above the form. #}
+{% block content %}
+<section class="vc-module proto-a-card" aria-labelledby="signin-title">
+  <h2 class="vc-module-bar" id="signin-title">Sign in</h2>
+  <div class="vc-module-body">
+    {% if notice == "ended" %}
+    <p class="proto-box proto-box-info">Your sign-in session has ended. Sign in again to continue{% if next != "/" %} where you were{% endif %}.</p>
+    {% elif notice == "signed_out" %}
+    <p class="proto-box proto-box-ok">You have signed out.</p>
+    {% elif notice == "password_set" %}
+    <p class="proto-box proto-box-ok">Your password is set. Sign in with it now.</p>
+    {% endif %}
+
+    {% if error == "wrong" %}
+    <p class="proto-box proto-box-danger" role="alert">Account name or password is incorrect.{% if retry_after > 1 %} Wait {{ retry_after }} seconds before trying again.{% endif %}</p>
+    {% elif error == "wait" %}
+    <p class="proto-box proto-box-danger" role="alert">Too many failed sign-ins. Wait {{ retry_after }} seconds, then try again. That attempt was not checked.</p>
+    {% elif error == "insecure" %}
+    <p class="proto-box proto-box-danger" role="alert">Sign-in was refused: this page was not opened over HTTPS.</p>
+    {% endif %}
+
+    <p class="proto-box proto-box-warn" data-insecure-note hidden>Sign-in requires HTTPS. Open the dashboard through its <code>https://</code> address (or an SSH tunnel to <code>localhost</code>); the form stays off so your password is never sent.</p>
+
+    <form class="proto-a-form" method="post" action="/login" data-secure-form>
+      <input type="hidden" name="next" value="{{ next }}">
+      <label>Account name
+        <input name="account" value="{{ account }}" autocomplete="username" autocapitalize="none" spellcheck="false" required{% if not account %} autofocus{% endif %}>
+      </label>
+      <label>Password
+        <input name="password" type="password" autocomplete="current-password" required{% if account %} autofocus{% endif %}>
+      </label>
+      <button class="btn btn-primary proto-wide" type="submit">Sign in</button>
+    </form>
+    <p class="hint proto-small">No account, or forgot your password? Ask whoever runs the dashboard host for a Set-password link.</p>
+  </div>
+</section>
+{% endblock %}

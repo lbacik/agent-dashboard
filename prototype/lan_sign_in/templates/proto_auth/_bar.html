@@ -1,0 +1,37 @@
+{# PROTOTYPE (#151): floating switcher + scenario controls + full auth state. #}
+<aside class="proto-switcher" data-variants="{{ proto.keys }}" data-current="{{ proto.variant }}" aria-label="Prototype controls">
+  <div class="proto-sw-row">
+    <button type="button" data-step="-1" aria-label="Previous variant">←</button>
+    <span class="proto-sw-label">{{ proto.variant }} ({{ proto.variant_name }})</span>
+    <button type="button" data-step="1" aria-label="Next variant">→</button>
+    <span class="proto-sw-sep"></span>
+    <button type="button" data-scenario="expire=1" title="Delete every sign-in session (idle or absolute expiry, reset or removal from the host)">Expire sign-in session</button>
+    <label>alice <select data-field="role">
+      {% set r = proto.accounts['alice'].role %}
+      <option value="alice:viewer"{% if r == 'viewer' %} selected{% endif %}>viewer</option>
+      <option value="alice:controller"{% if r == 'controller' %} selected{% endif %}>controller</option>
+    </select></label>
+    <label>Control <select data-field="control">
+      <option value="on"{% if not proto.control_off %} selected{% endif %}>on</option>
+      <option value="off"{% if proto.control_off %} selected{% endif %}>off</option>
+    </select></label>
+    <label>Context <select data-field="insecure">
+      <option value="0"{% if not proto.insecure %} selected{% endif %}>secure</option>
+      <option value="1"{% if proto.insecure %} selected{% endif %}>plain http on LAN</option>
+    </select></label>
+  </div>
+  <div class="proto-sw-row">
+    <span>Set-password link:</span>
+    <a href="/set-password?token=valid">valid</a>
+    <a href="/set-password?token=expired">expired</a>
+    <a href="/set-password?token=used">used</a>
+    <a href="/set-password?token=superseded">superseded</a>
+    <a href="/set-password?token=bogus">unknown</a>
+    <button type="button" data-scenario="new_link=1">new link</button>
+    <span class="proto-sw-sep"></span>
+    <a href="/login">/login</a>
+    <button type="button" data-scenario="reset=1">reset all</button>
+    <span class="proto-sw-hint">alice · bob · carol (no password) / correct-horse-battery</span>
+  </div>
+  <div class="proto-sw-state" hx-get="/proto/state" hx-trigger="load, every 1s" hx-swap="innerHTML"></div>
+</aside>

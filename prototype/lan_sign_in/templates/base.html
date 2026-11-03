@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+{# PROTOTYPE (#151), throwaway: copy of the real base.html with the signed-in
+   indicator per variant, the prototype bar and its assets. #}
+{% set op = proto.op(request) if request is defined else none %}
+{% set v = proto.variant %}
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{% if auth_page is defined %}Sign in · {% endif %}Agent fleet dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/proto-static/proto.css">
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/sse.js" defer></script>
+  <script>window.PROTO_INSECURE = {{ "true" if proto.insecure else "false" }};</script>
+</head>
+<body class="proto-v{{ v }}">
+  <header class="topbar{% if breadcrumbs is defined %} pinned{% endif %}">
+    <div class="topbar-brand">
+      <span class="topbar-led" aria-hidden="true"></span>
+      <h1>Agent fleet dashboard</h1>
+    </div>
+    <div class="topbar-title">
+      {% if auth_page is defined %}
+      <p class="subtitle">LAN mode · sign-in required</p>
+      {% elif breadcrumbs is defined %}
+      <nav aria-label="Breadcrumb">
+        <ol class="crumbs">
+          {% for crumb in breadcrumbs %}
+          {% if crumb.url is not none %}
+          <li><a href="{{ crumb.url }}">{{ crumb.label }}</a></li>
+          {% else %}
+          <li><span aria-current="page">{{ crumb.label }}</span></li>
+          {% endif %}
+          {% endfor %}
+        </ol>
+      </nav>
+      {% else %}
+      <p class="subtitle">Managed instances on this Docker host</p>
+      {% endif %}
+    </div>
+    <div class="topbar-chips">
+      {% if auth_page is not defined %}
+      {% if poll_interval is defined %}<span class="topbar-chip">Stream <strong>{{ poll_interval }}s</strong></span>{% endif %}
+      <span class="topbar-chip">Control <strong>{{ "off" if proto.control_off else "on" }}</strong></span>
+      {% if op and v == "A" %}
+      <span class="topbar-chip proto-a-who" title="Signed in since {{ op.since }}">Operator <strong>{{ op.name }}</strong> · {{ op.role }}</span>
+      {% endif %}
+      {% endif %}
+    </div>
+    {% block topbar_actions %}{% endblock %}
+    {% if op and auth_page is not defined %}
+    {% if v == "A" %}
+    <form class="proto-a-out" method="post" action="/logout"><button class="btn" type="submit">Sign out</button></form>
+    {% elif v == "B" %}
+    <details class="proto-b-acct">
+      <summary aria-label="Account {{ op.name }}, role {{ op.role }}">
+        <span class="proto-led proto-led-on" aria-hidden="true"></span>
+        <span class="proto-b-name">{{ op.name }}</span>
+        <span class="proto-role proto-role-{{ op.role }}">{{ op.role }}</span>
+        <span aria-hidden="true">▾</span>
+      </summary>
+      <div class="proto-b-menu">
+        <p class="proto-b-menu-bar">Signed in</p>
+        <dl class="proto-readouts">
+          <dt>Account</dt><dd>{{ op.name }}</dd>
+          <dt>Role</dt><dd>{{ op.role }} · {% if op.role == "viewer" %}can view, cannot issue Control actions{% else %}can view and issue Control actions{% endif %}</dd>
+          <dt>Signed in</dt><dd>{{ op.since }}</dd>
+          <dt>Ends</dt><dd>after {{ op.idle_min }} min idle, at the latest {{ op.ends_by }}</dd>
+        </dl>
+        <form method="post" action="/logout"><button class="btn proto-wide" type="submit">Sign out</button></form>
+      </div>
+    </details>
+    {% endif %}
+    {% endif %}
+  </header>
+  {% if op and v == "C" and auth_page is not defined %}
+  <div class="proto-c-strip" role="status">
+    <span><span class="proto-c-k">Signed in</span> <strong>{{ op.name }}</strong></span>
+    <span><span class="proto-c-k">Role</span> <span class="proto-role proto-role-{{ op.role }}">{{ op.role }}</span>{% if op.role == "viewer" %} <span class="proto-c-dim">view only</span>{% endif %}</span>
+    <span><span class="proto-c-k">Session</span> since {{ op.since }} · idle {{ op.idle_min }} min · ends by {{ op.ends_by }}</span>
+    <form method="post" action="/logout"><button class="proto-c-out" type="submit">Sign out</button></form>
+  </div>
+  {% endif %}
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  {% include "proto_auth/_bar.html" %}
+  <script src="/proto-static/proto.js" defer></script>
+</body>
+</html>

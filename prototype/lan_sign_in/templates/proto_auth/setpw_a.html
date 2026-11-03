@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{# PROTOTYPE (#151) variant A, Plain card: Set-password page. #}
+{% from "proto_auth/_text.html" import link_message, host_command, field_error %}
+{% block content %}
+<section class="vc-module proto-a-card" aria-labelledby="setpw-title">
+  <h2 class="vc-module-bar" id="setpw-title">Set your password</h2>
+  <div class="vc-module-body">
+    {% if link.state != "valid" %}
+    <p class="proto-box proto-box-danger" role="alert">{{ link_message(link) }}</p>
+    <p class="hint proto-small">On the host: <code>{{ host_command(link) }}</code> prints a new link.</p>
+    <p><a href="/login">Go to sign-in</a></p>
+    {% else %}
+    <p>Account <strong class="proto-mono">{{ link.account }}</strong></p>
+    {% if errors.form == "insecure" %}<p class="proto-box proto-box-danger" role="alert">Refused: this page was not opened over HTTPS.</p>{% endif %}
+    {% if errors.password or errors.confirm %}<p class="proto-box proto-box-danger" role="alert">{{ field_error(errors.password or errors.confirm) }}</p>{% endif %}
+    <p class="proto-box proto-box-warn" data-insecure-note hidden>Setting a password requires HTTPS. Open the link through the dashboard's <code>https://</code> address (or an SSH tunnel to <code>localhost</code>).</p>
+    <form class="proto-a-form" method="post" action="/set-password" data-secure-form>
+      <input type="hidden" name="token" value="{{ token }}">
+      <input type="hidden" name="account" value="{{ link.account }}" autocomplete="username">
+      <label>New password
+        <input name="password" type="password" autocomplete="new-password" minlength="15" maxlength="128" required autofocus data-pw-count>
+      </label>
+      <label>Repeat the password
+        <input name="confirm" type="password" autocomplete="new-password" minlength="15" maxlength="128" required>
+      </label>
+      <p class="hint proto-small">15 to 128 characters, anything allowed, spaces included. A long phrase is easiest. <span data-pw-count-out></span></p>
+      <button class="btn btn-primary proto-wide" type="submit">Set password</button>
+    </form>
+    <p class="hint proto-small">The link works once, until {{ link.expires }} ({{ link.left_h }} h left). After this you sign in on the next page.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

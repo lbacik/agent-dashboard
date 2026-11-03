@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{# PROTOTYPE (#151) variant B, Instrument split: Connection readouts beside
+   the form; the error sits under the field it concerns and the button
+   counts down the growing delay. #}
+{% block content %}
+{% if notice == "ended" %}
+<div class="proto-b-banner proto-b-banner-warn" role="status">
+  <span class="proto-b-banner-tag">Sign-in session ended</span>
+  <span>Signed out after {{ 30 }} minutes without activity, at the 12-hour limit, or by the host. {% if next != "/" %}You return to the same page after signing in.{% endif %}</span>
+</div>
+{% elif notice == "signed_out" %}
+<div class="proto-b-banner proto-b-banner-ok" role="status"><span class="proto-b-banner-tag">Signed out</span><span>This browser's sign-in session is deleted; others stay signed in.</span></div>
+{% elif notice == "password_set" %}
+<div class="proto-b-banner proto-b-banner-ok" role="status"><span class="proto-b-banner-tag">Password set</span><span>Sign in with your new password.</span></div>
+{% endif %}
+<div class="proto-b-split">
+  <section class="vc-module">
+    <h2 class="vc-module-bar">01 // Sign in</h2>
+    <div class="vc-module-body">
+      <form class="proto-b-form" method="post" action="/login" data-secure-form>
+        <input type="hidden" name="next" value="{{ next }}">
+        <label class="proto-b-field"><span>Account name</span>
+          <input name="account" value="{{ account }}" autocomplete="username" autocapitalize="none" spellcheck="false" required{% if not account %} autofocus{% endif %}>
+        </label>
+        <label class="proto-b-field"><span>Password</span>
+          <input name="password" type="password" autocomplete="current-password" required{% if account %} autofocus{% endif %}
+                 {% if error in ("wrong", "wait") %}aria-invalid="true" aria-describedby="pw-err"{% endif %}>
+          {% if error == "wrong" %}<span class="proto-b-err" id="pw-err" role="alert">Account name or password is incorrect.</span>
+          {% elif error == "wait" %}<span class="proto-b-err" id="pw-err" role="alert">Too many failed sign-ins: that attempt was not checked.</span>{% endif %}
+        </label>
+        <button class="btn btn-primary proto-wide" type="submit" data-countdown="{{ retry_after if error in ('wrong', 'wait') else 0 }}" data-label="Sign in">Sign in</button>
+        <p class="proto-b-insecure" data-insecure-note hidden>Sign-in is off: this page is not a secure context. Use the <code>https://</code> address or an SSH tunnel to <code>localhost</code>.</p>
+        {% if error == "insecure" %}<p class="proto-b-err" role="alert">Refused: the request did not come from an <code>https</code> or loopback origin.</p>{% endif %}
+      </form>
+    </div>
+  </section>
+  <section class="vc-module">
+    <h2 class="vc-module-bar">02 // Connection</h2>
+    <div class="vc-module-body">
+      <dl class="proto-readouts">
+        <dt>Origin</dt><dd><code>{{ origin }}</code></dd>
+        <dt>Secure context</dt><dd><span class="proto-led" data-secure-led aria-hidden="true"></span> <span data-secure-text>checking…</span></dd>
+        <dt>Cookie</dt><dd data-cookie-kind>—</dd>
+        <dt>After sign-in</dt><dd><code>{{ next }}</code></dd>
+        <dt>Session limits</dt><dd>30 min idle · 12 h at most</dd>
+      </dl>
+      <p class="hint proto-small">Accounts are created from the host shell (<code>agent-dashboard account add</code>). Forgot your password? Ask for a Set-password link.</p>
+    </div>
+  </section>
+</div>
+{% endblock %}

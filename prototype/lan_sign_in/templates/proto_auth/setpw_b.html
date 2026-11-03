@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{# PROTOTYPE (#151) variant B, Instrument split: Link readouts beside the
+   form, a live length meter and a match indicator, errors under fields. #}
+{% from "proto_auth/_text.html" import link_message, host_command, field_error %}
+{% block content %}
+{% if link.state != "valid" %}
+<div class="proto-b-banner proto-b-banner-danger" role="alert"><span class="proto-b-banner-tag">Link {{ "not valid" if link.state == "unknown" else link.state }}</span><span>{{ link_message(link) }}</span></div>
+{% endif %}
+<div class="proto-b-split">
+  <section class="vc-module">
+    <h2 class="vc-module-bar">01 // Choose a password</h2>
+    <div class="vc-module-body">
+      {% if link.state != "valid" %}
+      <p class="hint">Nothing to set with this link.</p>
+      <p><a class="btn" href="/login">Go to sign-in</a></p>
+      {% else %}
+      <form class="proto-b-form" method="post" action="/set-password" data-secure-form>
+        <input type="hidden" name="token" value="{{ token }}">
+        <input type="hidden" name="account" value="{{ link.account }}" autocomplete="username">
+        <label class="proto-b-field"><span>New password</span>
+          <input name="password" type="password" autocomplete="new-password" maxlength="128" required autofocus data-pw-meter{% if errors.password %} aria-invalid="true"{% endif %}>
+          <span class="proto-meter" aria-hidden="true"><span class="proto-meter-min"></span><span class="proto-meter-fill" data-pw-meter-fill></span></span>
+          <span class="proto-small proto-mono" data-pw-meter-out>0 / 15–128</span>
+          {% if errors.password %}<span class="proto-b-err" role="alert">{{ field_error(errors.password) }}</span>{% endif %}
+        </label>
+        <label class="proto-b-field"><span>Repeat</span>
+          <input name="confirm" type="password" autocomplete="new-password" maxlength="128" required data-pw-confirm{% if errors.confirm %} aria-invalid="true"{% endif %}>
+          <span class="proto-small proto-mono" data-pw-match-out></span>
+          {% if errors.confirm %}<span class="proto-b-err" role="alert">{{ field_error(errors.confirm) }}</span>{% endif %}
+        </label>
+        <button class="btn btn-primary proto-wide" type="submit">Set password</button>
+        <p class="proto-b-insecure" data-insecure-note hidden>Off: this page is not a secure context. Use the <code>https://</code> address or an SSH tunnel to <code>localhost</code>.</p>
+        {% if errors.form == "insecure" %}<p class="proto-b-err" role="alert">Refused: the request did not come from an <code>https</code> or loopback origin.</p>{% endif %}
+      </form>
+      {% endif %}
+    </div>
+  </section>
+  <section class="vc-module">
+    <h2 class="vc-module-bar">02 // Set-password link</h2>
+    <div class="vc-module-body">
+      <dl class="proto-readouts">
+        <dt>State</dt><dd><span class="proto-led {{ 'proto-led-on' if link.state == 'valid' else 'proto-led-bad' }}" aria-hidden="true"></span> {{ "valid, single use" if link.state == "valid" else ("not valid" if link.state == "unknown" else link.state) }}</dd>
+        {% if link.account %}<dt>Account</dt><dd class="proto-mono">{{ link.account }}</dd>
+        <dt>Issued</dt><dd>{{ link.issued }}</dd>
+        <dt>Expires</dt><dd>{{ link.expires }}{% if link.state == "valid" %} ({{ link.left_h }} h left){% endif %}</dd>{% endif %}
+        <dt>Afterwards</dt><dd>sign in at <code>/login</code></dd>
+      </dl>
+      <p class="hint proto-small">A new link from the host (<code>{{ host_command(link) }}</code>) cancels this one.</p>
+    </div>
+  </section>
+</div>
+{% endblock %}

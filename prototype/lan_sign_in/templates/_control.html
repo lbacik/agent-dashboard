@@ -1,0 +1,62 @@
+{# Control console body (spec sections 5, 8.2): the "Controls unavailable"
+   line, or the composer. Fetched by the console slot in the
+   drawer on load and on every filtered `sse:fleet` event. A validation or
+   disabled-action refusal from the review route re-renders this composer
+   with `review_error` and the entered values (`entered_action`,
+   `entered_n`, `entered_issue`); the live preview script re-syncs from
+   the checked radio and the typed values after the swap. #}
+{# PROTOTYPE (#151): copy of the real console body; a viewer gets variant B
+   (composer, every action disabled) or C (View-only notice + timeline).
+   Variant A goes through the real "Controls unavailable" line. #}
+{% set viewer = proto.is_viewer(request) and not av.unavailable %}
+{% if error %}
+<p class="hint">{{ error }}</p>
+{% elif viewer and proto.variant == "C" %}
+<p class="proto-c-viewonly"><span class="proto-c-lock" aria-hidden="true">🔒</span> <strong>View only</strong> <span>Your account has the <span class="proto-role proto-role-viewer">viewer</span> Role: you see this console's commands but cannot issue Control actions.</span></p>
+<details class="ctl-timeline" data-persist="control-timeline" open>
+  <summary><span class="ctl-timeline-title">Commands (last 10 from telemetry)</span>{% if commands_summary is defined %} <span id="ctl-timeline-summary-{{ slug }}" class="ctl-timeline-sum">{{ commands_summary }}</span>{% endif %}</summary>
+  <div class="ctl-timeline-list" hx-get="{{ commands_url }}" hx-trigger="sse:fleet" hx-swap="innerHTML">
+    {% include "_control_commands_list.html" %}
+  </div>
+</details>
+{% elif av.unavailable %}
+<p class="ctl-unavailable">Controls unavailable: {{ av.unavailable }}</p>
+{% else %}
+{% if av.stale_note %}<p class="ctl-stale">{{ av.stale_note }}</p>{% endif %}
+{% if review_error is defined and review_error %}<p class="ctl-error">{{ review_error }}</p>{% endif %}
+{% set ns = namespace(checked_key=None) %}
+{% if entered_action is defined and entered_action %}
+{% set ns.checked_key = entered_action %}
+{% else %}
+{% for a in av.actions %}{% if a.checked and ns.checked_key is none %}{% set ns.checked_key = a.key %}{% endif %}{% endfor %}
+{% endif %}
+{% if viewer %}<p class="proto-b-viewonly">Your account (<strong>viewer</strong>) can view but not issue Control actions.</p>{% endif %}
+<form class="ctl-composer{% if viewer %} proto-b-locked{% endif %}" hx-post="{{ review_url }}" hx-target="closest .ctl-body" hx-swap="innerHTML">
+  <div class="ctl-actions" role="radiogroup" aria-label="Control action">
+    {% for a in av.actions %}
+    {% set off = viewer or not a.enabled %}
+    <label class="ctl-opt{% if off %} is-disabled{% endif %}">
+      <input type="radio" name="action" value="{{ a.key }}"{% if off %} disabled{% endif %}{% if a.key == ns.checked_key and not viewer %} checked{% endif %} data-cmd="{{ ACTION_COMMANDS[a.key] }}">
+      <span class="ctl-label">{{ a.label }}</span>
+      {% if viewer %}<span class="ctl-reason">needs the controller Role</span>{% elif a.reason %}<span class="ctl-reason">{{ a.reason }}</span>{% elif a.note %}<span class="ctl-note">{{ a.note }}</span>{% endif %}
+    </label>
+    {% endfor %}
+  </div>
+  <div class="ctl-params">
+    <label data-for="stop_after"{% if ns.checked_key != "stop_after" %} hidden{% endif %}>Attempts before stopping <input name="n" inputmode="numeric" size="3" value="{% if entered_n is defined and entered_n is not none %}{{ entered_n }}{% else %}1{% endif %}"></label>
+    <label data-for="next_issue"{% if ns.checked_key != "next_issue" %} hidden{% endif %}>Issue number <input name="issue" inputmode="numeric" size="7" value="{% if entered_issue is defined and entered_issue is not none %}{{ entered_issue }}{% else %}{% endif %}" placeholder="e.g. 123"></label>
+  </div>
+  {% set first = av.actions | selectattr("enabled") | first %}
+  <p class="ctl-preview"><span class="ctl-prompt">$</span> <code>agentctl <span data-preview>{% if first %}{{ first.command }}{% else %}(choose an action){% endif %}</span></code></p>
+  <button type="submit" class="btn ctl-review"{% if not first or viewer %} disabled{% endif %}>Review…</button>
+</form>
+<details class="ctl-timeline" data-persist="control-timeline" open>
+  <summary><span class="ctl-timeline-title">Commands (last 10 from telemetry)</span>{% if commands_summary is defined %} <span id="ctl-timeline-summary-{{ slug }}" class="ctl-timeline-sum">{{ commands_summary }}</span>{% endif %}</summary>
+  <div class="ctl-timeline-list"
+       hx-get="{{ commands_url }}"
+       hx-trigger="sse:fleet"
+       hx-swap="innerHTML">
+    {% include "_control_commands_list.html" %}
+  </div>
+</details>
+{% endif %}

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{# PROTOTYPE (#151) variant C, Console line: three-step strip (link,
+   password, sign in) and a console-style form with inline field errors. #}
+{% from "proto_auth/_text.html" import link_message, host_command, field_error %}
+{% block content %}
+{% set step = 1 if link.state != "valid" else 2 %}
+<section class="vc-module proto-c-console">
+  <h2 class="vc-module-bar">Set password{% if link.account %} // {{ link.account }}{% endif %}</h2>
+  <div class="vc-module-body">
+    <ol class="ctl-steps proto-c-steps" aria-label="Progress">
+      <li class="ctl-step {{ 'proto-step-bad' if link.state != 'valid' else 'proto-step-done' }}">1 link {{ "ok" if link.state == "valid" else ("not valid" if link.state == "unknown" else link.state) }}</li>
+      <li class="ctl-step {{ 'proto-step-now' if step == 2 else '' }}">2 choose password</li>
+      <li class="ctl-step">3 sign in</li>
+    </ol>
+    {% if link.state != "valid" %}
+    <ol class="proto-c-log"><li class="proto-c-ev proto-c-ev-err" role="alert"><span class="proto-c-t">now</span><span class="proto-c-kind">{{ "invalid" if link.state == "unknown" else link.state }}</span><span>{{ link_message(link) }}</span></li></ol>
+    <p class="ctl-preview"><span class="ctl-prompt">host $</span> <code>{{ host_command(link) }}</code></p>
+    <p><a href="/login">Go to sign-in</a></p>
+    {% else %}
+    {% if errors.form == "insecure" %}<ol class="proto-c-log"><li class="proto-c-ev proto-c-ev-err" role="alert"><span class="proto-c-t">now</span><span class="proto-c-kind">refused</span><span>origin is neither https nor loopback</span></li></ol>{% endif %}
+    <ol class="proto-c-log" data-insecure-note hidden><li class="proto-c-ev proto-c-ev-warn"><span class="proto-c-t">now</span><span class="proto-c-kind">off</span><span>requires https:// or an SSH tunnel to localhost</span></li></ol>
+    <form class="proto-c-form proto-c-form-stack" method="post" action="/set-password" data-secure-form>
+      <input type="hidden" name="token" value="{{ token }}">
+      <input type="hidden" name="account" value="{{ link.account }}" autocomplete="username">
+      <label class="proto-c-in"><span class="proto-c-k">new password</span>
+        <input name="password" type="password" autocomplete="new-password" maxlength="128" size="30" required autofocus data-pw-count>
+        <span class="proto-small proto-mono" data-pw-count-out></span>
+        {% if errors.password %}<span class="proto-b-err" role="alert">{{ field_error(errors.password) }}</span>{% endif %}
+      </label>
+      <label class="proto-c-in"><span class="proto-c-k">repeat</span>
+        <input name="confirm" type="password" autocomplete="new-password" maxlength="128" size="30" required>
+        {% if errors.confirm %}<span class="proto-b-err" role="alert">{{ field_error(errors.confirm) }}</span>{% endif %}
+      </label>
+      <button class="btn btn-primary" type="submit">Set password</button>
+    </form>
+    <p class="hint proto-small">15–128 characters, no other rules. Single use, until {{ link.expires }}.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}
