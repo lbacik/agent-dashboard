@@ -112,6 +112,20 @@ class IssuedLink:
 
 
 @dataclass(frozen=True)
+class SetPasswordLinkDetail:
+    """A link's state plus the account/expiry the page shows (spec 8.3).
+
+    ``account`` and ``expires_at`` are set when the row names an account
+    (every state except unknown); unknown links -- no row, or a removed
+    account with no other state -- carry neither.
+    """
+
+    state: str
+    account: str | None
+    expires_at: float | None
+
+
+@dataclass(frozen=True)
 class SignInSession:
     """One joined sign-in session row: the session plus its account's Role.
 
@@ -407,6 +421,107 @@ def set_password_link_state(
     return "valid"
 
 
+def describe_set_password_link(
+    conn: sqlite3.Connection, token: str, *, now: float | None = None
+) -> SetPasswordLinkDetail:
+    """A link's state plus the account/expiry the ``/set-password`` page shows.
+
+    The state follows the spec order of :func:`set_password_link_state`
+    (unknown, used, superseded, expired, removed-as-unknown, valid).
+    ``account``/``expires_at`` are set for every state with a row naming a
+    live account detail -- that is, everything except unknown (no row, or a
+    removed account with no other state, shows no account name, spec 8.3).
+    """
+    timestamp = _now(now)
+    row = conn.execute(
+        "SELECT * FROM set_password_links WHERE token_hash = ?",
+        (hash_token(token),),
+    ).fetchone()
+    if row is None:
+        return SetPasswordLinkDetail(state="unknown", account=None, expires_at=None)
+    if row["used_at"] is not None:
+        return SetPasswordLinkDetail(
+            state="used", account=row["account"], expires_at=row["expires_at"]
+        )
+    if row["superseded_at"] is not None:
+        return SetPasswordLinkDetail(
+            state="superseded", account=row["account"], expires_at=row["expires_at"]
+        )
+    if timestamp > row["expires_at"]:
+        return SetPasswordLinkDetail(
+            state="expired", account=row["account"], expires_at=row["expires_at"]
+        )
+    account = get_account(conn, row["account"])
+    if account is None or account.removed:
+        return SetPasswordLinkDetail(state="unknown", account=None, expires_at=None)
+    return SetPasswordLinkDetail(
+        state="valid", account=row["account"], expires_at=row["expires_at"]
+    )
+
+
+def consume_set_password_link(
+    conn: sqlite3.Connection,
+    token: str,
+    password_hash: str,
+    *,
+    now: float | None = None,
+) -> SetPasswordLinkDetail:
+    """Set a password through a link in one transaction (spec 6.5).
+
+    The link is still valid, ``password_hash`` and ``password_set_at`` are
+    set, ``used_at`` is set, and all of the account's sign-in sessions are
+    deleted. Returns the detail (state ``valid`` with the account); when the
+    link is no longer valid nothing changes and the current detail is
+    returned instead, so the caller re-renders the 410 page.
+    """
+    timestamp = _now(now)
+    with conn:
+        row = conn.execute(
+            "SELECT * FROM set_password_links WHERE token_hash = ?",
+            (hash_token(token),),
+        ).fetchone()
+        if row is None:
+            return SetPasswordLinkDetail(
+                state="unknown", account=None, expires_at=None
+            )
+        if row["used_at"] is not None:
+            return SetPasswordLinkDetail(
+                state="used", account=row["account"], expires_at=row["expires_at"]
+            )
+        if row["superseded_at"] is not None:
+            return SetPasswordLinkDetail(
+                state="superseded",
+                account=row["account"],
+                expires_at=row["expires_at"],
+            )
+        if timestamp > row["expires_at"]:
+            return SetPasswordLinkDetail(
+                state="expired",
+                account=row["account"],
+                expires_at=row["expires_at"],
+            )
+        account = get_account(conn, row["account"])
+        if account is None or account.removed:
+            return SetPasswordLinkDetail(
+                state="unknown", account=None, expires_at=None
+            )
+        conn.execute(
+            "UPDATE accounts SET password_hash = ?, password_set_at = ?"
+            " WHERE name = ?",
+            (password_hash, timestamp, row["account"]),
+        )
+        conn.execute(
+            "UPDATE set_password_links SET used_at = ? WHERE token_hash = ?",
+            (timestamp, hash_token(token)),
+        )
+        conn.execute(
+            "DELETE FROM sign_in_sessions WHERE account = ?", (row["account"],)
+        )
+        return SetPasswordLinkDetail(
+            state="valid", account=row["account"], expires_at=row["expires_at"]
+        )
+
+
 def active_controllers(conn: sqlite3.Connection) -> list[Account]:
     """Accounts that can sign in with the ``controller`` Role."""
     return [
@@ -537,17 +652,20 @@ __all__ = [
     "Account",
     "AccountExistsError",
     "IssuedLink",
+    "SetPasswordLinkDetail",
     "SignInSession",
     "StoreError",
     "UnknownAccountError",
     "active_controllers",
     "check_name",
     "cleanup_links",
+    "consume_set_password_link",
     "count_account_sessions",
     "create_account",
     "create_sign_in_session",
     "delete_account_sessions",
     "delete_sign_in_session",
+    "describe_set_password_link",
     "find_sign_in_session",
     "get_account",
     "hash_token",

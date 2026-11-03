@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import math
 import secrets
 import sys
 import unicodedata
@@ -95,6 +96,53 @@ class SignInView:
     notice_tone: str | None = None  # "danger" | "warn" | "ok"
     notice_text: str = ""
     next: str = ""
+
+
+@dataclass(frozen=True)
+class SetPasswordView:
+    """The ``/set-password`` card view model (spec 8.3): at most one box.
+
+    ``show_form`` is False for unusable links (410): the danger box replaces
+    the form, followed by the reset hint (except for unknown) and a link to
+    ``/login``. ``expires_text`` is the ``HH:MM UTC (N h left)`` tail of the
+    "works once" line for a usable link. The token travels only in the
+    form's hidden field, never anywhere else on the page.
+    """
+
+    account: str = ""
+    token: str = ""
+    expires_text: str = ""
+    notice_tone: str | None = None  # "danger" only on this page
+    notice_text: str = ""
+    show_form: bool = True
+
+
+#: The 410 danger boxes for unusable Set-password links (spec 8.3).
+LINK_STATE_BOXES = {
+    "expired": (
+        "This Set-password link has expired: links work for 24 hours. "
+        "Ask whoever runs the dashboard host for a new one."
+    ),
+    "used": (
+        "This Set-password link has already been used. If that was not you, "
+        "or you have forgotten the password, ask for a new link."
+    ),
+    "superseded": (
+        "A newer Set-password link was issued for this account, so this one "
+        "no longer works. Use the newest link you received."
+    ),
+    "unknown": (
+        "This Set-password link is not valid. Check that you copied the whole "
+        "link, or ask for a new one."
+    ),
+}
+
+
+def format_link_expiry(expires_at: float, now: float) -> str:
+    """The ``HH:MM UTC (N h left)`` tail of the "works once" line (spec 8.3)."""
+    moment = datetime.fromtimestamp(expires_at, UTC).strftime("%H:%M")
+    hours = max(0, math.ceil((expires_at - now) / 3600))
+    return f"{moment} UTC ({hours} h left)"
 
 
 def sanitize_next(value: str | None) -> str:
@@ -295,7 +343,9 @@ class SignInGateMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
-        if request.url.path == "/login" or request.url.path.startswith("/static/"):
+        if request.url.path in ("/login", "/set-password") or request.url.path.startswith(
+            "/static/"
+        ):
             request.state.operator = None
             request.state.session_id_hash = None
             return await call_next(request)
@@ -316,8 +366,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Response headers in LAN mode (spec 8).
 
     Every HTML response sends ``X-Frame-Options: DENY`` and
-    ``Referrer-Policy: same-origin``; ``/login`` also sends
-    ``Cache-Control: no-store``.
+    ``Referrer-Policy: same-origin``; ``/login`` and ``/set-password`` also
+    send ``Cache-Control: no-store``.
     """
 
     async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -326,7 +376,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if "text/html" in content_type:
             response.headers["X-Frame-Options"] = "DENY"
             response.headers["Referrer-Policy"] = "same-origin"
-            if request.url.path == "/login":
+            if request.url.path in ("/login", "/set-password"):
                 response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -376,6 +426,66 @@ def _render_login(
             "view": view,
         },
         status_code=status_code,
+    )
+
+
+def _render_set_password(
+    request: Request,
+    templates: Jinja2Templates,
+    view: SetPasswordView,
+    *,
+    status_code: int = 200,
+) -> HTMLResponse:
+    """Render the ``/set-password`` card (spec 8.3)."""
+    return templates.TemplateResponse(
+        request,
+        "set-password.html",
+        {
+            "request": request,
+            "lan_mode": True,
+            "operator": None,
+            "page_subtitle": "LAN mode · sign-in required",
+            "view": view,
+        },
+        status_code=status_code,
+    )
+
+
+def _unusable_link_view(
+    detail: account_store.SetPasswordLinkDetail,
+    token: str,
+    *,
+    now: float,
+) -> SetPasswordView:
+    """The 410 view for an unusable link: danger box, no form (spec 8.3)."""
+    account = detail.account or ""
+    return SetPasswordView(
+        account=account,
+        token=token,
+        expires_text="",
+        notice_tone="danger",
+        notice_text=LINK_STATE_BOXES[detail.state],
+        show_form=False,
+    )
+
+
+def _valid_link_view(
+    detail: account_store.SetPasswordLinkDetail,
+    token: str,
+    *,
+    now: float,
+    notice_tone: str | None = None,
+    notice_text: str = "",
+) -> SetPasswordView:
+    """The form view for a usable link, optionally with one notice box."""
+    assert detail.account is not None and detail.expires_at is not None
+    return SetPasswordView(
+        account=detail.account,
+        token=token,
+        expires_text=format_link_expiry(detail.expires_at, now),
+        notice_tone=notice_tone,
+        notice_text=notice_text,
+        show_form=True,
     )
 
 
@@ -480,7 +590,8 @@ def login_redirect_param(value: str | None) -> str:
 
 
 def register_auth_routes(app, templates: Jinja2Templates) -> None:
-    """Add the LAN-only sign-in routes: ``/login``, ``/logout``, ``/whoami``."""
+    """Add the LAN-only auth routes: ``/login``, ``/logout``, ``/whoami``,
+    ``GET``/``POST /set-password``."""
 
     @app.get("/login", response_class=HTMLResponse)
     async def login_page(request: Request) -> Response:
@@ -694,6 +805,206 @@ def register_auth_routes(app, templates: Jinja2Templates) -> None:
         _clear_sign_in_cookies(response)
         return response
 
+    @app.get("/set-password", response_class=HTMLResponse)
+    async def set_password_page(request: Request) -> Response:
+        """The Set-password card for a link token (spec 8.3).
+
+        LAN mode only, anonymous. A usable link shows the form; an
+        expired, used, superseded or unknown link (a removed account reads
+        as unknown) answers 410 with the danger box instead of the form.
+        """
+        token = request.query_params.get("token", "")
+        if not isinstance(token, str):
+            token = ""
+        now = request.app.state.auth_clock()
+
+        def work() -> account_store.SetPasswordLinkDetail:
+            conn = account_store.open_store(now=now)
+            try:
+                return account_store.describe_set_password_link(
+                    conn, token, now=now
+                )
+            finally:
+                conn.close()
+
+        detail = await asyncio.to_thread(work)
+        if detail.state != "valid":
+            return _render_set_password(
+                request,
+                templates,
+                _unusable_link_view(detail, token, now=now),
+                status_code=410,
+            )
+        return _render_set_password(
+            request, templates, _valid_link_view(detail, token, now=now)
+        )
+
+    @app.post("/set-password", response_class=HTMLResponse)
+    async def set_password_submit(request: Request) -> Response:
+        """Set a password through a link (spec 8.3, 6.5).
+
+        In order: ``Origin``/``Sec-Fetch-Site`` (403), the secure context
+        (403), the token state (410), then the length and the match after
+        NFKC normalisation (422). Then one transaction sets the hash,
+        marks the link used and deletes the account's sign-in sessions.
+        No sign-in follows: 303 to ``/login?password_set=1&account=<name>``.
+        """
+        from .passwords import normalize_password
+        from .request_checks import is_origin_allowed, log_origin_refused
+
+        body = await request.body()
+        if len(body) > MAX_FORM_BYTES:
+            return PlainTextResponse("Form body too large.", status_code=413)
+        form = parse_form(body)
+        raw_token = form.get("token", "")
+        token = raw_token if isinstance(raw_token, str) else ""
+        host = (request.headers.get("host") or "").strip()
+        origin = request.headers.get("origin")
+        fetch_site = request.headers.get("sec-fetch-site")
+        client = client_of(request)
+
+        async def describe_at(moment: float) -> account_store.SetPasswordLinkDetail:
+            def work() -> account_store.SetPasswordLinkDetail:
+                conn = account_store.open_store(now=moment)
+                try:
+                    return account_store.describe_set_password_link(
+                        conn, token, now=moment
+                    )
+                finally:
+                    conn.close()
+
+            return await asyncio.to_thread(work)
+
+        def refused_view(
+            detail: account_store.SetPasswordLinkDetail,
+            moment: float,
+            message: str,
+        ) -> SetPasswordView:
+            if detail.state == "valid":
+                return _valid_link_view(
+                    detail,
+                    token,
+                    now=moment,
+                    notice_tone="danger",
+                    notice_text=message,
+                )
+            return SetPasswordView(
+                account=detail.account or "",
+                token=token,
+                expires_text="",
+                notice_tone="danger",
+                notice_text=message,
+                show_form=False,
+            )
+
+        if not is_origin_allowed(origin, host) or (
+            fetch_site is not None and fetch_site.strip().lower() != "same-origin"
+        ):
+            reason = (
+                "fetch_site" if is_origin_allowed(origin, host) else "origin"
+            )
+            log_origin_refused(request, reason=reason)
+            moment = request.app.state.auth_clock()
+            detail = await describe_at(moment)
+            return _render_set_password(
+                request,
+                templates,
+                refused_view(
+                    detail,
+                    moment,
+                    "Sign-in was refused: the request did not come from this page.",
+                ),
+                status_code=403,
+            )
+        assert origin is not None
+        if not is_secure_origin(origin):
+            log_origin_refused(request, reason="secure_context")
+            moment = request.app.state.auth_clock()
+            detail = await describe_at(moment)
+            return _render_set_password(
+                request,
+                templates,
+                refused_view(
+                    detail,
+                    moment,
+                    "Sign-in was refused: this page was not opened over HTTPS.",
+                ),
+                status_code=403,
+            )
+        moment = request.app.state.auth_clock()
+        detail = await describe_at(moment)
+        if detail.state != "valid":
+            return _render_set_password(
+                request,
+                templates,
+                _unusable_link_view(detail, token, now=moment),
+                status_code=410,
+            )
+        password = form.get("password", "")
+        repeat = form.get("password_repeat", "")
+        if not isinstance(password, str):
+            password = ""
+        if not isinstance(repeat, str):
+            repeat = ""
+        normalised = normalize_password(password)
+        normalised_repeat = normalize_password(repeat)
+        if len(normalised) < 15:
+            message = "Use at least 15 characters."
+        elif len(normalised) > 128:
+            message = "Use at most 128 characters."
+        elif normalised != normalised_repeat:
+            message = "The two passwords differ."
+        else:
+            message = ""
+        if message:
+            return _render_set_password(
+                request,
+                templates,
+                _valid_link_view(
+                    detail,
+                    token,
+                    now=moment,
+                    notice_tone="danger",
+                    notice_text=message,
+                ),
+                status_code=422,
+            )
+
+        hasher = request.app.state.password_hasher
+
+        def hash_work() -> str:
+            from .passwords import default_hasher
+
+            active = hasher if hasher is not None else default_hasher()
+            return active.hash(normalised)
+
+        async with _HASH_SEMAPHORE:
+            password_hash = await asyncio.to_thread(hash_work)
+        consume_moment = request.app.state.auth_clock()
+
+        def consume_work() -> account_store.SetPasswordLinkDetail:
+            conn = account_store.open_store(now=consume_moment)
+            try:
+                return account_store.consume_set_password_link(
+                    conn, token, password_hash, now=consume_moment
+                )
+            finally:
+                conn.close()
+
+        result = await asyncio.to_thread(consume_work)
+        if result.state != "valid" or result.account is None:
+            return _render_set_password(
+                request,
+                templates,
+                _unusable_link_view(result, token, now=consume_moment),
+                status_code=410,
+            )
+        log_auth("password_set", account=result.account, client=client)
+        target = "/login?" + urlencode(
+            {"password_set": "1", "account": result.account}
+        )
+        return RedirectResponse(target, status_code=303)
+
     @app.get("/whoami")
     async def whoami(request: Request) -> Response:
         """204 while signed in; else the gate's answer (spec 5.6)."""
@@ -707,13 +1018,16 @@ __all__ = [
     "LOOPBACK_COOKIE_NAME",
     "MAX_FORM_BYTES",
     "MAX_PASSWORD_BYTES",
+    "LINK_STATE_BOXES",
     "Operator",
     "SecurityHeadersMiddleware",
+    "SetPasswordView",
     "SignInGateMiddleware",
     "SignInView",
     "client_of",
     "cookie_for_origin",
     "cut_account_name",
+    "format_link_expiry",
     "hash_session_id",
     "hx_page",
     "is_secure_origin",
