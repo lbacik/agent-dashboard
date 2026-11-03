@@ -14,5 +14,6 @@ The dashboard has to run `docker exec` in agent containers, and access that can 
 - The dashboard is installed with `uv tool install` and run as a `systemd --user` unit, not as a compose service.
 - Revisit this when the dashboard must be reachable without an SSH tunnel, or when v2 adds commands that change agent state.
 - Revisited for Control actions in [ADR 0007](0007-control-actions-on-a-loopback-only-dashboard.md): the posture stays, with request-origin checks added.
+- Revisited for LAN access in [ADR 0009](0009-built-in-password-auth-in-lan-mode.md) and [ADR 0010](0010-lan-mode-bind-and-host-check.md): the posture stays the default; LAN mode adds sign-in, accepts any bind and keeps the `Host` allow-list optional.
 
 Decided in [Decide instance discovery and the dashboard's Docker access](https://github.com/lbacik/simple-coding-agent/issues/226) and [Define the dashboard project](https://github.com/lbacik/simple-coding-agent/issues/228).

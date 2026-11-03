@@ -1,5 +1,9 @@
 # A disabled Host guard lifts the loopback rule for Control actions
 
+Superseded by [ADR 0010](0010-lan-mode-bind-and-host-check.md): the variable
+now only turns off the `Host` check, and Control actions beyond loopback need
+LAN mode with sign-in.
+
 ADR 0007 refused Control actions whenever the dashboard was bound to a
 non-loopback address or ran with the `Host` guard disabled, which left the
 ADR 0002 test deployment read-only. On that trusted, isolated test LAN the

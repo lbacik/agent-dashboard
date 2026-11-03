@@ -28,6 +28,10 @@ _Avoid_: Button, command (the agent's term for what it records), operation
 The dashboard's own append-only record of every Control action submission and its outcome at submission time, including those the dashboard refused before reaching the agent; one submission's record is a Control audit entry. The agent's command record remains the authority for what happened to an accepted command afterwards.
 _Avoid_: Audit log, command log, history
 
+**LAN mode**:
+The explicit opt-in under which the dashboard is reached from a private network without an SSH tunnel and every request needs a sign-in session; without it there is no sign-in and Control actions are offered only on a loopback bind.
+_Avoid_: v2, remote mode, network mode
+
 **Attempt log**:
 One implementation attempt's event history on the managed instance's `/data` volume (`/data/logs/<issue>/<started_at>/`): the `attempt.json` summary, the `agent_output.json` event stream, and the numbered evidence files.
 _Avoid_: Session, run log
