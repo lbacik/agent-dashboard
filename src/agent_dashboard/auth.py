@@ -6,11 +6,10 @@ requests without one, ``GET``/``POST /login`` signs an Operator in, and
 in. All templates consume the framework-free view models here (``Operator``,
 ``SignInView``); the server's store calls run in a worker thread.
 
-The growing sign-in delay (spec 5.5) is a separate ticket: failures are
-logged with ``delay_s: 0`` and no attempt is ever refused for delay here.
-The stale-cookie info box (spec 5.6) is a separate ticket too: ``GET
-/login`` with a cookie that matches no session clears the cookie and shows
-the plain form.
+The growing sign-in delay (spec 5.5) refuses attempts inside either key's
+delay with 429 before the password is checked. The stale-cookie info box
+(spec 5.6) is a separate ticket too: ``GET /login`` with a cookie that
+matches no session clears the cookie and shows the plain form.
 """
 
 from __future__ import annotations
@@ -204,11 +203,10 @@ def log_auth(event: str, **fields: Any) -> None:
 
 
 def client_of(request: Request) -> str:
-    """The client address for the ``auth`` lines (spec 4.4, 9).
+    """The client address for the delay and the ``auth`` lines (4.4, 9).
 
     The peer address resolved through ``X-Forwarded-For`` from trusted
-    proxies. Until the client-address ticket this is the peer address
-    unless a trusted proxy header is present.
+    proxies (``request_checks.client_address``).
     """
     from .request_checks import client_address
 
@@ -506,11 +504,13 @@ def register_auth_routes(app, templates: Jinja2Templates) -> None:
     async def login_submit(request: Request) -> Response:
         """Check the credentials and start a sign-in session (spec 5.3).
 
-        In order: ``Origin``/``Sec-Fetch-Site``, the secure context, then
-        the password check. On success a new session ID is created and the
-        cookie set, with a 303 to ``next``, else ``/``.
+        In order: ``Origin``/``Sec-Fetch-Site``, the secure context, the
+        growing delay (5.5), then the password check. On success a new
+        session ID is created and the cookie set, with a 303 to ``next``,
+        else ``/``.
         """
         from .request_checks import is_origin_allowed, log_origin_refused
+        from .sign_in_delay import account_key, client_key
 
         body = await request.body()
         if len(body) > MAX_FORM_BYTES:
@@ -537,6 +537,20 @@ def register_auth_routes(app, templates: Jinja2Templates) -> None:
                 status_code=status,
             )
 
+        def warn_box(message: str, *, status: int) -> Response:
+            return _render_login(
+                request,
+                templates,
+                SignInView(
+                    account=typed,
+                    focus_password=True,
+                    notice_tone="warn",
+                    notice_text=message,
+                    next=next,
+                ),
+                status_code=status,
+            )
+
         if not is_origin_allowed(origin, host) or (
             fetch_site is not None and fetch_site.strip().lower() != "same-origin"
         ):
@@ -557,16 +571,46 @@ def register_auth_routes(app, templates: Jinja2Templates) -> None:
                 "Sign-in was refused: this page was not opened over HTTPS.",
                 status=403,
             )
+        tracker = request.app.state.sign_in_delay
+        now = request.app.state.auth_clock()
+        account_bucket = account_key(typed)
+        client_bucket = client_key(client)
+        wait_s = tracker.wait_s(account_bucket, client_bucket, now=now)
+        if wait_s > 0:
+            log_auth(
+                "sign_in_delayed",
+                account=cut_account_name(typed),
+                client=client,
+                wait_s=wait_s,
+            )
+            response = warn_box(
+                "Too many failed sign-ins. "
+                f"Wait {wait_s} seconds, then try again. "
+                "That attempt was not checked.",
+                status=429,
+            )
+            response.headers["Retry-After"] = str(wait_s)
+            return response
         password = form.get("password", "")
         if not isinstance(password, str):
             password = ""
         if not await _check_credentials(request, typed, password):
+            new_delay = tracker.record_failure(
+                account_bucket,
+                client_bucket,
+                now=request.app.state.auth_clock(),
+            )
             log_auth(
                 "sign_in_failed",
                 account=cut_account_name(typed),
                 client=client,
-                delay_s=0,
+                delay_s=new_delay,
             )
+            message = "Account name or password is incorrect."
+            if new_delay > 1:
+                message += (
+                    f" Wait {new_delay} seconds before trying again."
+                )
             return _render_login(
                 request,
                 templates,
@@ -574,11 +618,16 @@ def register_auth_routes(app, templates: Jinja2Templates) -> None:
                     account=typed,
                     focus_password=True,
                     notice_tone="danger",
-                    notice_text="Account name or password is incorrect.",
+                    notice_text=message,
                     next=next,
                 ),
                 status_code=401,
             )
+        tracker.record_success(
+            account_bucket,
+            client_bucket,
+            now=request.app.state.auth_clock(),
+        )
         await _maybe_rehash(request, typed, password)
         session_id = secrets.token_urlsafe(32)
         settings = request.app.state.settings
