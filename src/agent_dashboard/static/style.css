@@ -175,6 +175,18 @@ table.fleet thead th {
   margin-bottom: 1rem;
 }
 
+/* Sign-in card and its notice box (spec 8, 8.1): one narrow centred card;
+   at most one notice box above the form, in the semantic bg/ink pair of
+   its tone. No new colours: every value is an existing token. */
+.signin-card { max-width: 26rem; margin: 2.5rem auto; }
+.signin-card form { display: grid; gap: 0.6rem; }
+.signin-card label { display: grid; gap: 0.25rem; font-size: 0.85rem; font-weight: 600; }
+.signin-card input { font: inherit; font-weight: 400; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--ink); }
+.notice { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.6rem 0.8rem; margin: 0 0 0.8rem; background: var(--surface-2); color: var(--ink); }
+.notice[data-tone="danger"] { background: var(--danger-bg); color: var(--danger-ink); border-color: var(--danger-line); }
+.notice[data-tone="warn"] { background: var(--warn-bg); color: var(--warn-ink); border-color: var(--warn-bg); }
+.notice[data-tone="ok"] { background: var(--ok-bg); color: var(--ok-ink); border-color: var(--ok-bg); }
+
 table.fleet {
   width: 100%;
   border-collapse: collapse;

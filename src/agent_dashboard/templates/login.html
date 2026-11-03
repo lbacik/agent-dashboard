@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+{# Sign-in card (spec 8.1): one narrow centred card with panel bar "Sign in".
+   At most one notice box above the form. The form is disabled outside a
+   secure context by sign-in.js (LAN mode only). #}
+<div class="signin-card vc-module">
+  <h2 class="vc-module-bar">Sign in</h2>
+  <div class="vc-module-body">
+    {% if view.notice_tone is not none %}
+    <div class="notice" data-tone="{{ view.notice_tone }}" role="{% if view.notice_tone == 'ok' %}status{% else %}alert{% endif %}">{{ view.notice_text }}</div>
+    {% endif %}
+    <div class="notice" data-tone="warn" data-secure-warn hidden>Sign-in requires HTTPS. Open the dashboard&rsquo;s https:// address (or an SSH tunnel to localhost).</div>
+    <form method="post" action="/login" data-secure-form>
+      <input type="hidden" name="next" value="{{ view.next }}">
+      <label>Account name
+        <input name="account" type="text" value="{{ view.account }}" autocomplete="username" autocapitalize="none" spellcheck="false"{% if not view.focus_password %} autofocus{% endif %}>
+      </label>
+      <label>Password
+        <input name="password" type="password" autocomplete="current-password"{% if view.focus_password %} autofocus{% endif %}>
+      </label>
+      <button class="btn btn-primary" type="submit">Sign in</button>
+    </form>
+    <p class="hint">No account, or forgot your password? Ask whoever runs the dashboard host for a Set-password link.</p>
+  </div>
+</div>
+<script src="/static/sign-in.js" defer></script>
+{% endblock %}

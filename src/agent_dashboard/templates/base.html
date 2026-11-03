@@ -32,6 +32,8 @@
           {% endfor %}
         </ol>
       </nav>
+      {% elif page_subtitle is defined %}
+      <p class="subtitle">{{ page_subtitle }}</p>
       {% else %}
       <p class="subtitle">Managed instances on this Docker host</p>
       {% endif %}
@@ -39,8 +41,10 @@
     <div class="topbar-chips">
       {% if poll_interval is defined %}<span class="topbar-chip">Stream <strong>{{ poll_interval }}s</strong></span>{% endif %}
       {% if control_available is defined %}<span class="topbar-chip">Control <strong>{{ "on" if control_available else "off" }}</strong></span>{% endif %}
+      {% if operator is defined and operator is not none %}<span class="topbar-chip" title="Signed in since {{ operator.since }} UTC">Operator <strong>{{ operator.name }} · {{ operator.role }}</strong></span>{% endif %}
     </div>
     {% block topbar_actions %}{% endblock %}
+    {% if operator is defined and operator is not none %}<form class="topbar-signout" action="/logout" method="post"><button class="btn" type="submit">Sign out</button></form>{% endif %}
   </header>
   <main class="container">
     {% block content %}{% endblock %}
