@@ -1,8 +1,7 @@
 """LAN mode settings, startup checks, the Origin rule and the migration.
 
-Slice 1 of the LAN access map (spec sections 2, 4.1, 4.2 and 9, plus the
-ADR 0008 migration). LAN mode never serves yet: ``--lan-mode on`` parses
-but is a startup error until the "Turn on LAN mode" ticket removes it.
+Slices 1 and 6 of the LAN access map (spec sections 2, 4.1, 4.2 and 9, plus
+the ADR 0008 migration): ``--lan-mode on`` serves with the sign-in gate.
 """
 
 from __future__ import annotations
@@ -102,15 +101,13 @@ def test_lan_mode_typo_names_the_value():
 def test_lan_mode_flag_beats_env(monkeypatch):
     monkeypatch.setenv("AGENT_DASHBOARD_LAN_MODE", "off")
     monkeypatch.setenv("AGENT_DASHBOARD_ALLOWED_HOSTS", "example.test")
-    with pytest.raises(ValueError, match="not available in this build"):
-        load_settings(["--lan-mode", "on"])
+    assert load_settings(["--lan-mode", "on"]).lan_mode is True
 
 
 def test_lan_mode_env_beats_default(monkeypatch):
     monkeypatch.setenv("AGENT_DASHBOARD_LAN_MODE", "on")
     monkeypatch.setenv("AGENT_DASHBOARD_ALLOWED_HOSTS", "example.test")
-    with pytest.raises(ValueError, match="not available in this build"):
-        load_settings([])
+    assert load_settings([]).lan_mode is True
 
 
 @pytest.mark.parametrize("value", ["off", "0", "false", "no"])
@@ -307,11 +304,11 @@ def test_host_help_names_lan_mode():
 
 def test_allow_non_loopback_ignored_in_lan_mode(monkeypatch):
     # A non-loopback bind without the flag is accepted in LAN mode: the
-    # bind is never refused there (the temporary unavailable error proves
-    # parsing got past the bind check).
+    # bind is never refused there.
     monkeypatch.setenv("AGENT_DASHBOARD_ALLOWED_HOSTS", "example.test")
-    with pytest.raises(ValueError, match="not available in this build"):
-        load_settings(["--lan-mode", "on", "--host", "192.168.1.10"])
+    settings = load_settings(["--lan-mode", "on", "--host", "192.168.1.10"])
+    assert settings.lan_mode is True
+    assert settings.host == "192.168.1.10"
 
 
 # --- startup checks (spec 2.2) ---------------------------------------------------
@@ -331,16 +328,14 @@ def test_loopback_refusal_outside_lan_mode_env(monkeypatch):
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "10.0.0.5", "::"])
 def test_any_bind_accepted_in_lan_mode(monkeypatch, host):
     monkeypatch.setenv("AGENT_DASHBOARD_ALLOWED_HOSTS", "example.test")
-    with pytest.raises(ValueError) as exc:
-        load_settings(["--lan-mode", "on", "--host", host])
-    assert "not available in this build" in str(exc.value)
-    assert "refusing to bind" not in str(exc.value)
+    settings = load_settings(["--lan-mode", "on", "--host", host])
+    assert settings.lan_mode is True
+    assert settings.host == host
 
 
-def test_lan_mode_on_is_startup_error(monkeypatch):
+def test_lan_mode_on_serves(monkeypatch):
     monkeypatch.setenv("AGENT_DASHBOARD_ALLOWED_HOSTS", "example.test")
-    with pytest.raises(ValueError, match="LAN mode is not available in this build"):
-        load_settings(["--lan-mode", "on"])
+    assert load_settings(["--lan-mode", "on"]).lan_mode is True
 
 
 def test_lan_mode_needs_allowed_hosts(monkeypatch):
@@ -359,8 +354,7 @@ def test_lan_mode_allowed_hosts_message_names_escape(monkeypatch):
 
 def test_lan_mode_no_allowed_hosts_needed_when_host_check_off(monkeypatch):
     monkeypatch.setenv("AGENT_DASHBOARD_DISABLE_HOST_GUARD", "1")
-    with pytest.raises(ValueError, match="not available in this build"):
-        load_settings(["--lan-mode", "on"])
+    assert load_settings(["--lan-mode", "on"]).lan_mode is True
 
 
 def test_lan_mode_allowed_hosts_extra_parsing(monkeypatch):
@@ -383,11 +377,11 @@ def test_startup_errors_exit_2_with_prefix(monkeypatch, capsys):
     assert "invalid lan-mode value" in err
 
 
-def test_lan_mode_unavailable_exits_2(monkeypatch, capsys):
+def test_lan_mode_on_starts_and_prints_line(monkeypatch, capsys):
     monkeypatch.setenv("AGENT_DASHBOARD_ALLOWED_HOSTS", "example.test")
-    err = _stderr_of(monkeypatch, capsys, ["--lan-mode", "on"])
-    assert err.startswith("agent-dashboard: error: ")
-    assert "LAN mode is not available in this build" in err
+    _, seen, out = _serve_through_cli(monkeypatch, capsys, ["--lan-mode", "on"])
+    assert "agent-dashboard: LAN mode is on:" in out.out
+    assert seen["proxy_headers"] is False
 
 
 def test_trusted_proxy_error_exits_2(monkeypatch, capsys):
@@ -927,3 +921,277 @@ def test_client_address_ipv6():
         client_address("fd00::1", "2001:db8::7, fd00::2", _nets("fd00::/8"))
         == "2001:db8::7"
     )
+
+
+# --- LAN startup lines and store check (spec 2.2, 2.3) ---------------------------
+
+
+def _serve_through_cli(monkeypatch, capsys, argv):
+    """Run ``cli.main`` with a stubbed ``uvicorn.run``; return the built app."""
+    seen: dict = {}
+    holder: dict = {}
+
+    def fake_run(app, **kwargs):
+        seen.update(kwargs)
+        holder["app"] = app
+
+    monkeypatch.setattr("uvicorn.run", fake_run)
+    cli_module.main(argv)
+    return holder["app"], seen, capsys.readouterr()
+
+
+def test_lan_mode_cli_prints_lan_line(monkeypatch, capsys):
+    monkeypatch.setenv("AGENT_DASHBOARD_ALLOWED_HOSTS", "example.test")
+    _, seen, out = _serve_through_cli(monkeypatch, capsys, ["--lan-mode", "on"])
+    assert (
+        "agent-dashboard: LAN mode is on: every request needs a sign-in session "
+        "(bind 127.0.0.1:8000, Host check on, trusted proxies none)" in out.out
+    )
+    assert seen["proxy_headers"] is False
+
+
+def test_lan_mode_cli_without_allowed_hosts_fails(monkeypatch, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli_module.main(["--lan-mode", "on"])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("agent-dashboard: error: ")
+    assert "LAN mode needs AGENT_DASHBOARD_ALLOWED_HOSTS" in err
+
+
+def test_lan_mode_no_account_line_when_empty(monkeypatch, capsys):
+    from agent_dashboard import cli as cli_mod
+
+    monkeypatch.setenv("AGENT_DASHBOARD_ALLOWED_HOSTS", "example.test")
+    _, _, out = _serve_through_cli(monkeypatch, capsys, ["--lan-mode", "on"])
+    assert "agent-dashboard: LAN mode is on:" in out.out
+    assert cli_mod.NO_ACCOUNT_LINE in out.out
+
+
+def test_lan_mode_no_account_line_when_none_has_password(monkeypatch, capsys):
+    from agent_dashboard import account_store as store
+    from agent_dashboard import cli as cli_mod
+
+    monkeypatch.setenv("AGENT_DASHBOARD_ALLOWED_HOSTS", "example.test")
+    conn = store.open_store(now=time.time())
+    try:
+        store.create_account(conn, "alice", "controller", now=time.time())
+    finally:
+        conn.close()
+    capsys.readouterr()
+    _, _, out = _serve_through_cli(monkeypatch, capsys, ["--lan-mode", "on"])
+    assert cli_mod.NO_ACCOUNT_LINE in out.out
+
+
+def test_lan_mode_no_account_line_absent_when_password_set(monkeypatch, capsys):
+    from agent_dashboard import account_store as store
+    from agent_dashboard import cli as cli_mod
+
+    monkeypatch.setenv("AGENT_DASHBOARD_ALLOWED_HOSTS", "example.test")
+    conn = store.open_store(now=time.time())
+    try:
+        store.create_account(conn, "alice", "controller", now=time.time())
+        conn.execute(
+            "UPDATE accounts SET password_hash = ? WHERE name = ?",
+            ("cheap$whatever", "alice"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    capsys.readouterr()
+    _, _, out = _serve_through_cli(monkeypatch, capsys, ["--lan-mode", "on"])
+    assert "agent-dashboard: LAN mode is on:" in out.out
+    assert cli_mod.NO_ACCOUNT_LINE not in out.out
+
+
+def test_lan_mode_store_failure_names_path(monkeypatch, capsys):
+    from agent_dashboard import account_store as store
+
+    monkeypatch.setenv("AGENT_DASHBOARD_ALLOWED_HOSTS", "example.test")
+    path = store.store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.mkdir()
+    with pytest.raises(SystemExit) as exc:
+        cli_module.main(["--lan-mode", "on"])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("agent-dashboard: error: ")
+    assert str(path) in err
+
+
+def test_lan_mode_end_to_end_through_cli(monkeypatch, tmp_path, capsys):
+    """Full flow through the CLI entry point and the app it builds (spec 14).
+
+    Temporary ``XDG_STATE_HOME``, cheap hasher, fake gateway:
+    ``account add`` -> ``POST /set-password`` -> ``POST /login`` ->
+    Control ``review``/``submit`` accepted with ``operator`` in the audit.
+    The same flow for a ``viewer`` is refused with ``not_permitted``.
+    """
+
+    import re
+
+    from fake_gateway import FakeGateway
+    from fastapi.testclient import TestClient
+    from test_passwords import CheapHasher
+    from test_web import fresh_snapshot, load_snapshot
+
+    from agent_dashboard.collector import run_cycle
+    from agent_dashboard.control_audit import audit_path
+    from agent_dashboard.gateway import ManagedInstance
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_DASHBOARD_ALLOWED_HOSTS", "example.test")
+    monkeypatch.delenv("AGENT_DASHBOARD_DISABLE_HOST_GUARD", raising=False)
+
+    now = time.time()
+    fake = FakeGateway([ManagedInstance("work", "abc000", "running")])
+    fake.set_snapshot(
+        "abc000", fresh_snapshot(load_snapshot("snapshot-attempt-in-progress.json"), now)
+    )
+    fake.set_control(
+        "abc000",
+        (
+            b"repository: example-owner/example-repo\nrequest_id: dash-0123456789abcdef\n"
+            b"sequence: 8\nacknowledgement: accepted\neffect: ok\n"
+        ),
+        b"",
+        0,
+    )
+
+    import agent_dashboard.app as app_module
+    import agent_dashboard.passwords as passwords_module
+
+    monkeypatch.setattr(
+        app_module, "DockerGateway", lambda *args, **kwargs: fake
+    )
+    monkeypatch.setattr(
+        passwords_module, "default_hasher", lambda: CheapHasher()
+    )
+
+    holder: dict = {}
+    seen: dict = {}
+
+    def fake_run(app, **kwargs):
+        seen.update(kwargs)
+        holder["app"] = app
+
+    monkeypatch.setattr("uvicorn.run", fake_run)
+    cli_module.main(["--lan-mode", "on"])
+    captured = capsys.readouterr()
+    assert "agent-dashboard: LAN mode is on:" in captured.out
+    app = holder["app"]
+    assert seen["proxy_headers"] is False
+
+    # The app the CLI built serves the fleet once cycles run.
+    asyncio.run(run_cycle(app.state.fleet, fake, max_concurrent_execs=4, now=now))
+
+    def run_account(argv):
+        try:
+            cli_module.main(argv)
+        except SystemExit as exc:
+            assert exc.code == 0, exc.code
+        return capsys.readouterr().out
+
+    def token_of(out):
+        match = re.search(r"token=(\S+)", out)
+        assert match is not None
+        return match.group(1)
+
+    client = TestClient(app, base_url="http://localhost")
+    password = "correct horse battery staple"
+
+    # --- controller alice: accepted, operator recorded ---
+    out = run_account(["account", "add", "alice", "--role", "controller"])
+    alice_token = token_of(out)
+    response = client.post(
+        "/set-password",
+        data={
+            "token": alice_token,
+            "password": password,
+            "password_repeat": password,
+        },
+        headers={"Origin": "http://localhost"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, response.text
+    response = client.post(
+        "/login",
+        data={"account": "alice", "password": password},
+        headers={"Origin": "http://localhost"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, response.text
+    cookies = response.headers.get_list("set-cookie")
+    assert cookies
+    alice_cookie = cookies[0].split(";", 1)[0]
+    headers = {
+        "Origin": "http://localhost",
+        "HX-Request": "true",
+        "Cookie": alice_cookie,
+    }
+    review = client.post(
+        "/instances/work/control/review", data={"action": "stop"}, headers=headers
+    )
+    assert review.status_code == 200, review.text
+    submit = client.post(
+        "/instances/work/control/submit",
+        data={
+            "action": "stop",
+            "container_id": "abc000",
+            "repository": "example-owner/example-repo",
+            "request_id": "dash-0123456789abcdef",
+        },
+        headers=headers,
+    )
+    assert submit.status_code == 200, submit.text
+    entries = [
+        json.loads(line)
+        for line in audit_path().read_text().splitlines()
+        if line.strip()
+    ]
+    assert [entry["outcome"] for entry in entries] == ["submitted", "accepted"]
+    assert all(entry["operator"] == "alice" for entry in entries)
+
+    # --- viewer vera: refused with not_permitted, operator recorded ---
+    out = run_account(["account", "add", "vera", "--role", "viewer"])
+    vera_token = token_of(out)
+    response = client.post(
+        "/set-password",
+        data={
+            "token": vera_token,
+            "password": password,
+            "password_repeat": password,
+        },
+        headers={"Origin": "http://localhost"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, response.text
+    response = client.post(
+        "/login",
+        data={"account": "vera", "password": password},
+        headers={"Origin": "http://localhost"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, response.text
+    vera_cookie = response.headers.get_list("set-cookie")[0].split(";", 1)[0]
+    viewer_headers = {
+        "Origin": "http://localhost",
+        "HX-Request": "true",
+        "Cookie": vera_cookie,
+    }
+    refused = client.post(
+        "/instances/work/control/review",
+        data={"action": "stop"},
+        headers=viewer_headers,
+    )
+    assert refused.status_code == 403
+    entries = [
+        json.loads(line)
+        for line in audit_path().read_text().splitlines()
+        if line.strip()
+    ]
+    last = entries[-1]
+    assert last["outcome"] == "refused"
+    assert last["reason"] == "not_permitted"
+    assert last["operator"] == "vera"

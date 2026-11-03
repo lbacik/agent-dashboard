@@ -347,8 +347,8 @@ def load_settings(argv: list[str] | None = None) -> Settings:
                 "comma-separated (or AGENT_DASHBOARD_DISABLE_HOST_GUARD=1 "
                 "to turn the Host check off)"
             )
-        raise ValueError("LAN mode is not available in this build")
-    ensure_loopback(host, allow_non_loopback)
+    else:
+        ensure_loopback(host, allow_non_loopback)
     return Settings(
         host=host,
         port=port,
