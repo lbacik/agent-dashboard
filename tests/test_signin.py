@@ -1165,6 +1165,38 @@ def test_stale_host_cookie_clears_both_names(lan):
     assert any(h.startswith("agent-dashboard-sign-in=") for h in cleared)
 
 
+def test_stale_cookie_wins_over_signed_out_box(lan):
+    response = lan.client.get(
+        "/login?signed_out=1",
+        headers=cookie_header("agent-dashboard-sign-in", "stale"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 200
+    assert 'data-tone="info"' in response.text
+    assert "Your sign-in session has ended. Sign in again." in response.text
+    assert "You have signed out." not in response.text
+    cleared = response.headers.get_list("set-cookie")
+    assert any(h.startswith("__Host-agent-dashboard-sign-in=") for h in cleared)
+    assert any(h.startswith("agent-dashboard-sign-in=") for h in cleared)
+    assert any("Max-Age=0" in h for h in cleared)
+
+
+def test_stale_cookie_wins_over_password_set_box(lan):
+    response = lan.client.get(
+        "/login?password_set=1&account=alice",
+        headers=cookie_header("agent-dashboard-sign-in", "stale"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 200
+    assert 'data-tone="info"' in response.text
+    assert "Your sign-in session has ended. Sign in again." in response.text
+    assert "Your password is set." not in response.text
+    cleared = response.headers.get_list("set-cookie")
+    assert any(h.startswith("__Host-agent-dashboard-sign-in=") for h in cleared)
+    assert any(h.startswith("agent-dashboard-sign-in=") for h in cleared)
+    assert any("Max-Age=0" in h for h in cleared)
+
+
 def test_fresh_login_page_has_no_stale_box(lan):
     response = lan.client.get("/login", follow_redirects=False)
     assert response.status_code == 200
@@ -1190,7 +1222,7 @@ def test_stale_cookie_never_names_reason(lan):
 # --- /stream ends with the session (spec 5.6, 5.7, 12) --------------------------
 
 
-def test_stream_refreshes_activity_while_session_lives(lan):
+def test_gate_refreshes_activity_while_session_lives(lan):
     token = set_cookies(post_login(lan.client))["agent-dashboard-sign-in"]
     headers = cookie_header("agent-dashboard-sign-in", token)
     assert last_seen_of("alice", token) == T0

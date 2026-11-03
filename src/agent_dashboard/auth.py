@@ -625,13 +625,14 @@ def register_auth_routes(app, templates: Jinja2Templates) -> None:
             return RedirectResponse(
                 sanitize_next(request.query_params.get("next")), status_code=303
             )
-        view = _login_view_for_query(request)
-        if read_session_id(request) is not None and view.notice_tone is None:
+        if read_session_id(request) is not None:
+            # A cookie without a session always shows the stale-session box
+            # and is cleared, even with ?signed_out=1/?password_set=1 (5.6).
             view = _stale_session_view(request.query_params.get("next"))
             response = _render_login(request, templates, view)
             _clear_sign_in_cookies(response)
             return response
-        return _render_login(request, templates, view)
+        return _render_login(request, templates, _login_view_for_query(request))
 
     @app.post("/login", response_class=HTMLResponse)
     async def login_submit(request: Request) -> Response:
