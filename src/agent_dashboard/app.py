@@ -10,7 +10,6 @@ summaries on load.
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -65,11 +64,7 @@ from .charts import (
     undated_count,
 )
 from .config import Settings
-from .control import (
-    compute_control_mode,
-    control_slug,
-    host_guard_disabled_from_env,
-)
+from .control import compute_control_mode, control_slug
 from .control_routes import register_control_routes
 from .cost_summary import summarize_cost
 from .fleet import FleetState, poll_forever
@@ -223,7 +218,7 @@ def create_app(
     control_mode = compute_control_mode(
         control_enabled=getattr(cfg, "control", True),
         host=cfg.host,
-        host_guard_disabled=host_guard_disabled_from_env(),
+        lan_mode=getattr(cfg, "lan_mode", False),
     )
     if gateway is not None:
         gw = gateway
@@ -266,8 +261,7 @@ def create_app(
     app.state.gateway = gw
     app.state.control_mode = control_mode
     extra_hosts = getattr(cfg, "allowed_hosts", frozenset()) or frozenset()
-    # TEMPORARY escape hatch: AGENT_DASHBOARD_DISABLE_HOST_GUARD=1 skips the Host check.
-    if os.environ.get("AGENT_DASHBOARD_DISABLE_HOST_GUARD") != "1":
+    if getattr(cfg, "host_check", True):
         app.add_middleware(
             HostGuardMiddleware, allowed_hosts=set(ALLOWED_HOSTS) | set(extra_hosts)
         )
