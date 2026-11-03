@@ -28,6 +28,10 @@ _Avoid_: Button, command (the agent's term for what it records), operation
 The dashboard's own append-only record of every Control action submission and its outcome at submission time, including those the dashboard refused before reaching the agent; one submission's record is a Control audit entry. The agent's command record remains the authority for what happened to an accepted command afterwards.
 _Avoid_: Audit log, command log, history
 
+**Sign-in session**:
+The period during which one person is signed in to the dashboard in one browser, from signing in until signing out, expiry, or revocation; it exists only when the dashboard is reachable beyond loopback.
+_Avoid_: Session, login
+
 **Attempt log**:
 One implementation attempt's event history on the managed instance's `/data` volume (`/data/logs/<issue>/<started_at>/`): the `attempt.json` summary, the `agent_output.json` event stream, and the numbered evidence files.
 _Avoid_: Session, run log
