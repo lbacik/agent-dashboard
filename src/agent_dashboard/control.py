@@ -93,6 +93,11 @@ REACH_REASONS = {
 }
 
 
+#: "Controls unavailable" reason for a LAN viewer (spec section 7.1): the
+#: Role decides per request whether an Operator may issue Control actions.
+VIEWER_REASON = "your account can view but not issue Control actions"
+
+
 @dataclass(frozen=True)
 class ControlMode:
     """Dashboard-wide Control availability, computed once at startup."""
@@ -128,6 +133,27 @@ def compute_control_mode(
             ),
         )
     return ControlMode(available=True, reason=None)
+
+
+def request_control_mode(
+    mode: ControlMode,
+    *,
+    role: str | None = None,
+    lan_mode: bool = False,
+) -> ControlMode:
+    """Per-request Control availability (spec section 7.1).
+
+    The startup dashboard control mode first, then, in LAN mode, the
+    Operator's Role: ``viewer`` gives "your account can view but not issue
+    Control actions". The same function feeds the "Controls unavailable"
+    line and every Control POST route; the top bar's Control chip keeps
+    showing the startup dashboard mode, not the Role.
+    """
+    if not mode.available:
+        return mode
+    if lan_mode and role == "viewer":
+        return ControlMode(available=False, reason=VIEWER_REASON)
+    return mode
 
 
 def host_guard_disabled_from_env(env: dict[str, str] | None = None) -> bool:
@@ -810,6 +836,7 @@ __all__ = [
     "KIND_LABELS",
     "MISSING",
     "NEXT_ISSUE_WAITING",
+    "VIEWER_REASON",
     "REACH_REASONS",
     "TERMINAL_ACKS",
     "TERMINAL_TITLES",
@@ -825,6 +852,7 @@ __all__ = [
     "compute_control_mode",
     "control_availability",
     "control_slug",
+    "request_control_mode",
     "fleet_chips",
     "follow_command",
     "format_control_age",

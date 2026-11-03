@@ -35,12 +35,14 @@ from .control import (
     MISSING,
     TERMINAL_TITLES,
     TERMINAL_TONES,
+    VIEWER_REASON,
     ControlMode,
     FollowResult,
     command_timeline,
     control_availability,
     control_slug,
     follow_command,
+    request_control_mode,
     timeline_summary,
 )
 from .control_audit import (
@@ -402,8 +404,33 @@ def _validate_submit(form: dict[str, str]) -> tuple[dict | None, str | None]:
     )
 
 
-def _row_availability(row, mode: ControlMode):
-    """The console view model for one fleet row (pure function of row + mode)."""
+def _operator_name(request: Request) -> str | None:
+    """The audit's ``operator``: the account name in LAN mode, null outside (7.3).
+
+    The sign-in session ID and the client address are never recorded.
+    """
+    settings = getattr(request.app.state, "settings", None)
+    if not bool(getattr(settings, "lan_mode", False)):
+        return None
+    operator = getattr(request.state, "operator", None)
+    name = getattr(operator, "name", None)
+    return name if isinstance(name, str) and name else None
+
+
+def _request_mode(request: Request, mode: ControlMode) -> ControlMode:
+    """The per-request control mode: the startup mode first, then the Role (7.1)."""
+    settings = getattr(request.app.state, "settings", None)
+    operator = getattr(request.state, "operator", None)
+    return request_control_mode(
+        mode,
+        role=getattr(operator, "role", None),
+        lan_mode=bool(getattr(settings, "lan_mode", False)),
+    )
+
+
+def _row_availability(row, request: Request):
+    """The console view model for one fleet row and the signed-in Operator."""
+    mode = _request_mode(request, request.app.state.control_mode)
     control = MISSING if row.control_raw_missing else row.control_raw
     return control_availability(
         reach=row.reach,
@@ -438,11 +465,12 @@ def check_protection(request: Request, mode: ControlMode) -> tuple[str, str] | N
 
     On top of the Host allow-list, in order: the shared ``Origin`` rule
     (spec 4.2), ``Sec-Fetch-Site`` ``same-origin`` when present,
-    ``HX-Request: true``, and the dashboard control mode available.
-    Returns ``(reason, message)`` on refusal, else none. ``reason`` is the
-    Control audit slug; ``message`` is the fragment text after its prefix.
-    An ``Origin`` refusal writes one stdout ``auth`` line (spec 9);
-    ``Sec-Fetch-Site`` and ``HX-Request`` stay as they are (ADR 0007).
+    ``HX-Request: true``, the dashboard control mode available, then the
+    Role (spec 7.2). Returns ``(reason, message)`` on refusal, else none.
+    ``reason`` is the Control audit slug (a viewer gives ``not_permitted``);
+    ``message`` is the fragment text after its prefix. An ``Origin``
+    refusal writes one stdout ``auth`` line (spec 9); ``Sec-Fetch-Site``
+    and ``HX-Request`` stay as they are (ADR 0007).
     """
     from .request_checks import is_origin_allowed, log_origin_refused
 
@@ -458,6 +486,9 @@ def check_protection(request: Request, mode: ControlMode) -> tuple[str, str] | N
         return ("htmx_header", HTMX_MESSAGE)
     if not mode.available:
         return ("controls_unavailable", mode.reason or "unavailable")
+    request_mode = _request_mode(request, mode)
+    if not request_mode.available:
+        return ("not_permitted", request_mode.reason or VIEWER_REASON)
     return None
 
 
@@ -511,7 +542,6 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
         """
         fleet = request.app.state.fleet
         cfg = request.app.state.settings
-        mode = getattr(request.app.state, "control_mode", ControlMode(available=True))
         poll_interval = getattr(cfg, "poll_interval", 5.0)
         rows, _ = await fleet.snapshot(poll_interval=poll_interval)
         row = next((r for r in rows if r.name == name), None)
@@ -522,7 +552,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                 {"name": name, "slug": control_slug(name), "error": "instance not found"},
                 status_code=404,
             )
-        availability = _row_availability(row, mode)
+        availability = _row_availability(row, request)
         commands = _row_commands(row)
         return templates.TemplateResponse(
             request,
@@ -624,7 +654,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
         protection = check_protection(request, mode)
         if protection is not None:
             reason, message = protection
-            if reason == "controls_unavailable":
+            if reason in ("controls_unavailable", "not_permitted"):
                 fragment = f"Controls unavailable: {message}"
             else:
                 fragment = f"Request refused: {message}"
@@ -633,6 +663,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason=reason,
                     error=fragment,
+                    operator=_operator_name(request),
                     container_id=None,
                     expected_repository=None,
                     action=candidate_action,
@@ -641,7 +672,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     agent_version=_agent_version(row) if row is not None else None,
                 )
             )
-            if reason == "controls_unavailable":
+            if reason in ("controls_unavailable", "not_permitted"):
                 return HTMLResponse(
                     f'<p class="ctl-unavailable">{fragment}</p>', status_code=403
                 )
@@ -687,6 +718,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason="validation",
                     error=validation_message,
+                    operator=_operator_name(request),
                     container_id=None,
                     expected_repository=None,
                     action=candidate_action,
@@ -695,7 +727,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     agent_version=_agent_version(row),
                 )
             )
-            context = _composer_context(row, name, _row_availability(row, mode))
+            context = _composer_context(row, name, _row_availability(row, request))
             context["review_error"] = validation_message
             context["entered_action"] = candidate_action
             context["entered_n"] = n_raw
@@ -713,7 +745,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
         command = _display_command(action, n=n_value, issue=issue_value)
 
         # The instance's controls available (403, console line).
-        availability = _row_availability(row, mode)
+        availability = _row_availability(row, request)
         if availability.unavailable is not None:
             error = f"Controls unavailable: {availability.unavailable}"
             _write_refused(
@@ -721,6 +753,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason="action_unavailable",
                     error=error,
+                    operator=_operator_name(request),
                     container_id=None,
                     expected_repository=None,
                     action=action,
@@ -744,6 +777,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason="action_unavailable",
                     error=error,
+                    operator=_operator_name(request),
                     container_id=None,
                     expected_repository=None,
                     action=action,
@@ -832,7 +866,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
 
         def body_oob() -> str:
             """The composer plus timeline summary out of band."""
-            context = _composer_context(row, name, _row_availability(row, mode))
+            context = _composer_context(row, name, _row_availability(row, request))
             context["slug"] = control_slug(name)
             return templates.get_template("_control_body_oob.html").render(context)
 
@@ -881,7 +915,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
         protection = check_protection(request, mode)
         if protection is not None:
             reason, message = protection
-            if reason == "controls_unavailable":
+            if reason in ("controls_unavailable", "not_permitted"):
                 fragment = f"Controls unavailable: {message}"
             else:
                 fragment = f"Request refused: {message}"
@@ -890,6 +924,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason=reason,
                     error=fragment,
+                    operator=_operator_name(request),
                     container_id=None,
                     expected_repository=None,
                     action=candidate_action,
@@ -931,6 +966,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason="validation",
                     error=validation_message,
+                    operator=_operator_name(request),
                     request_id=audit_request_id,
                     container_id=form.get("container_id", ""),
                     expected_repository=form.get("repository", ""),
@@ -974,6 +1010,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason="stale_binding",
                     error=STALE_BINDING_MESSAGE,
+                    operator=_operator_name(request),
                     request_id=request_id,
                     container_id=container_id,
                     expected_repository=repository,
@@ -1003,6 +1040,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                 expect_repo = None
         common = {
             "instance": name,
+            "operator": _operator_name(request),
             "request_id": request_id,
             "container_id": container_id,
             "expected_repository": repository,
@@ -1030,6 +1068,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                         instance=name,
                         reason="busy",
                         error=BUSY_MESSAGE,
+                        operator=_operator_name(request),
                         request_id=request_id,
                         container_id=container_id,
                         expected_repository=repository,
@@ -1360,7 +1399,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
         protection = check_protection(request, mode)
         if protection is not None:
             reason, message = protection
-            if reason == "controls_unavailable":
+            if reason in ("controls_unavailable", "not_permitted"):
                 fragment = f"Controls unavailable: {message}"
             else:
                 fragment = f"Request refused: {message}"

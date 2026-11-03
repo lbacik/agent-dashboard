@@ -852,6 +852,7 @@ def test_submit_audit_entry_schema():
     wanted = {
         "at",
         "outcome",
+        "operator",
         "request_id",
         "instance",
         "container_id",
