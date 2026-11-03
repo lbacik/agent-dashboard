@@ -54,6 +54,7 @@ def refused_entry(
     instance: str,
     reason: str,
     error: str,
+    operator: str | None = None,
     request_id: str | None = None,
     container_id: str | None = None,
     expected_repository: str | None = None,
@@ -74,6 +75,7 @@ def refused_entry(
     return {
         "at": utc_now_ms(),
         "outcome": "refused",
+        "operator": operator,
         "request_id": request_id,
         "instance": instance,
         "container_id": container_id,
@@ -98,6 +100,7 @@ def refused_entry(
 def submitted_entry(
     *,
     instance: str,
+    operator: str | None = None,
     request_id: str,
     container_id: str | None,
     expected_repository: str | None,
@@ -117,6 +120,7 @@ def submitted_entry(
     return {
         "at": utc_now_ms(),
         "outcome": "submitted",
+        "operator": operator,
         "request_id": request_id,
         "instance": instance,
         "container_id": container_id,
@@ -142,6 +146,7 @@ def outcome_entry(
     *,
     instance: str,
     outcome: str,
+    operator: str | None = None,
     request_id: str,
     container_id: str | None,
     expected_repository: str | None,
@@ -171,6 +176,7 @@ def outcome_entry(
     return {
         "at": utc_now_ms(),
         "outcome": outcome,
+        "operator": operator,
         "request_id": request_id,
         "instance": instance,
         "container_id": container_id,
