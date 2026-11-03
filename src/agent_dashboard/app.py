@@ -274,12 +274,16 @@ def create_app(
                 except asyncio.CancelledError:
                     pass
 
+    from .sign_in_delay import SignInDelay
+
+    auth_clock = clock if clock is not None else time.time
     app = FastAPI(title="agent-dashboard", lifespan=lifespan)
     app.state.fleet = fleet
     app.state.settings = cfg
     app.state.gateway = gw
     app.state.control_mode = control_mode
-    app.state.auth_clock = clock if clock is not None else time.time
+    app.state.auth_clock = auth_clock
+    app.state.sign_in_delay = SignInDelay(clock=auth_clock)
     app.state.password_hasher = password_hasher
     extra_hosts = getattr(cfg, "allowed_hosts", frozenset()) or frozenset()
     if getattr(cfg, "host_check", True):

@@ -1,10 +1,9 @@
 """Sign-in, sign-out and the gate in LAN mode (spec 3, 4.3, 5.1-5.4, 5.6, 8, 9).
 
 LAN mode apps are built directly with LAN mode ``Settings``; the CLI still
-refuses LAN mode. The growing delay (5.5) is a separate ticket: failures log
-``delay_s: 0`` and nothing is refused for delay. The stale-cookie box (5.6)
-is a separate ticket: ``GET /login`` with a stale cookie clears it and shows
-the plain form.
+refuses LAN mode. The growing delay (5.5) lives in ``test_signin_delay.py``.
+The stale-cookie box (5.6) is a separate ticket: ``GET /login`` with a stale
+cookie clears it and shows the plain form.
 """
 
 from __future__ import annotations
@@ -1026,7 +1025,7 @@ def test_sign_in_failed_logs_auth_line(lan, capsys):
     assert line["event"] == "sign_in_failed"
     assert line["account"] == "alice"
     assert line["client"] == "testclient"
-    assert line["delay_s"] == 0
+    assert line["delay_s"] == 1
     assert set(line) == {"at", "event", "account", "client", "delay_s"}
 
 
