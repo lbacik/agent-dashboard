@@ -7,9 +7,9 @@ in. All templates consume the framework-free view models here (``Operator``,
 ``SignInView``); the server's store calls run in a worker thread.
 
 The growing sign-in delay (spec 5.5) refuses attempts inside either key's
-delay with 429 before the password is checked. The stale-cookie info box
-(spec 5.6) is a separate ticket too: ``GET /login`` with a cookie that
-matches no session clears the cookie and shows the plain form.
+delay with 429 before the password is checked. ``GET /login`` with a cookie
+that matches no session clears the cookie and shows the stale-session info
+box (spec 5.6, 8.1).
 """
 
 from __future__ import annotations
@@ -93,7 +93,7 @@ class SignInView:
 
     account: str = ""
     focus_password: bool = False
-    notice_tone: str | None = None  # "danger" | "warn" | "ok"
+    notice_tone: str | None = None  # "danger" | "warn" | "ok" | "info"
     notice_text: str = ""
     next: str = ""
 
@@ -407,6 +407,29 @@ def _login_view_for_query(request: Request) -> SignInView:
     return SignInView(next=next if params.get("next") else "")
 
 
+def _stale_session_view(next_param: str | None) -> SignInView:
+    """The ``/login`` view for a cookie without a session (spec 5.6, 8.1).
+
+    The info box never names the reason (expiry, reset, remove). The last
+    four words — the ``next`` page clause — only appear when a ``next``
+    target survived the ``next`` rule.
+    """
+    cleaned = try_sanitize_next(next_param)
+    if cleaned is not None:
+        text = (
+            "Your sign-in session has ended. "
+            "Sign in again to continue where you were."
+        )
+        return SignInView(
+            notice_tone="info", notice_text=text, next=cleaned
+        )
+    return SignInView(
+        notice_tone="info",
+        notice_text="Your sign-in session has ended. Sign in again.",
+        next="",
+    )
+
+
 def _render_login(
     request: Request,
     templates: Jinja2Templates,
@@ -598,7 +621,8 @@ def register_auth_routes(app, templates: Jinja2Templates) -> None:
         """The sign-in card (spec 8.1).
 
         A valid session redirects to ``next``, else ``/``. A cookie
-        without a session is cleared and the plain form shows.
+        without a session is cleared and the stale-session info box shows
+        (spec 5.6); the reason is never named.
         """
         record = await resolve_session(request)
         if record is not None:
@@ -606,10 +630,14 @@ def register_auth_routes(app, templates: Jinja2Templates) -> None:
                 sanitize_next(request.query_params.get("next")), status_code=303
             )
         stale = read_session_id(request) is not None
-        response = _render_login(request, templates, _login_view_for_query(request))
         if stale:
+            view = _login_view_for_query(request)
+            if view.notice_tone is None:
+                view = _stale_session_view(request.query_params.get("next"))
+            response = _render_login(request, templates, view)
             _clear_sign_in_cookies(response)
-        return response
+            return response
+        return _render_login(request, templates, _login_view_for_query(request))
 
     @app.post("/login", response_class=HTMLResponse)
     async def login_submit(request: Request) -> Response:

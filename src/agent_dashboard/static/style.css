@@ -186,6 +186,7 @@ table.fleet thead th {
 .notice[data-tone="danger"] { background: var(--danger-bg); color: var(--danger-ink); border-color: var(--danger-line); }
 .notice[data-tone="warn"] { background: var(--warn-bg); color: var(--warn-ink); border-color: var(--warn-bg); }
 .notice[data-tone="ok"] { background: var(--ok-bg); color: var(--ok-ink); border-color: var(--ok-bg); }
+.notice[data-tone="info"] { background: var(--info-bg); color: var(--info-ink); border-color: var(--info-bg); }
 
 table.fleet {
   width: 100%;

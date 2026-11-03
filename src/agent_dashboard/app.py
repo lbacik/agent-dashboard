@@ -285,6 +285,24 @@ def create_app(
     app.state.auth_clock = auth_clock
     app.state.sign_in_delay = SignInDelay(clock=auth_clock)
     app.state.password_hasher = password_hasher
+    if lan_mode:
+        # Startup cleanup (spec 5.6): ended sessions are deleted when the
+        # store opens, so a restart never keeps one. A restart itself signs
+        # nobody out: live sessions survive because only ended rows go.
+        from . import account_store as _account_store
+
+        def _startup_session_cleanup() -> None:
+            conn = _account_store.open_store(
+                now=auth_clock(),
+                idle_timeout=cfg.sign_in_idle_timeout,
+                max_age=cfg.sign_in_max_age,
+            )
+            try:
+                pass
+            finally:
+                conn.close()
+
+        _startup_session_cleanup()
     extra_hosts = getattr(cfg, "allowed_hosts", frozenset()) or frozenset()
     if getattr(cfg, "host_check", True):
         app.add_middleware(

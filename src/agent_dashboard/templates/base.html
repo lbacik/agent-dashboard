@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/htmx.min.js" defer></script>
   <script src="/static/sse.js" defer></script>
+  {% if lan_mode %}<script src="/static/sign-in.js" defer></script>{% endif %}
 </head>
 <body>
   {# Instrument top bar in three cells: status LED plus the canonical title;

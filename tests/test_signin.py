@@ -908,7 +908,7 @@ def test_html_responses_carry_security_headers(lan):
         assert response.status_code == 200, path
         assert response.headers["x-frame-options"] == "DENY", path
         assert response.headers["referrer-policy"] == "same-origin", path
-        assert "sign-in.js" not in response.text, path
+        assert '<script src="/static/sign-in.js" defer></script>' in response.text, path
 
 def test_operator_chip_and_sign_out_on_every_dashboard_page(lan):
     token = set_cookies(post_login(lan.client))["agent-dashboard-sign-in"]
@@ -1101,6 +1101,317 @@ def test_auth_lines_are_single_line_json(lan, capsys):
     assert len(raw) == 1
     parsed = json.loads(raw[0].removeprefix("auth "))
     assert parsed["account"] == 'mallory"test'
+
+
+# --- stale cookie info box (spec 5.6, 8.1) ---------------------------------------
+
+
+def test_stale_cookie_without_next_shows_short_info_box(lan):
+    response = lan.client.get(
+        "/login",
+        headers=cookie_header("agent-dashboard-sign-in", "stale"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 200
+    assert 'data-tone="info"' in response.text
+    assert "Your sign-in session has ended. Sign in again." in response.text
+    assert "to continue where you were" not in response.text
+    cleared = response.headers.get_list("set-cookie")
+    assert any(h.startswith("__Host-agent-dashboard-sign-in=") for h in cleared)
+    assert any(h.startswith("agent-dashboard-sign-in=") for h in cleared)
+    assert any("Max-Age=0" in h for h in cleared)
+
+
+def test_stale_cookie_with_next_shows_full_info_box_and_keeps_next(lan):
+    response = lan.client.get(
+        "/login?next=/instances/work/history",
+        headers=cookie_header("agent-dashboard-sign-in", "stale"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 200
+    assert 'data-tone="info"' in response.text
+    assert (
+        "Your sign-in session has ended. "
+        "Sign in again to continue where you were." in response.text
+    )
+    assert 'name="next" value="/instances/work/history"' in response.text
+    cleared = response.headers.get_list("set-cookie")
+    assert any(h.startswith("__Host-agent-dashboard-sign-in=") for h in cleared)
+    assert any(h.startswith("agent-dashboard-sign-in=") for h in cleared)
+
+
+def test_stale_host_cookie_clears_both_names(lan):
+    response = lan.client.get(
+        "/login",
+        headers=cookie_header("__Host-agent-dashboard-sign-in", "stale"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 200
+    assert 'data-tone="info"' in response.text
+    cleared = response.headers.get_list("set-cookie")
+    assert any(h.startswith("__Host-agent-dashboard-sign-in=") for h in cleared)
+    assert any(h.startswith("agent-dashboard-sign-in=") for h in cleared)
+
+
+def test_fresh_login_page_has_no_stale_box(lan):
+    response = lan.client.get("/login", follow_redirects=False)
+    assert response.status_code == 200
+    assert "Your sign-in session has ended" not in response.text
+
+
+def test_stale_cookie_never_names_reason(lan):
+    # Expiry, reset and remove all read as the same box.
+    add_session("alice", "gone-idle", created=T0 - 100, last_seen=T0 - 3700)
+    for token in ("gone-idle", "no-such-session"):
+        response = lan.client.get(
+            "/login",
+            headers=cookie_header("agent-dashboard-sign-in", token),
+            follow_redirects=False,
+        )
+        assert response.status_code == 200
+        assert "Your sign-in session has ended. Sign in again." in response.text
+        assert "expir" not in response.text.lower()
+        assert "reset" not in response.text.lower()
+        assert "remov" not in response.text.lower()
+
+
+# --- /stream ends with the session (spec 5.6, 5.7, 12) --------------------------
+
+
+def test_stream_refreshes_activity_while_session_lives(lan):
+    token = set_cookies(post_login(lan.client))["agent-dashboard-sign-in"]
+    headers = cookie_header("agent-dashboard-sign-in", token)
+    assert last_seen_of("alice", token) == T0
+    lan.clock.now = T0 + 91
+    response = lan.client.get("/", headers=headers, follow_redirects=False)
+    assert response.status_code == 200
+    assert last_seen_of("alice", token) == T0 + 91
+
+
+def test_stream_ends_after_cli_reset(tmp_path, monkeypatch):
+    import asyncio
+
+    from agent_dashboard import cli as cli_module
+
+    env = make_lan(tmp_path, monkeypatch)
+    add_account("alice", now=T0)
+    token = set_cookies(post_login(env.client))["agent-dashboard-sign-in"]
+
+    async def is_signed_in():
+        def work():
+            conn = account_store.open_store()
+            try:
+                return (
+                    account_store.find_sign_in_session(
+                        conn,
+                        hashlib.sha256(token.encode()).digest(),
+                        now=env.clock.now,
+                        idle_timeout=env.settings.sign_in_idle_timeout,
+                        max_age=env.settings.sign_in_max_age,
+                    )
+                    is not None
+                )
+            finally:
+                conn.close()
+
+        return await asyncio.to_thread(work)
+
+    async def scenario():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        class FakeFleet:
+            def subscribe(self):
+                return queue
+
+            def unsubscribe(self, _queue):
+                pass
+
+            async def snapshot(self, poll_interval=None):
+                return ([], None)
+
+        async def connected():
+            return False
+
+        stream = fleet_event_stream(
+            FakeFleet(), lambda rows, error: "TABLE",
+            connected, None, is_signed_in=is_signed_in,
+        )
+        it = stream.__aiter__()
+        assert (await it.__anext__()).startswith("retry:")
+        assert (await it.__anext__()).startswith("event: fleet")
+        # The CLI reset (a separate process in production) ends the session.
+        cli_module.main(["account", "reset", "alice"])
+        await queue.put(1)
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(it.__anext__(), timeout=2)
+        await stream.aclose()
+
+    asyncio.run(scenario())
+    # The browser's reconnect then gets the gate's 401.
+    refused = env.client.get(
+        "/stream",
+        headers=cookie_header("agent-dashboard-sign-in", token),
+        follow_redirects=False,
+    )
+    assert refused.status_code == 401
+
+
+def test_stream_ends_after_expiry_with_injected_clock(tmp_path, monkeypatch):
+    import asyncio
+
+    env = make_lan(tmp_path, monkeypatch)
+    add_account("alice", now=T0)
+    token = set_cookies(post_login(env.client))["agent-dashboard-sign-in"]
+
+    async def is_signed_in():
+        def work():
+            conn = account_store.open_store()
+            try:
+                return (
+                    account_store.find_sign_in_session(
+                        conn,
+                        hashlib.sha256(token.encode()).digest(),
+                        now=env.clock.now,
+                        idle_timeout=env.settings.sign_in_idle_timeout,
+                        max_age=env.settings.sign_in_max_age,
+                    )
+                    is not None
+                )
+            finally:
+                conn.close()
+
+        return await asyncio.to_thread(work)
+
+    async def scenario():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        class FakeFleet:
+            def subscribe(self):
+                return queue
+
+            def unsubscribe(self, _queue):
+                pass
+
+            async def snapshot(self, poll_interval=None):
+                return ([], None)
+
+        async def connected():
+            return False
+
+        stream = fleet_event_stream(
+            FakeFleet(), lambda rows, error: "TABLE",
+            connected, None, is_signed_in=is_signed_in,
+        )
+        it = stream.__aiter__()
+        assert (await it.__anext__()).startswith("retry:")
+        assert (await it.__anext__()).startswith("event: fleet")
+        # Past the idle timeout the next fleet event ends the stream.
+        env.clock.now = T0 + 1800.0 + 1
+        await queue.put(1)
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(it.__anext__(), timeout=2)
+        await stream.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_cli_reset_while_app_holds_store_ends_session(tmp_path, monkeypatch):
+    from agent_dashboard import cli as cli_module
+
+    env = make_lan(tmp_path, monkeypatch)
+    add_account("alice", now=T0)
+    token = set_cookies(post_login(env.client))["agent-dashboard-sign-in"]
+    headers = cookie_header("agent-dashboard-sign-in", token)
+    assert env.client.get("/", headers=headers,
+                           follow_redirects=False).status_code == 200
+    # The app holds the store open while the CLI resets the account.
+    held = account_store.open_store(now=T0)
+    try:
+        cli_module.main(["account", "reset", "alice"])
+        refused = env.client.get("/", headers=headers, follow_redirects=False)
+        assert refused.status_code == 303
+        htmx = dict(headers)
+        htmx["HX-Request"] = "true"
+        htmx["HX-Current-URL"] = "http://localhost/instances/work"
+        response = env.client.get("/", headers=htmx, follow_redirects=False)
+        assert response.status_code == 401
+        assert response.headers["hx-redirect"] == "/login?next=%2Finstances%2Fwork"
+    finally:
+        held.close()
+
+
+def test_startup_cleanup_deletes_ended_sessions(tmp_path, monkeypatch):
+    from agent_dashboard import account_store as store
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    conn = store.open_store(now=T0)
+    try:
+        store.create_account(conn, "alice", "controller", now=T0)
+        digest = hashlib.sha256(b"ended-token").digest()
+        store.create_sign_in_session(conn, "alice", digest, now=T0 - 3700)
+        conn.execute(
+            "UPDATE sign_in_sessions SET created_at = ?, last_seen_at = ?"
+            " WHERE id_hash = ?",
+            (T0 - 3700, T0 - 3700, digest),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    # Opening the store in LAN mode deletes the ended row.
+    conn = store.open_store(
+        now=T0, idle_timeout=1800.0, max_age=43200.0
+    )
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM sign_in_sessions").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+# --- sign-in.js SSE close (spec 5.6, static asset) --------------------------------
+
+
+def test_sign_in_js_checks_whoami_on_sse_close():
+    from pathlib import Path
+
+    text = (Path("src/agent_dashboard/static/sign-in.js")).read_text()
+    assert "htmx:sseError" in text
+    assert "htmx:sseClose" in text
+    assert 'htmx.ajax("GET", "/whoami", {swap: "none"})' in text
+    # At most one check at a time: a single request site behind a guard.
+    assert text.count('htmx.ajax("GET"') == 1
+    assert "checking" in text
+
+
+def test_sign_in_js_included_only_in_lan_mode(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from agent_dashboard.app import create_app
+    from agent_dashboard.config import Settings
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    lan_app = create_app(
+        settings=Settings(lan_mode=True,
+                          allowed_hosts=frozenset({"example.test"})),
+        start_poller=False,
+        clock=Clock(),
+        password_hasher=CheapHasher(),
+    )
+    add_account("alice", now=T0)
+    token = set_cookies(
+        TestClient(lan_app, base_url="http://localhost").post(
+            "/login",
+            data={"account": "alice", "password": PASSWORD},
+            headers={"Origin": "http://localhost"},
+            follow_redirects=False,
+        )
+    )["agent-dashboard-sign-in"]
+    body = TestClient(lan_app, base_url="http://localhost").get(
+        "/", headers=cookie_header("agent-dashboard-sign-in", token)
+    ).text
+    assert '<script src="/static/sign-in.js" defer></script>' in body
+    plain_app = create_app(settings=Settings(), start_poller=False)
+    plain_body = TestClient(plain_app, base_url="http://localhost").get("/").text
+    assert "sign-in.js" not in plain_body
 
 
 # --- templates consume view models only (spec 8) ---
