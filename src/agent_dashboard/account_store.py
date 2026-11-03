@@ -112,14 +112,6 @@ class IssuedLink:
 
 
 @dataclass(frozen=True)
-class SetPasswordLinkInfo:
-    """A Set-password link row: the account plus its expiry (spec 6.3)."""
-
-    account: str
-    expires_at: float
-
-
-@dataclass(frozen=True)
 class SetPasswordLinkDetail:
     """A link's state plus the account/expiry the page shows (spec 8.3).
 
@@ -661,7 +653,6 @@ __all__ = [
     "AccountExistsError",
     "IssuedLink",
     "SetPasswordLinkDetail",
-    "SetPasswordLinkInfo",
     "SignInSession",
     "StoreError",
     "UnknownAccountError",
