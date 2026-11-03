@@ -20,6 +20,18 @@ _Avoid_: Summary, status message, state
 The order in which the dashboard lists managed instances: those needing the operator first (unreachable, recovery hold, consecutive errors, handoff in progress), then those approaching the soft threshold, then working, idle, and offline ones.
 _Avoid_: Priority, severity, sort order
 
+**Operator**:
+A person using the dashboard to watch managed instances and, when allowed, issue Control actions; on a dashboard reachable only over loopback there is exactly one, and it is unnamed.
+_Avoid_: User, admin
+
+**Operator account**:
+One operator's named identity on a dashboard reachable beyond loopback, known by an account name that never changes; the Control audit names it on every entry.
+_Avoid_: User, login, profile
+
+**Role**:
+What an operator account may do: a viewer sees every view, Attempt logs included; a controller may also issue Control actions.
+_Avoid_: Permission, access level
+
 **Control action**:
 An operator action the dashboard offers on a live managed instance that issues exactly one `agentctl` command to it (stop, stop after N attempts, resume, handoff now, next issue), bound to the container and repository the operator was looking at.
 _Avoid_: Button, command (the agent's term for what it records), operation
