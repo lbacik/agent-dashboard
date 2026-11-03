@@ -35,3 +35,7 @@ _Avoid_: Session, run log
 **Evidence file**:
 One numbered file an Attempt log event points at (`NNNN_tool_call.json`, `NNNN_tool_result.json`, `NNNN_model_response.txt`); the tool name comes only from the event's detail, never from the file.
 _Avoid_: Attachment, artifact
+
+**Set-password link**:
+A one-time, short-lived link issued on the Docker host for one Operator account, with which the person behind that account chooses their own password, the first one and again after every reset; nobody else ever knows it.
+_Avoid_: Invite, reset link, token
