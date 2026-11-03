@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 
+from .account_cli import run_account
 from .app import create_app
 from .config import is_loopback, load_settings
 
@@ -18,6 +19,15 @@ MIGRATION_LINE = (
 
 def main(argv: list[str] | None = None) -> None:
     import uvicorn
+
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw[:1] == ["account"]:
+        # Account management works in either mode and takes no serve flags,
+        # so it never reaches the serve settings below.
+        code = run_account(raw[1:])
+        if code != 0:
+            raise SystemExit(code)
+        return
 
     try:
         settings = load_settings(argv)
