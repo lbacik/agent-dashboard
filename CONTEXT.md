@@ -40,6 +40,10 @@ _Avoid_: Button, command (the agent's term for what it records), operation
 The dashboard's own append-only record of every Control action submission and its outcome at submission time, including those the dashboard refused before reaching the agent; one submission's record is a Control audit entry. The agent's command record remains the authority for what happened to an accepted command afterwards.
 _Avoid_: Audit log, command log, history
 
+**LAN mode**:
+The explicit opt-in under which the dashboard is reached from a private network without an SSH tunnel and every request needs a sign-in session; without it there is no sign-in and Control actions are offered only on a loopback bind.
+_Avoid_: v2, remote mode, network mode
+
 **Sign-in session**:
 The period during which one person is signed in to the dashboard in one browser, from signing in until signing out, expiry, or revocation; it exists only when the dashboard is reachable beyond loopback.
 _Avoid_: Session, login

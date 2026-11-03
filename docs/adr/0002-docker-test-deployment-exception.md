@@ -75,3 +75,7 @@ rather than `0.0.0.0`, and restrict the port with the host firewall.
   exception stays read-only; Control actions are refused under a
   non-loopback bind. [ADR 0008](0008-disabled-host-guard-allows-control-actions.md)
   lifts that when `AGENT_DASHBOARD_DISABLE_HOST_GUARD=1` is set.
+- Revisited in [ADR 0010](0010-lan-mode-bind-and-host-check.md), which
+  supersedes ADR 0008: this exception is read-only again, the variable only
+  turns off the `Host` check, and Control actions beyond loopback need
+  LAN mode.

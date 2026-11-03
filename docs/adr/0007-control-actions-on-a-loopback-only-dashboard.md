@@ -60,5 +60,8 @@ after "not submitted" is the agent's idempotent identical retry.
 - Partly superseded by
   [ADR 0008](0008-disabled-host-guard-allows-control-actions.md): with
   `AGENT_DASHBOARD_DISABLE_HOST_GUARD=1` Control actions stay available.
+- [ADR 0010](0010-lan-mode-bind-and-host-check.md) supersedes ADR 0008 and
+  replaces the `http://` literal in the `Origin` check with a host-and-port
+  comparison that accepts `http` and `https`.
 
 Decided in [Decide request protection, confirmations and the audit trail](https://github.com/lbacik/agent-dashboard/issues/96).
