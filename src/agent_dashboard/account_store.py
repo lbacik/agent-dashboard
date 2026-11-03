@@ -154,13 +154,20 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def open_store(now: float | None = None) -> sqlite3.Connection:
+def open_store(
+    now: float | None = None,
+    *,
+    idle_timeout: float | None = None,
+    max_age: float | None = None,
+) -> sqlite3.Connection:
     """Open the store, creating it (directory and file) when missing.
 
     Applies the pragmas, migrates a fresh file to schema version 1, refuses a
-    newer ``user_version`` with an error naming the path, and deletes
-    Set-password link rows more than 30 days past expiry. Raises
-    ``StoreError`` when the store cannot be opened.
+    newer ``user_version`` with an error naming the path, deletes
+    Set-password link rows more than 30 days past expiry, and — when both
+    ``idle_timeout`` and ``max_age`` are given — deletes ended sign-in
+    sessions (spec 5.6). Raises ``StoreError`` when the store cannot be
+    opened.
     """
     path = store_path()
     try:
@@ -195,6 +202,8 @@ def open_store(now: float | None = None) -> sqlite3.Connection:
                 f"newer than supported version {SCHEMA_VERSION}"
             )
         cleanup_links(conn, now)
+        if idle_timeout is not None and max_age is not None:
+            cleanup_ended_sessions(conn, now, idle_timeout, max_age)
     except BaseException:
         conn.close()
         raise
@@ -643,6 +652,29 @@ def cleanup_links(conn: sqlite3.Connection, now: float | None = None) -> int:
     return cursor.rowcount
 
 
+def cleanup_ended_sessions(
+    conn: sqlite3.Connection,
+    now: float | None,
+    idle_timeout: float,
+    max_age: float,
+) -> int:
+    """Delete ended sign-in sessions (spec 5.6); returns rows deleted.
+
+    A session has ended when ``now`` is past ``last_seen_at + idle_timeout``
+    or past ``created_at + max_age`` — the same rule
+    :func:`find_sign_in_session` uses for a single row. Run when the store
+    opens in LAN mode, so a restart never keeps an ended session.
+    """
+    timestamp = _now(now)
+    with conn:
+        cursor = conn.execute(
+            "DELETE FROM sign_in_sessions "
+            "WHERE ? > last_seen_at + ? OR ? > created_at + ?",
+            (timestamp, idle_timeout, timestamp, max_age),
+        )
+    return cursor.rowcount
+
+
 __all__ = [
     "LINK_RETENTION_SECONDS",
     "LINK_VALIDITY_SECONDS",
@@ -658,6 +690,7 @@ __all__ = [
     "UnknownAccountError",
     "active_controllers",
     "check_name",
+    "cleanup_ended_sessions",
     "cleanup_links",
     "consume_set_password_link",
     "count_account_sessions",
