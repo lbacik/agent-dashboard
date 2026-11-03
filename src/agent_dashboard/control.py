@@ -105,22 +105,27 @@ def compute_control_mode(
     *,
     control_enabled: bool = True,
     host: str = "127.0.0.1",
-    host_guard_disabled: bool = False,
+    lan_mode: bool = False,
 ) -> ControlMode:
-    """First matching unavailable reason (spec section 2), else available.
+    """First matching unavailable reason (spec section 2.4), else available.
 
-    A disabled Host guard skips the bind check (ADR 0008): the operator has
-    opted out of the loopback posture, so Controls stay available.
+    Outside LAN mode a non-loopback bind is read-only; in LAN mode the
+    bind is never a reason. ``host_check`` no longer enters this function
+    (ADR 0010 migration).
     """
     if not control_enabled:
         return ControlMode(
             available=False,
             reason="control is off (AGENT_DASHBOARD_CONTROL=off, read-only mode)",
         )
-    if not host_guard_disabled and not is_loopback(host or ""):
+    if not lan_mode and not is_loopback(host or ""):
         return ControlMode(
             available=False,
-            reason=f"the dashboard is bound to a non-loopback address ({host})",
+            reason=(
+                f"the dashboard is bound to a non-loopback address ({host}); "
+                "Control actions beyond loopback need LAN mode "
+                "(AGENT_DASHBOARD_LAN_MODE=on)"
+            ),
         )
     return ControlMode(available=True, reason=None)
 

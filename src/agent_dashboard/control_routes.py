@@ -434,18 +434,22 @@ def parse_form(body: bytes) -> dict[str, str]:
 
 
 def check_protection(request: Request, mode: ControlMode) -> tuple[str, str] | None:
-    """The request-protection checks for every POST control route (spec 6.2).
+    """The request-protection checks for every POST control route.
 
-    On top of the Host allow-list, in order: ``Origin`` present and equal
-    to ``http://`` plus the request's ``Host`` header (host compared
-    case-insensitively), ``Sec-Fetch-Site`` ``same-origin`` when present,
+    On top of the Host allow-list, in order: the shared ``Origin`` rule
+    (spec 4.2), ``Sec-Fetch-Site`` ``same-origin`` when present,
     ``HX-Request: true``, and the dashboard control mode available.
     Returns ``(reason, message)`` on refusal, else none. ``reason`` is the
     Control audit slug; ``message`` is the fragment text after its prefix.
+    An ``Origin`` refusal writes one stdout ``auth`` line (spec 9);
+    ``Sec-Fetch-Site`` and ``HX-Request`` stay as they are (ADR 0007).
     """
+    from .request_checks import is_origin_allowed, log_origin_refused
+
     host = (request.headers.get("host") or "").strip()
     origin = request.headers.get("origin")
-    if origin is None or origin.strip().lower() != ("http://" + host).lower():
+    if not is_origin_allowed(origin, host):
+        log_origin_refused(request, reason="origin")
         return ("origin", ORIGIN_MESSAGE)
     fetch_site = request.headers.get("sec-fetch-site")
     if fetch_site is not None and fetch_site.strip().lower() != "same-origin":

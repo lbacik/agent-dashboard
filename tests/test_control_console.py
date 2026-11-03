@@ -92,7 +92,9 @@ MODE_CASES = [
             host="192.168.1.5",
             allow_non_loopback=True,
         ),
-        "Controls unavailable: the dashboard is bound to a non-loopback address (192.168.1.5)",
+        "Controls unavailable: the dashboard is bound to a non-loopback address "
+        "(192.168.1.5); Control actions beyond loopback need LAN mode "
+        "(AGENT_DASHBOARD_LAN_MODE=on)",
     ),
 ]
 
@@ -111,16 +113,30 @@ def test_control_mode_unavailable_in_drawer(label, settings, line):
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0"])
-def test_host_guard_disabled_keeps_controls_available(monkeypatch, host):
-    # ADR 0008: the escape hatch skips the bind check as well as the Host check.
+def test_host_guard_disabled_no_longer_enables_controls(monkeypatch, host):
+    # ADR 0010 migration: the escape hatch only turns off the Host check;
+    # a non-loopback bind stays read-only outside LAN mode.
     monkeypatch.setenv("AGENT_DASHBOARD_DISABLE_HOST_GUARD", "1")
     client, _, _ = make_control_client(
         {"work": load_snapshot("snapshot-attempt-in-progress.json")},
-        Settings(poll_interval=5.0, host=host, allow_non_loopback=True),
+        Settings(
+            poll_interval=5.0,
+            host=host,
+            allow_non_loopback=True,
+            host_check=False,
+        ),
     )
     body = control_body(client).text
-    assert "Controls unavailable" not in body
-    assert "ctl-composer" in body
+    if host == "0.0.0.0":
+        assert (
+            "Controls unavailable: the dashboard is bound to a non-loopback "
+            "address (0.0.0.0); Control actions beyond loopback need LAN mode "
+            "(AGENT_DASHBOARD_LAN_MODE=on)"
+        ) in body
+        assert "ctl-composer" not in body
+    else:
+        assert "Controls unavailable" not in body
+        assert "ctl-composer" in body
 
 
 def test_control_off_wins_over_disabled_host_guard(monkeypatch):
