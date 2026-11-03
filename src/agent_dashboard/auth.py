@@ -122,6 +122,8 @@ def try_sanitize_next(value: str | None) -> str | None:
     path = value.split("?", 1)[0].split("#", 1)[0]
     if path in LOGIN_PATHS:
         return None
+    if len(path) > 1 and path.rstrip("/") in LOGIN_PATHS:
+        return None
     return value
 
 

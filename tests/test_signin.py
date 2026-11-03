@@ -155,6 +155,7 @@ def auth_lines(capsys):
 
 @pytest.fixture()
 def lan(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     add_account("alice", now=T0)
     return make_lan(tmp_path, monkeypatch)
 
@@ -305,11 +306,25 @@ def test_gate_other_methods_get_plain_401(lan):
     response = lan.client.post(
         "/instances/work/control/review",
         data={"action": "stop"},
-        headers={"Origin": "http://localhost", "HX-Request": "true"},
+        headers={"Origin": "http://localhost"},
         follow_redirects=False,
     )
     assert response.status_code == 401
     assert response.text == "Sign-in required."
+    assert "text/plain" in response.headers["content-type"]
+
+
+def test_gate_htmx_post_gets_redirect(lan):
+    response = lan.client.post(
+        "/instances/work/control/review",
+        data={"action": "stop"},
+        headers={"Origin": "http://localhost", "HX-Request": "true",
+                 "HX-Current-URL": "http://localhost/instances/work"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 401
+    assert response.text == ""
+    assert response.headers["hx-redirect"] == "/login?next=%2Finstances%2Fwork"
 
 
 def test_gate_refusal_writes_no_control_audit_entry(lan):
@@ -378,7 +393,8 @@ def test_outside_lan_mode_no_gate_and_topbar_unchanged(tmp_path, monkeypatch):
     client = TestClient(app, base_url="http://localhost")
     response = client.get("/")
     assert response.status_code == 200
-    assert "Operator" not in response.text
+    assert "Operator <strong>" not in response.text
+    assert "topbar-signout" not in response.text
     assert "Sign out" not in response.text
     assert "Stream <strong>5s</strong>" in response.text
     assert "sign-in.js" not in response.text
@@ -616,7 +632,8 @@ def test_login_page_password_set_box(lan):
     assert response.status_code == 200
     assert "Your password is set. Sign in with it now." in response.text
     assert 'name="account" type="text" value="alice"' in response.text
-    assert 'name="password" type="password" autocomplete="current-password" autofocus' in response.text
+    assert 'name="password" type="password"' in response.text
+    assert ('autocomplete="current-password" autofocus' in response.text)
 
 
 def test_login_page_password_set_with_bad_name_prefills_nothing(lan):
@@ -852,11 +869,14 @@ def test_stream_ends_when_the_session_ends():
             await asyncio.sleep(0.05)
             await queue.put(1)
 
+        async def connected():
+            return False
+
         task = asyncio.create_task(feeder())
         chunks = []
         async for chunk in fleet_event_stream(
             FakeFleet(), lambda rows, error: "TABLE",
-            lambda: False, None, is_signed_in=is_signed_in,
+            connected, None, is_signed_in=is_signed_in,
         ):
             chunks.append(chunk)
         await task
@@ -876,7 +896,7 @@ def test_stream_with_ended_session_refuses_at_connect(lan):
     assert response.status_code == 401
 
 
-# --- UI: headers, chip, sign out (spec 8, 8.1, 8.2) --------------------------------------------------
+# --- UI: headers, chip, sign out (spec 8, 8.1, 8.2) ---
 
 
 def test_html_responses_carry_security_headers(lan):
@@ -891,15 +911,221 @@ def test_html_responses_carry_security_headers(lan):
         assert response.headers["referrer-policy"] == "same-origin", path
         assert "sign-in.js" not in response.text, path
 
-
 def test_operator_chip_and_sign_out_on_every_dashboard_page(lan):
     token = set_cookies(post_login(lan.client))["agent-dashboard-sign-in"]
     headers = cookie_header("agent-dashboard-sign-in", token)
+    chip = (
+        '<span class="topbar-chip" '
+        'title="Signed in since 22:13 UTC">'
+        "Operator <strong>alice · controller</strong></span>"
+    )
+    sign_out = (
+        '<form class="topbar-signout" action="/logout" '
+        'method="post">'
+    )
     for path in ("/", "/instances/nope/history",
                  "/instances/nope/attempts/3/abc",
                  "/instances/nope/attempts/3/abc/progress"):
         response = lan.client.get(path, headers=headers)
         assert response.status_code == 200, path
-        assert ('<span class="topbar-chip" title="Signed in since 22:13 UTC">'
-                "Operator <strong>alice · controlle
-...[truncated 9113 chars]
+        assert chip in response.text, path
+        assert sign_out in response.text, path
+        assert "Sign out" in response.text, path
+        assert "data-secure-form" not in response.text, path
+
+
+def test_login_page_sends_no_store(lan):
+    response = lan.client.get("/login")
+    assert response.status_code == 200
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "same-origin"
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_login_failure_box_sends_security_headers(lan):
+    response = post_login(lan.client, password="wrong password here!!")
+    assert response.status_code == 401
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "same-origin"
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_sign_in_js_marks_secure_form(lan):
+    response = lan.client.get("/static/sign-in.js")
+    assert response.status_code == 200
+    assert "window.isSecureContext" in response.text
+    assert "data-secure-form" in response.text
+    assert "data-secure-warn" in response.text
+
+
+# --- secure context and cookie choice, unit level (spec 4.3, 5.2) ---
+
+
+@pytest.mark.parametrize("origin", [
+    "https://localhost",
+    "https://example.test",
+    "https://example.test:8443",
+    "HTTPS://EXAMPLE.TEST/",
+])
+def test_is_secure_origin_accepts_https(origin):
+    assert is_secure_origin(origin) is True
+
+
+@pytest.mark.parametrize("origin", [
+    "http://localhost",
+    "http://localhost:8000",
+    "http://127.0.0.1",
+    "http://127.0.0.5",
+    "http://[::1]",
+])
+def test_is_secure_origin_accepts_loopback_http(origin):
+    assert is_secure_origin(origin) is True
+
+
+@pytest.mark.parametrize("origin", [
+    "http://example.test",
+    "http://192.168.1.2",
+    "http://[::2]",
+    "ftp://localhost/file",
+    "not an origin",
+    "",
+])
+def test_is_secure_origin_refuses(origin):
+    assert is_secure_origin(origin) is False
+
+
+def test_cookie_for_origin_https():
+    name, secure = cookie_for_origin("https://example.test")
+    assert name == "__Host-agent-dashboard-sign-in"
+    assert secure is True
+
+
+def test_cookie_for_origin_loopback_http():
+    name, secure = cookie_for_origin("http://localhost")
+    assert name == "agent-dashboard-sign-in"
+    assert secure is False
+
+
+# --- auth lines (spec 9) ---
+
+
+def test_sign_in_logs_auth_line(lan, capsys):
+    post_login(lan.client)
+    (line,) = auth_lines(capsys)
+    assert line["event"] == "sign_in"
+    assert line["account"] == "alice"
+    assert line["client"] == "testclient"
+    assert line["at"].endswith("Z")
+    assert set(line) == {"at", "event", "account", "client"}
+
+
+def test_sign_in_failed_logs_auth_line(lan, capsys):
+    response = post_login(lan.client, password="wrong password here!!")
+    assert response.status_code == 401
+    (line,) = auth_lines(capsys)
+    assert line["event"] == "sign_in_failed"
+    assert line["account"] == "alice"
+    assert line["client"] == "testclient"
+    assert line["delay_s"] == 0
+    assert set(line) == {"at", "event", "account", "client", "delay_s"}
+
+
+def test_sign_out_logs_auth_line(lan, capsys):
+    token = set_cookies(post_login(lan.client))["agent-dashboard-sign-in"]
+    capsys.readouterr()
+    headers = dict(cookie_header("agent-dashboard-sign-in", token))
+    headers["Origin"] = "http://localhost"
+    response = lan.client.post("/logout", headers=headers,
+                               follow_redirects=False)
+    assert response.status_code == 303
+    (line,) = auth_lines(capsys)
+    assert line["event"] == "sign_out"
+    assert line["account"] == "alice"
+    assert line["client"] == "testclient"
+    assert set(line) == {"at", "event", "account", "client"}
+
+
+def test_login_origin_refused_logs_auth_line(lan, capsys):
+    response = post_login(lan.client, origin="http://evil.test")
+    assert response.status_code == 403
+    (line,) = auth_lines(capsys)
+    assert line["event"] == "origin_refused"
+    assert line["path"] == "/login"
+    assert line["origin"] == "http://evil.test"
+    assert line["host"] == "localhost"
+    assert line["fetch_site"] == ""
+    assert line["reason"] == "origin"
+    assert set(line) == {"at", "event", "path", "origin", "host",
+                         "fetch_site", "reason"}
+
+
+def test_logout_origin_refused_logs_auth_line(lan, capsys):
+    token = set_cookies(post_login(lan.client))["agent-dashboard-sign-in"]
+    capsys.readouterr()
+    headers = dict(cookie_header("agent-dashboard-sign-in", token))
+    headers["Origin"] = "http://evil.test"
+    response = lan.client.post("/logout", headers=headers,
+                               follow_redirects=False)
+    assert response.status_code == 403
+    (line,) = auth_lines(capsys)
+    assert line["event"] == "origin_refused"
+    assert line["path"] == "/logout"
+    assert line["reason"] == "origin"
+
+
+def test_login_insecure_context_logs_auth_line(lan, capsys):
+    response = lan.lan_http.post(
+        "/login",
+        data={"account": "alice", "password": PASSWORD},
+        headers={"Origin": "http://example.test"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 403
+    (line,) = auth_lines(capsys)
+    assert line["event"] == "origin_refused"
+    assert line["path"] == "/login"
+    assert line["reason"] == "secure_context"
+
+
+def test_auth_lines_cut_typed_names_to_64_chars(lan, capsys):
+    response = post_login(lan.client, account="a" * 100)
+    assert response.status_code == 401
+    (line,) = auth_lines(capsys)
+    assert line["event"] == "sign_in_failed"
+    assert line["account"] == "a" * 64
+
+
+def test_auth_lines_are_single_line_json(lan, capsys):
+    post_login(lan.client, account='mallory"test')
+    raw = [line for line in capsys.readouterr().out.splitlines()
+           if line.startswith("auth ")]
+    assert len(raw) == 1
+    parsed = json.loads(raw[0].removeprefix("auth "))
+    assert parsed["account"] == 'mallory"test'
+
+
+# --- templates consume view models only (spec 8) ---
+
+
+def test_templates_consume_view_models_only():
+    import dataclasses
+    from pathlib import Path
+
+    from agent_dashboard.auth import Operator, SignInView
+
+    assert dataclasses.is_dataclass(Operator)
+    assert dataclasses.is_dataclass(SignInView)
+    assert Operator.__dataclass_params__.frozen
+    assert SignInView.__dataclass_params__.frozen
+    templates = Path("src/agent_dashboard/templates")
+    base = (templates / "base.html").read_text()
+    login = (templates / "login.html").read_text()
+    assert "request.state" not in base
+    assert "request.state" not in login
+    assert "operator.since" in base
+    assert "operator.name" in base
+    assert "operator.role" in base
+    assert "view.notice_tone" in login
+    assert "view.notice_text" in login
+    assert "view.next" in login
+    assert "view.account" in login
