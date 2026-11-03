@@ -8,9 +8,9 @@ the bind rules and the per-request checks are redrawn around it.
 
 - **LAN mode is one explicit switch.** Without it the posture of ADR 0001
   and ADR 0007 is unchanged: no sign-in, Control actions only on a loopback
-  bind. With it the dashboard refuses to start unless its LAN configuration
-  is complete (a `Host` allow-list or the disabled `Host` check, and at
-  least one Operator account).
+  bind. With it the dashboard refuses to start without a `Host` allow-list
+  or the disabled `Host` check. It does start with no Operator account yet
+  (ADR 0013).
 - **Bind.** In LAN mode any address is accepted, loopback (a reverse proxy
   on the same host), a LAN address or `0.0.0.0` (a container), with no
   further opt-in. The default stays `127.0.0.1`.
