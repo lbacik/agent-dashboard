@@ -1,5 +1,10 @@
 # Containerised dashboard on a trusted test LAN (exception to ADR 0001)
 
+Partly superseded by
+[ADR 0012](0012-container-install-is-a-supported-lan-path.md): the container
+is a supported install in LAN mode; this exception now covers only
+publishing to a trusted LAN without sign-in, outside LAN mode, read-only.
+
 ADR 0001 runs the dashboard as a host process under the operator's account,
 bound to loopback and reached through an SSH tunnel. That stays the supported
 v1 path. This record covers a deliberate **test-environment exception**: on an

@@ -20,6 +20,18 @@ _Avoid_: Summary, status message, state
 The order in which the dashboard lists managed instances: those needing the operator first (unreachable, recovery hold, consecutive errors, handoff in progress), then those approaching the soft threshold, then working, idle, and offline ones.
 _Avoid_: Priority, severity, sort order
 
+**Operator**:
+A person using the dashboard to watch managed instances and, when allowed, issue Control actions; on a dashboard reachable only over loopback there is exactly one, and it is unnamed.
+_Avoid_: User, admin
+
+**Operator account**:
+One operator's named identity on a dashboard reachable beyond loopback, known by an account name that never changes; the Control audit names it on every entry.
+_Avoid_: User, login, profile
+
+**Role**:
+What an operator account may do: a viewer sees every view, Attempt logs included; a controller may also issue Control actions.
+_Avoid_: Permission, access level
+
 **Control action**:
 An operator action the dashboard offers on a live managed instance that issues exactly one `agentctl` command to it (stop, stop after N attempts, resume, handoff now, next issue), bound to the container and repository the operator was looking at.
 _Avoid_: Button, command (the agent's term for what it records), operation
@@ -32,6 +44,10 @@ _Avoid_: Audit log, command log, history
 The explicit opt-in under which the dashboard is reached from a private network without an SSH tunnel and every request needs a sign-in session; without it there is no sign-in and Control actions are offered only on a loopback bind.
 _Avoid_: v2, remote mode, network mode
 
+**Sign-in session**:
+The period during which one person is signed in to the dashboard in one browser, from signing in until signing out, expiry, or revocation; it exists only when the dashboard is reachable beyond loopback.
+_Avoid_: Session, login
+
 **Attempt log**:
 One implementation attempt's event history on the managed instance's `/data` volume (`/data/logs/<issue>/<started_at>/`): the `attempt.json` summary, the `agent_output.json` event stream, and the numbered evidence files.
 _Avoid_: Session, run log
@@ -39,3 +55,7 @@ _Avoid_: Session, run log
 **Evidence file**:
 One numbered file an Attempt log event points at (`NNNN_tool_call.json`, `NNNN_tool_result.json`, `NNNN_model_response.txt`); the tool name comes only from the event's detail, never from the file.
 _Avoid_: Attachment, artifact
+
+**Set-password link**:
+A one-time, short-lived link issued on the Docker host for one Operator account, with which the person behind that account chooses their own password, the first one and again after every reset; nobody else ever knows it.
+_Avoid_: Invite, reset link, token
