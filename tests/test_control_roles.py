@@ -345,6 +345,29 @@ def test_controller_entries_carry_operator(monkeypatch, tmp_path):
         assert entry["operator"] == "carl"
 
 
+def test_rejected_outcome_carries_operator(monkeypatch, tmp_path):
+    client, _, gateway, cids, _, moment = lan_client(monkeypatch, tmp_path)
+    add_account("carl", role="controller", now=moment)
+    token = "controller-rejected-token"
+    add_session("carl", token, now=moment)
+    gateway.set_control(cids["work"], b"", b"rejected: nope", 1)
+    response = client.post(
+        "/instances/work/control/submit",
+        data={
+            "action": "stop",
+            "container_id": cids["work"],
+            "repository": REPO,
+            "request_id": RID,
+        },
+        headers=cookie_headers(token),
+    )
+    assert response.status_code == 200
+    entries = audit_entries()
+    assert [entry["outcome"] for entry in entries] == ["submitted", "rejected"]
+    for entry in entries:
+        assert entry["operator"] == "carl"
+
+
 def test_controller_refusal_carries_operator(monkeypatch, tmp_path):
     client, _, _, _, _, moment = lan_client(monkeypatch, tmp_path)
     add_account("carl", role="controller", now=moment)
@@ -383,6 +406,30 @@ def test_entries_carry_null_operator_outside_lan_mode(monkeypatch, tmp_path):
     assert [entry["outcome"] for entry in entries] == ["submitted", "accepted"]
     for entry in entries:
         assert entry["operator"] is None
+
+
+def test_viewer_keeps_commands_and_track_gets(monkeypatch, tmp_path):
+    client, _, _, cids, _, moment = lan_client(monkeypatch, tmp_path)
+    add_account("vera", role="viewer", now=moment)
+    token = "viewer-gets-token"
+    add_session("vera", token, now=moment)
+    headers = cookie_headers(token)
+    commands = client.get("/instances/work/control/commands", headers=headers)
+    assert commands.status_code == 200
+    tracked = client.get(
+        "/instances/work/control/track",
+        params={
+            "action": "stop",
+            "container_id": cids["work"],
+            "repository": REPO,
+            "request_id": RID,
+            "sequence": "12",
+        },
+        headers=headers,
+    )
+    assert tracked.status_code == 200
+    # The GETs read the snapshot only: no Control audit entry.
+    assert audit_entries() == []
 
 
 @pytest.mark.parametrize("role", ["viewer", "controller"])
