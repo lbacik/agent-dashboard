@@ -42,6 +42,12 @@ from .attempt_log import (
     read_attempt_tail_log,
     read_stopped_attempt_log,
 )
+from .auth import (
+    SecurityHeadersMiddleware,
+    SignInGateMiddleware,
+    register_auth_routes,
+    resolve_session,
+)
 from .breadcrumbs import attempt_progress_trail, attempt_trail, history_trail
 from .charts import (
     CACHE_READ_SHARE_DEFINITION,
@@ -123,18 +129,26 @@ def format_sse_event(event: str, data: str) -> str:
 
 
 async def fleet_event_stream(
-    fleet, render_fleet, is_disconnected, poll_interval: float | None = None
+    fleet,
+    render_fleet,
+    is_disconnected,
+    poll_interval: float | None = None,
+    is_signed_in=None,
 ) -> AsyncIterator[str]:
     """Yield SSE chunks: `retry`, the current table, then one `fleet` event per cycle.
 
     Ages are rendered at send time from the wall clock. `is_disconnected` is
     the request's disconnect check; when the client goes away the generator
     returns and unsubscribes. A task cancel (server shutdown) propagates
-    through the `finally`, which unsubscribes as well.
+    through the `finally`, which unsubscribes as well. In LAN mode
+    `is_signed_in` re-checks the sign-in session before every `fleet` event
+    and ends the stream when it has ended (spec 5.6).
     """
     queue = fleet.subscribe()
     try:
         yield f"retry: {SSE_RETRY_MS}\n\n"
+        if is_signed_in is not None and not await is_signed_in():
+            return
         rows, error = await fleet.snapshot(poll_interval=poll_interval)
         yield format_sse_event("fleet", render_fleet(rows, error))
         while True:
@@ -146,6 +160,8 @@ async def fleet_event_stream(
                 yield ": ping\n\n"
                 continue
             if await is_disconnected():
+                break
+            if is_signed_in is not None and not await is_signed_in():
                 break
             rows, error = await fleet.snapshot(poll_interval=poll_interval)
             yield format_sse_event("fleet", render_fleet(rows, error))
@@ -212,13 +228,16 @@ def create_app(
     gateway: DockerGateway | None = None,
     *,
     start_poller: bool = True,
+    clock=None,
+    password_hasher=None,
 ) -> FastAPI:
     fleet = state if state is not None else FleetState()
     cfg = settings if settings is not None else Settings()
+    lan_mode = bool(getattr(cfg, "lan_mode", False))
     control_mode = compute_control_mode(
         control_enabled=getattr(cfg, "control", True),
         host=cfg.host,
-        lan_mode=getattr(cfg, "lan_mode", False),
+        lan_mode=lan_mode,
     )
     if gateway is not None:
         gw = gateway
@@ -260,11 +279,16 @@ def create_app(
     app.state.settings = cfg
     app.state.gateway = gw
     app.state.control_mode = control_mode
+    app.state.auth_clock = clock if clock is not None else time.time
+    app.state.password_hasher = password_hasher
     extra_hosts = getattr(cfg, "allowed_hosts", frozenset()) or frozenset()
     if getattr(cfg, "host_check", True):
         app.add_middleware(
             HostGuardMiddleware, allowed_hosts=set(ALLOWED_HOSTS) | set(extra_hosts)
         )
+    if lan_mode:
+        app.add_middleware(SecurityHeadersMiddleware)
+        app.add_middleware(SignInGateMiddleware)
     app.mount("/static", RevalidatedStaticFiles(directory=STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
@@ -273,6 +297,8 @@ def create_app(
             "request": request,
             "poll_interval": int(cfg.poll_interval),
             "control_available": request.app.state.control_mode.available,
+            "lan_mode": lan_mode,
+            "operator": getattr(request.state, "operator", None),
         }
 
     def find_row(rows, name: str):
@@ -1440,12 +1466,22 @@ def create_app(
         Ages are rendered at send time from the wall clock. EventSource
         reconnects by itself after a dashboard restart; the `retry:` directive
         sets the reconnect delay. Disconnects and shutdown cancel the
-        generator, whose `finally` unsubscribes the client.
+        generator, whose `finally` unsubscribes the client. In LAN mode the
+        session is re-checked before every `fleet` event and the stream ends
+        when it has ended (spec 5.6).
         """
+
+        async def signed_in() -> bool:
+            """Re-check the current session; refreshes activity (spec 5.6)."""
+            return await resolve_session(request) is not None
 
         async def event_generator() -> AsyncIterator[str]:
             async for chunk in fleet_event_stream(
-                fleet, render_fleet, request.is_disconnected, cfg.poll_interval
+                fleet,
+                render_fleet,
+                request.is_disconnected,
+                cfg.poll_interval,
+                is_signed_in=signed_in if lan_mode else None,
             ):
                 yield chunk
 
@@ -1460,5 +1496,7 @@ def create_app(
         )
 
     register_control_routes(app, templates)
+    if lan_mode:
+        register_auth_routes(app, templates)
 
     return app

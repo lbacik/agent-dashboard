@@ -111,6 +111,21 @@ class IssuedLink:
     expires_at: float
 
 
+@dataclass(frozen=True)
+class SignInSession:
+    """One joined sign-in session row: the session plus its account's Role.
+
+    Returned by :func:`find_sign_in_session`; the gate turns it into an
+    ``Operator`` view model. The Role is read from the account row on every
+    request, never cached in the session.
+    """
+
+    account: str
+    role: str
+    created_at: float
+    last_seen_at: float
+
+
 def store_path() -> Path:
     """The store file path (the Control audit's directory plus the file name)."""
     return audit_dir() / STORE_FILE_NAME
@@ -419,6 +434,90 @@ def count_account_sessions(conn: sqlite3.Connection, name: str) -> int:
     return int(row[0])
 
 
+def create_sign_in_session(
+    conn: sqlite3.Connection,
+    account: str,
+    id_hash: bytes,
+    *,
+    now: float | None = None,
+) -> None:
+    """Insert one sign-in session row for an account (spec 5.3).
+
+    The caller holds the session ID; only its SHA-256 (``id_hash``) is
+    stored. ``created_at`` and ``last_seen_at`` both start at ``now``.
+    """
+    timestamp = _now(now)
+    with conn:
+        conn.execute(
+            "INSERT INTO sign_in_sessions "
+            "(id_hash, account, created_at, last_seen_at) VALUES (?, ?, ?, ?)",
+            (id_hash, account, timestamp, timestamp),
+        )
+
+
+def delete_sign_in_session(conn: sqlite3.Connection, id_hash: bytes) -> int:
+    """Delete one sign-in session row; returns how many rows ended."""
+    with conn:
+        cursor = conn.execute(
+            "DELETE FROM sign_in_sessions WHERE id_hash = ?", (id_hash,)
+        )
+    return cursor.rowcount
+
+
+def find_sign_in_session(
+    conn: sqlite3.Connection,
+    id_hash: bytes,
+    *,
+    now: float | None = None,
+    idle_timeout: float,
+    max_age: float,
+) -> SignInSession | None:
+    """Look one sign-in session up by the cookie's SHA-256 (spec 6.2).
+
+    One query joins ``sign_in_sessions`` to ``accounts``. The row is
+    accepted only when the account can sign in (a password set, not
+    removed) and the session has not ended (spec 5.6): past
+    ``last_seen_at + idle_timeout`` or past ``created_at + max_age``.
+    Ended rows are deleted when found. Activity refreshes ``last_seen_at``
+    at most once a minute per session.
+    """
+    timestamp = _now(now)
+    row = conn.execute(
+        "SELECT s.account, s.created_at, s.last_seen_at,"
+        " a.role, a.password_hash, a.removed_at"
+        " FROM sign_in_sessions s JOIN accounts a ON s.account = a.name"
+        " WHERE s.id_hash = ?",
+        (id_hash,),
+    ).fetchone()
+    if row is None:
+        return None
+    if row["removed_at"] is not None or row["password_hash"] is None:
+        # A reset, removed or password-less account's session is refused at
+        # once; the Role is read from the account row on every request.
+        return None
+    if (
+        timestamp > row["created_at"] + max_age
+        or timestamp > row["last_seen_at"] + idle_timeout
+    ):
+        with conn:
+            conn.execute(
+                "DELETE FROM sign_in_sessions WHERE id_hash = ?", (id_hash,)
+            )
+        return None
+    if timestamp - row["last_seen_at"] >= 60:
+        with conn:
+            conn.execute(
+                "UPDATE sign_in_sessions SET last_seen_at = ? WHERE id_hash = ?",
+                (timestamp, id_hash),
+            )
+    return SignInSession(
+        account=row["account"],
+        role=row["role"],
+        created_at=row["created_at"],
+        last_seen_at=row["last_seen_at"],
+    )
+
+
 def cleanup_links(conn: sqlite3.Connection, now: float | None = None) -> int:
     """Delete link rows more than 30 days past expiry; returns rows deleted."""
     cutoff = _now(now) - LINK_RETENTION_SECONDS
@@ -438,6 +537,7 @@ __all__ = [
     "Account",
     "AccountExistsError",
     "IssuedLink",
+    "SignInSession",
     "StoreError",
     "UnknownAccountError",
     "active_controllers",
@@ -445,7 +545,10 @@ __all__ = [
     "cleanup_links",
     "count_account_sessions",
     "create_account",
+    "create_sign_in_session",
     "delete_account_sessions",
+    "delete_sign_in_session",
+    "find_sign_in_session",
     "get_account",
     "hash_token",
     "issue_set_password_link",
