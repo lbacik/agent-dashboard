@@ -1,9 +1,8 @@
 """Shared request checks: the Origin rule and the client address (spec 4.2, 4.4).
 
 The Origin rule is used by every state-changing POST: the Control routes
-and (once sign-in lands) ``POST /login``, ``POST /logout`` and
-``POST /set-password``. ``X-Forwarded-Host`` and ``X-Forwarded-Proto`` are
-never read.
+and (once sign-in lands) the sign-in, sign-out and set-password POST
+routes. ``X-Forwarded-Host`` and ``X-Forwarded-Proto`` are never read.
 """
 
 from __future__ import annotations
