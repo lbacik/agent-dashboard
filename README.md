@@ -262,9 +262,12 @@ bind. Turn on LAN mode instead`. To get Control actions back:
 > prefer binding to the host's LAN IP over `0.0.0.0`, and consider restricting
 > the port with the host firewall. The supported v1 path stays
 > `uv tool install` + the `systemd --user` unit ([ADR 0001](docs/adr/0001-host-process-with-operator-docker-access.md)).
-> The Compose file does not pass LAN mode settings into the container yet, so
-> sign-in is available only when the dashboard runs on the host
-> ([Running on the host](#running-on-the-host), [LAN mode](#lan-mode)).
+> For [LAN mode](#lan-mode) behind a reverse proxy on the same host
+> ([ADR 0012](docs/adr/0012-container-install-is-a-supported-lan-path.md)), add
+> the `docker-compose.lan.yml` overlay through `COMPOSE_FILE` in `.env`
+> (Docker Compose 2.24+); see the LAN sections of `.env.example`. Operator
+> accounts are then managed with
+> `docker compose exec dashboard agent-dashboard account …`.
 
 Setup on the test host (e.g. a Raspberry Pi 5, arm64):
 

@@ -1,0 +1,21 @@
+# LAN mode behind a reverse proxy on the same host (ADR 0012).
+# Use with: COMPOSE_FILE=docker-compose.yml:docker-compose.lan.yml in .env
+# `!override` needs Docker Compose 2.24 or newer.
+#
+# Tested with nginx-proxy + acme-companion: the proxy finds the container on
+# the shared network through VIRTUAL_HOST / VIRTUAL_PORT, and acme-companion
+# issues its certificate when LETSENCRYPT_HOST is set.
+services:
+  dashboard:
+    ports: !override
+      - "127.0.0.1:${DASHBOARD_PORT:-8000}:8000"
+    environment:
+      AGENT_DASHBOARD_LAN_MODE: "on"
+      VIRTUAL_HOST: "${VIRTUAL_HOST:?set VIRTUAL_HOST to the dashboard's host name}"
+      VIRTUAL_PORT: "8000"
+      LETSENCRYPT_HOST: "${LETSENCRYPT_HOST:-}"
+    networks: [default, proxy]
+networks:
+  proxy:
+    external: true
+    name: "${PROXY_NETWORK:?set PROXY_NETWORK to the reverse proxy's Docker network}"
