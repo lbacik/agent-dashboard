@@ -1,5 +1,7 @@
 # Instance control: spec
 
+> **Revised by [LAN access: spec](lan-access.md).** Sections 2 and 6.2 below predate LAN mode, and so do the order of checks (6.3) and the Control audit (7). Where they differ, the LAN access spec wins: the non-loopback reason and the end of the `AGENT_DASHBOARD_DISABLE_HOST_GUARD` exception, which no longer keeps Control actions available (its section 2.4), the `Origin` rule (4.2), the Role check on Control actions (7.1, and 7.2 for the order of checks), and the `operator` field that every Control audit entry gains (7.3).
+
 Destination of map "Instance control actions from the dashboard" (issue 93). Ready to be sliced into implementation issues. Planning only: no feature code lives on this map.
 
 Vocabulary follows `CONTEXT.md`: **Control action**, **Control audit**, **Reach**, **Poll outcome**. The agent's own word for what it records is a *command*; its contract terms live in [simple-coding-agent's CONTEXT.md](https://github.com/lbacik/simple-coding-agent/blob/main/CONTEXT.md).

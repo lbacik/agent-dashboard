@@ -1,6 +1,6 @@
 # Agent dashboard
 
-A view of the managed instances on one Docker host, built from the telemetry snapshots they report, with optional Control actions on live instances (read-only while control is off). The contract terms (Dashboard, Managed instance, Telemetry snapshot, Figure basis) are owned by the agent and defined in [simple-coding-agent's CONTEXT.md](https://github.com/lbacik/simple-coding-agent/blob/main/CONTEXT.md); this glossary adds only what the dashboard itself introduces.
+A view of the managed instances on one Docker host, built from the telemetry snapshots they report, with optional Control actions on live instances (read-only while control is off). It listens on loopback only by default; optional LAN mode puts every request behind a sign-in with Operator accounts. The contract terms (Dashboard, Managed instance, Telemetry snapshot, Figure basis) are owned by the agent and defined in [simple-coding-agent's CONTEXT.md](https://github.com/lbacik/simple-coding-agent/blob/main/CONTEXT.md); this glossary adds only what the dashboard itself introduces.
 
 ## Language
 
