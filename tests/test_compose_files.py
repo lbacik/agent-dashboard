@@ -70,14 +70,14 @@ def compose_config(
     )
 
 
-def dashboard(tmp_path: Path, *files: Path, env: dict[str, str] | None = None):
+def resolved_service(tmp_path: Path, *files: Path, env: dict[str, str] | None = None):
     proc = compose_config(tmp_path, *files, env=env)
     assert proc.returncode == 0, proc.stderr
     config = json.loads(proc.stdout)
     return config, config["services"]["dashboard"]
 
 
-def publishes(service: dict) -> list[tuple[str, str, int]]:
+def published_ports(service: dict) -> list[tuple[str, str, int]]:
     return [
         (port.get("host_ip", ""), str(port["published"]), port["target"])
         for port in service["ports"]
@@ -88,17 +88,17 @@ def publishes(service: dict) -> list[tuple[str, str, int]]:
 
 
 def test_base_publishes_on_loopback_by_default(tmp_path):
-    _, service = dashboard(tmp_path, BASE)
-    assert publishes(service) == [("127.0.0.1", "8000", 8000)]
+    _, service = resolved_service(tmp_path, BASE)
+    assert published_ports(service) == [("127.0.0.1", "8000", 8000)]
 
 
-def test_base_image_is_no_longer_a_test_tag(tmp_path):
-    _, service = dashboard(tmp_path, BASE)
+def test_base_image_is_tagged_agent_dashboard(tmp_path):
+    _, service = resolved_service(tmp_path, BASE)
     assert service["image"] == "agent-dashboard"
 
 
 def test_base_keeps_state_on_a_named_volume(tmp_path):
-    config, service = dashboard(tmp_path, BASE)
+    config, service = resolved_service(tmp_path, BASE)
     mounts = [
         (m["type"], m["source"], m["target"]) for m in service.get("volumes", [])
     ]
@@ -108,7 +108,7 @@ def test_base_keeps_state_on_a_named_volume(tmp_path):
 
 
 def test_base_is_hardened(tmp_path):
-    _, service = dashboard(tmp_path, BASE)
+    _, service = resolved_service(tmp_path, BASE)
     assert service["read_only"] is True
     assert service["tmpfs"] == ["/tmp"]
     assert service["cap_drop"] == ["ALL"]
@@ -116,7 +116,7 @@ def test_base_is_hardened(tmp_path):
 
 
 def test_base_keeps_the_non_loopback_bind_and_lan_mode_off(tmp_path):
-    _, service = dashboard(tmp_path, BASE)
+    _, service = resolved_service(tmp_path, BASE)
     environment = service["environment"]
     assert environment["AGENT_DASHBOARD_HOST"] == "0.0.0.0"
     assert environment["AGENT_DASHBOARD_ALLOW_NON_LOOPBACK"] == "1"
@@ -126,13 +126,13 @@ def test_base_keeps_the_non_loopback_bind_and_lan_mode_off(tmp_path):
 
 @pytest.mark.parametrize("name", PASS_THROUGH)
 def test_base_passes_through_settings_empty_by_default(tmp_path, name):
-    _, service = dashboard(tmp_path, BASE)
+    _, service = resolved_service(tmp_path, BASE)
     assert service["environment"][name] == ""
 
 
 @pytest.mark.parametrize("name", PASS_THROUGH)
 def test_base_passes_through_settings_from_env_file(tmp_path, name):
-    _, service = dashboard(tmp_path, BASE, env={name: "x"})
+    _, service = resolved_service(tmp_path, BASE, env={name: "x"})
     assert service["environment"][name] == "x"
 
 
@@ -140,19 +140,19 @@ def test_base_passes_through_settings_from_env_file(tmp_path, name):
 
 
 def test_overlay_publishes_only_on_loopback(tmp_path):
-    _, service = dashboard(
+    _, service = resolved_service(
         tmp_path, BASE, LAN, env={**LAN_ENV, "DASHBOARD_BIND": "0.0.0.0"}
     )
-    assert publishes(service) == [("127.0.0.1", "8000", 8000)]
+    assert published_ports(service) == [("127.0.0.1", "8000", 8000)]
 
 
 def test_overlay_keeps_the_configured_host_port(tmp_path):
-    _, service = dashboard(tmp_path, BASE, LAN, env={**LAN_ENV, "DASHBOARD_PORT": "8080"})
-    assert publishes(service) == [("127.0.0.1", "8080", 8000)]
+    _, service = resolved_service(tmp_path, BASE, LAN, env={**LAN_ENV, "DASHBOARD_PORT": "8080"})
+    assert published_ports(service) == [("127.0.0.1", "8080", 8000)]
 
 
 def test_overlay_turns_lan_mode_on_for_the_proxy(tmp_path):
-    _, service = dashboard(
+    _, service = resolved_service(
         tmp_path, BASE, LAN, env={**LAN_ENV, "LETSENCRYPT_HOST": "dashboard.example.lan"}
     )
     environment = service["environment"]
@@ -166,7 +166,7 @@ def test_overlay_turns_lan_mode_on_for_the_proxy(tmp_path):
 
 
 def test_overlay_joins_the_external_proxy_network(tmp_path):
-    config, service = dashboard(tmp_path, BASE, LAN, env=LAN_ENV)
+    config, service = resolved_service(tmp_path, BASE, LAN, env=LAN_ENV)
     assert set(service["networks"]) == {"default", "proxy"}
     proxy = config["networks"]["proxy"]
     assert proxy["external"] is True
@@ -187,8 +187,8 @@ def test_env_example_works_with_the_base_file(tmp_path):
         if line and not line.startswith("#"):
             key, _, value = line.partition("=")
             env[key] = value
-    _, service = dashboard(tmp_path, BASE, env=env)
-    assert publishes(service) == [("127.0.0.1", "8000", 8000)]
+    _, service = resolved_service(tmp_path, BASE, env=env)
+    assert published_ports(service) == [("127.0.0.1", "8000", 8000)]
     assert service["environment"]["AGENT_DASHBOARD_LAN_MODE"] == ""
 
 
