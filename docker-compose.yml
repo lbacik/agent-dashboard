@@ -1,26 +1,45 @@
-# Test deployments only (see ADR 0002): the dashboard container talks to the
-# host Docker daemon through the mounted socket and serves the UI with no
-# authentication. Use only on a trusted, isolated network.
+# Container install of the dashboard. It talks to the host Docker daemon
+# through the mounted socket (root-equivalent on the host), so it has two
+# supported uses:
 #
-# LAN exposure is opt-in via .env (copied from .env.example):
-#   DASHBOARD_BIND=<pi-lan-ip>  AGENT_DASHBOARD_ALLOWED_HOSTS=<hostname>,<ip>
-# Defaults publish on loopback only.
+# - Read-only fleet view on a trusted LAN, without sign-in (ADR 0002): this
+#   file alone. Control actions are unavailable, because the process binds
+#   0.0.0.0 outside LAN mode. LAN exposure is opt-in via .env (copied from
+#   .env.example): DASHBOARD_BIND=<lan-ip>, AGENT_DASHBOARD_ALLOWED_HOSTS.
+#   Defaults publish on loopback only.
+# - LAN mode behind a reverse proxy on the same host (ADR 0012): add the
+#   docker-compose.lan.yml overlay (COMPOSE_FILE in .env), which publishes
+#   on loopback only and turns sign-in on.
+#
+# Operator accounts live on the `state` volume; manage them with
+#   docker compose exec dashboard agent-dashboard account …
 
 name: fleet-dashboard
 
 services:
   dashboard:
     build: .
-    image: agent-dashboard:test
+    image: agent-dashboard
     restart: unless-stopped
     ports:
       - "${DASHBOARD_BIND:-127.0.0.1}:${DASHBOARD_PORT:-8000}:8000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # Control audit and Operator account store (XDG_STATE_HOME below).
+      - state:/state
     # Socket access for the non-root appuser: the host's `docker` group GID
     # differs per machine, so it comes from .env (see .env.example).
     group_add:
       - "${DOCKER_GID:-999}"
+    # Hardening: nothing outside /state and /tmp is writable, no Linux
+    # capabilities, no privilege gain through setuid binaries.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
     environment:
       # Inside the container the process must listen on all interfaces for
       # the port mapping to work; the loopback refusal is lifted by the
@@ -28,8 +47,18 @@ services:
       AGENT_DASHBOARD_HOST: "0.0.0.0"
       AGENT_DASHBOARD_ALLOW_NON_LOOPBACK: "1"
       AGENT_DASHBOARD_PORT: "8000"
+      XDG_STATE_HOME: /state
       AGENT_DASHBOARD_ALLOWED_HOSTS: "${AGENT_DASHBOARD_ALLOWED_HOSTS:-}"
       AGENT_DASHBOARD_DISABLE_HOST_GUARD: "${AGENT_DASHBOARD_DISABLE_HOST_GUARD:-}"
       AGENT_DASHBOARD_POLL_INTERVAL: "${AGENT_DASHBOARD_POLL_INTERVAL:-}"
       AGENT_DASHBOARD_EXEC_TIMEOUT: "${AGENT_DASHBOARD_EXEC_TIMEOUT:-}"
       AGENT_DASHBOARD_MAX_CONCURRENT_EXECS: "${AGENT_DASHBOARD_MAX_CONCURRENT_EXECS:-}"
+      AGENT_DASHBOARD_CONTROL: "${AGENT_DASHBOARD_CONTROL:-}"
+      AGENT_DASHBOARD_CONTROL_EXEC_TIMEOUT: "${AGENT_DASHBOARD_CONTROL_EXEC_TIMEOUT:-}"
+      AGENT_DASHBOARD_LAN_MODE: "${AGENT_DASHBOARD_LAN_MODE:-}"
+      AGENT_DASHBOARD_TRUSTED_PROXIES: "${AGENT_DASHBOARD_TRUSTED_PROXIES:-}"
+      AGENT_DASHBOARD_SIGN_IN_IDLE_TIMEOUT: "${AGENT_DASHBOARD_SIGN_IN_IDLE_TIMEOUT:-}"
+      AGENT_DASHBOARD_SIGN_IN_MAX_AGE: "${AGENT_DASHBOARD_SIGN_IN_MAX_AGE:-}"
+
+volumes:
+  state:

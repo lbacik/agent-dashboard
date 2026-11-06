@@ -89,7 +89,7 @@ first match wins:
 
 1. control is off (above);
 2. outside LAN mode, the dashboard is bound to a non-loopback address
-   (`--allow-non-loopback`, the Docker test deployment below): Control actions
+   (`--allow-non-loopback`, the Docker install below): Control actions
    beyond loopback need [LAN mode](#lan-mode);
 3. in LAN mode, the signed-in account has the `viewer` Role: "your account can
    view but not issue Control actions".
@@ -253,20 +253,28 @@ bind. Turn on LAN mode instead`. To get Control actions back:
 3. Put a TLS reverse proxy in front of the dashboard, or reach it through an
    SSH tunnel to `localhost`, so the sign-in form accepts the password.
 
-## Running in Docker (test deployments)
+## Running in Docker
 
-> Test environments only ([ADR 0002](docs/adr/0002-docker-test-deployment-exception.md)).
-> The container mounts the Docker socket (root-equivalent on the host) and the
-> UI has no authentication: anyone on the LAN who can reach the port can list
-> instances and fetch telemetry. Use only on a trusted, isolated network,
-> prefer binding to the host's LAN IP over `0.0.0.0`, and consider restricting
-> the port with the host firewall. The supported v1 path stays
-> `uv tool install` + the `systemd --user` unit ([ADR 0001](docs/adr/0001-host-process-with-operator-docker-access.md)).
-> The Compose file does not pass LAN mode settings into the container yet, so
-> sign-in is available only when the dashboard runs on the host
-> ([Running on the host](#running-on-the-host), [LAN mode](#lan-mode)).
+The container mounts the Docker socket, which is root-equivalent on the
+host. It has two supported uses
+([ADR 0012](docs/adr/0012-container-install-is-a-supported-lan-path.md)):
 
-Setup on the test host (e.g. a Raspberry Pi 5, arm64):
+- **Read-only view without sign-in** (`docker-compose.yml` alone, the
+  [ADR 0002](docs/adr/0002-docker-test-deployment-exception.md) exception):
+  anyone who can reach the port can list instances and fetch telemetry, so
+  publish it only on a trusted, isolated network, prefer the host's LAN IP
+  over `0.0.0.0`, and consider restricting the port with the host firewall.
+  The process binds `0.0.0.0` inside the container, so Control actions are
+  unavailable, also when the port is published only to `127.0.0.1`.
+- **[LAN mode](#lan-mode)**: set `AGENT_DASHBOARD_LAN_MODE=on` to sign in
+  over an SSH tunnel to `localhost`, or add the `docker-compose.lan.yml`
+  overlay through `COMPOSE_FILE` in `.env` (Docker Compose 2.24+) to run
+  behind a reverse proxy on the same host; see the LAN sections of
+  `.env.example`. Operator accounts are managed with
+  `docker compose exec dashboard agent-dashboard account …` and live on the
+  `state` volume.
+
+Setup on the Docker host (e.g. a Raspberry Pi 5, arm64):
 
 ```sh
 cp .env.example .env   # then edit: DOCKER_GID, DASHBOARD_BIND, AGENT_DASHBOARD_ALLOWED_HOSTS

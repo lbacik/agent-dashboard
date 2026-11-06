@@ -1,4 +1,6 @@
-# Test-deployment image for agent-dashboard (see ADR 0002).
+# Container image for agent-dashboard: a read-only fleet view on a trusted
+# LAN without sign-in (ADR 0002), or LAN mode behind a reverse proxy on the
+# same host (ADR 0012). See docker-compose.yml.
 # Multi-arch: TARGETARCH selects the Docker static client binary (amd64/arm64).
 ARG PYTHON_VERSION=3.13
 FROM python:${PYTHON_VERSION}-slim AS base
@@ -34,7 +36,16 @@ COPY src ./src
 RUN uv sync --locked --no-dev \
     && chown -R appuser:appuser /app
 
+# State directory (Control audit, Operator account store), the compose
+# `state` volume's mount point. A fresh named volume copies this owner, so
+# appuser can write to it although the root filesystem is read-only.
+RUN mkdir -p /state \
+    && chown appuser:appuser /state \
+    && chmod 0700 /state
+
 ENV PATH="/app/.venv/bin:${PATH}"
+# Unbuffered stdout: startup lines reach `docker logs` when they are written.
+ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
 USER appuser
 CMD ["agent-dashboard"]
