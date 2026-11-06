@@ -171,9 +171,8 @@ secure context: a page opened over `https://`, or over `http://` on a
 loopback host (`localhost`, `127.0.0.0/8`, `[::1]`, which is what an SSH
 tunnel gives). Over plain `http://<lan-address>` the page opens but the
 password is refused with "this page was not opened over HTTPS". For LAN
-access, put a TLS-terminating reverse proxy in front of the dashboard and
-list it in `AGENT_DASHBOARD_TRUSTED_PROXIES`
-([ADR 0011](docs/adr/0011-tls-at-a-reverse-proxy-sign-in-from-a-secure-context.md)).
+access, put a TLS-terminating reverse proxy in front of the dashboard; see
+[Reverse proxy and HTTPS](#reverse-proxy-and-https).
 
 **Failed sign-ins** slow down per account name and per client address: 1 s
 after the first failure, doubling up to 60 s, forgotten 15 minutes after the
@@ -195,6 +194,14 @@ the server: the store is `$XDG_STATE_HOME/agent-dashboard/accounts.sqlite3`
 them with the same environment as the server, e.g.
 `uv run --env-file .env agent-dashboard account list`, or they work on a
 different store.
+
+In the [container install](#running-in-docker), run the same commands inside
+the running container, where the store is on the `state` volume
+(`/state/agent-dashboard/accounts.sqlite3`):
+
+```sh
+docker compose exec dashboard agent-dashboard account list
+```
 
 | Command | Effect |
 | --- | --- |
@@ -226,14 +233,63 @@ for 24 hours; issuing a new one for the account voids the previous one. The
 password is 15 to 128 characters. Setting it does not sign the person in:
 they sign in at `/login` afterwards.
 
+In the container install the same command is
+`docker compose exec dashboard agent-dashboard account add alice --role
+controller --url https://dashboard.example.lan`.
+
 **Resetting a password** (forgotten password, or a link that expired):
-`agent-dashboard account reset <name> --url <base>`, then send the new link.
+`agent-dashboard account reset <name> --url <base>` (in the container,
+`docker compose exec dashboard agent-dashboard account reset <name> --url
+<base>`), then send the new link.
 
 **The last `controller`.** When `account role … viewer` or `account remove`
 leaves no active account with the `controller` Role, the command still
 succeeds and warns on stderr that Control actions are now unavailable to
 everyone. Grant it again with `agent-dashboard account role <name>
 controller`.
+
+## Reverse proxy and HTTPS
+
+The dashboard speaks plain HTTP only: it has no certificate options and
+never terminates TLS
+([ADR 0011](docs/adr/0011-tls-at-a-reverse-proxy-sign-in-from-a-secure-context.md)).
+To sign in from another device on the LAN, put a reverse proxy in front of
+it that terminates TLS. The proxy obtains and renews the certificate and
+owns HSTS and any HTTP-to-HTTPS redirect; the dashboard sends neither. The
+README states what the proxy must do rather than a recipe for one; the
+tested setup is nginx-proxy with acme-companion, through the
+[container overlay](#lan-mode-behind-a-reverse-proxy).
+
+The proxy must:
+
+- **Pass the browser's `Host`, including the port the browser used.** Every
+  form and Control action POST compares its `Origin` (scheme, host and port)
+  with `Host`. Default nginx (`proxy_set_header Host $proxy_host`) does not
+  pass it, and neither does nginx-proxy published on a host port other than
+  443. Put that name in `AGENT_DASHBOARD_ALLOWED_HOSTS`.
+- **Be the only way in from the LAN.** Bind the dashboard to loopback, or to
+  a Docker network the LAN cannot reach; the container overlay publishes the
+  port on `127.0.0.1` only.
+- **Serve a certificate operator devices trust without a warning.** Choosing
+  and installing one is the operator's job. Examples only: Let's Encrypt with
+  the DNS-01 challenge on a domain you own, a Tailscale `ts.net` name, or a
+  private CA whose root every device installs. A self-signed certificate
+  that people click through is not supported: it trains them to accept the
+  one an attacker on the LAN would present.
+- **Not set `Referrer-Policy: no-referrer`**, which blanks `Origin` on a
+  plain form POST, so sign-in and Control actions are refused.
+- **Be listed in `AGENT_DASHBOARD_TRUSTED_PROXIES` and set
+  `X-Forwarded-For`.** The dashboard reads the client address from
+  `X-Forwarded-For` only when the request comes from a trusted proxy;
+  otherwise every request seems to come from the proxy, and one person's
+  failed sign-ins delay everyone's. List the proxy's address as the
+  dashboard sees it: for a proxy container, its Docker network's subnet
+  (see `.env.example`). `X-Forwarded-Host` and `X-Forwarded-Proto` are never
+  read.
+
+A request refused by the `Origin` check writes an `auth` line with
+`"event":"origin_refused"` and the `Origin` and `Host` it compared, so a
+proxy that rewrites `Host` shows up in the log at once.
 
 ## Migrating from AGENT_DASHBOARD_DISABLE_HOST_GUARD
 
@@ -243,15 +299,22 @@ either mode ([ADR 0010](docs/adr/0010-lan-mode-bind-and-host-check.md)). A
 deployment that relied on it keeps running read-only and prints at startup:
 `agent-dashboard: Control actions are unavailable:
 AGENT_DASHBOARD_DISABLE_HOST_GUARD=1 no longer enables them on a non-loopback
-bind. Turn on LAN mode instead`. To get Control actions back:
+bind. Turn on LAN mode instead (README: "Migrating from
+AGENT_DASHBOARD_DISABLE_HOST_GUARD")`. To get Control actions back:
 
 1. Turn on [LAN mode](#lan-mode) (`AGENT_DASHBOARD_LAN_MODE=on`) and set
    `AGENT_DASHBOARD_ALLOWED_HOSTS`.
 2. Create an Operator account with the `controller` Role
    (`agent-dashboard account add <name> --role controller`) and set its
    password through the printed link.
-3. Put a TLS reverse proxy in front of the dashboard, or reach it through an
-   SSH tunnel to `localhost`, so the sign-in form accepts the password.
+3. Put a TLS reverse proxy in front of the dashboard (see
+   [Reverse proxy and HTTPS](#reverse-proxy-and-https)), or reach it through
+   an SSH tunnel to `localhost`, so the sign-in form accepts the password.
+
+In the container install, steps 1 and 3 are the
+[`docker-compose.lan.yml` overlay](#lan-mode-behind-a-reverse-proxy), and
+step 2 runs through `docker compose exec dashboard agent-dashboard account
+add …`.
 
 ## Running in Docker
 
@@ -266,13 +329,14 @@ host. It has two supported uses
   over `0.0.0.0`, and consider restricting the port with the host firewall.
   The process binds `0.0.0.0` inside the container, so Control actions are
   unavailable, also when the port is published only to `127.0.0.1`.
-- **[LAN mode](#lan-mode)**: set `AGENT_DASHBOARD_LAN_MODE=on` to sign in
-  over an SSH tunnel to `localhost`, or add the `docker-compose.lan.yml`
-  overlay through `COMPOSE_FILE` in `.env` (Docker Compose 2.24+) to run
-  behind a reverse proxy on the same host; see the LAN sections of
-  `.env.example`. Operator accounts are managed with
-  `docker compose exec dashboard agent-dashboard account …` and live on the
-  `state` volume.
+- **[LAN mode](#lan-mode)** with sign-in and Control actions: add the
+  `docker-compose.lan.yml` overlay to run behind a reverse proxy on the same
+  host ([below](#lan-mode-behind-a-reverse-proxy)), or set
+  `AGENT_DASHBOARD_LAN_MODE=on` with the base file alone and sign in over an
+  SSH tunnel to `localhost`. Operator accounts are managed with
+  `docker compose exec dashboard agent-dashboard account …` (see
+  [Operator accounts](#operator-accounts)) and live on the `state` volume,
+  next to the Control audit.
 
 Setup on the Docker host (e.g. a Raspberry Pi 5, arm64):
 
@@ -305,19 +369,26 @@ docker compose up -d
 Do not add `--remove-orphans` to the stop command: that flag would also
 remove a co-located agent instance's container.
 
-Then open `http://<host>:<port>` from another machine on the LAN; the fleet
-table is filled by label discovery plus `docker exec agentctl telemetry
---json`, both executed by the host daemon through the mounted socket.
+For the read-only view, then open `http://<host>:<port>` from another
+machine on the LAN; the fleet table is filled by label discovery plus
+`docker exec agentctl telemetry --json`, both executed by the host daemon
+through the mounted socket.
 
 Environment variables (`.env`):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `DASHBOARD_BIND` | `127.0.0.1` | Publish address of the dashboard port. Set the Pi's LAN IP (or `0.0.0.0`) to expose the UI; the safe default stays loopback. |
+| `DASHBOARD_BIND` | `127.0.0.1` | Publish address of the dashboard port. Set the Pi's LAN IP (or `0.0.0.0`) to expose the read-only view; the safe default stays loopback. Ignored with the LAN overlay, which publishes on `127.0.0.1` only. |
 | `DASHBOARD_PORT` | `8000` | Host port mapped to the container's `8000`. |
 | `DOCKER_GID` | `999` | GID owning `/var/run/docker.sock` on the daemon host (see below). Passed as `group_add` so the non-root container user can reach the socket, whose GID differs per host. |
-| `AGENT_DASHBOARD_ALLOWED_HOSTS` | _(empty)_ | Host header allow-list for LAN access: the Pi's hostname and/or LAN IP, comma-separated. `localhost` / `127.0.0.1` always stay allowed; `*` is never accepted. |
+| `AGENT_DASHBOARD_ALLOWED_HOSTS` | _(empty)_ | Host header allow-list: the names or addresses operators type in the browser, comma-separated. For the read-only view, the Pi's hostname and/or LAN IP; with the LAN overlay, the name in `VIRTUAL_HOST`. `localhost` / `127.0.0.1` always stay allowed; `*` is never accepted. |
+| `AGENT_DASHBOARD_DISABLE_HOST_GUARD` | _(empty)_ | `1` turns the `Host` check off. It does not enable Control actions. |
 | `AGENT_DASHBOARD_POLL_INTERVAL` / `AGENT_DASHBOARD_EXEC_TIMEOUT` / `AGENT_DASHBOARD_MAX_CONCURRENT_EXECS` | _(built-in defaults)_ | Optional gateway tuning, passed through to the dashboard. |
+| `AGENT_DASHBOARD_CONTROL` / `AGENT_DASHBOARD_CONTROL_EXEC_TIMEOUT` | _(on, 15 s)_ | See [Control actions](#control-actions). |
+| `AGENT_DASHBOARD_LAN_MODE` / `AGENT_DASHBOARD_TRUSTED_PROXIES` / `AGENT_DASHBOARD_SIGN_IN_IDLE_TIMEOUT` / `AGENT_DASHBOARD_SIGN_IN_MAX_AGE` | _(LAN mode off)_ | See [LAN mode](#lan-mode). The overlay sets `AGENT_DASHBOARD_LAN_MODE=on` itself. |
+| `COMPOSE_FILE` / `PROXY_NETWORK` / `VIRTUAL_HOST` / `LETSENCRYPT_HOST` | _(unset)_ | The LAN overlay; see [below](#lan-mode-behind-a-reverse-proxy). |
+
+An empty `AGENT_DASHBOARD_*` value means the dashboard's built-in default.
 
 `DOCKER_GID` must match the socket on the host that runs the daemon. Compose
 reads `.env` on the machine you invoke it from, so when deploying through a
@@ -337,4 +408,54 @@ Inside the container the process listens on `0.0.0.0` with
 `AGENT_DASHBOARD_ALLOW_NON_LOOPBACK=1` (compose sets both); without that
 explicit opt-in the dashboard still refuses a non-loopback bind, so the
 host-process install is unchanged. No shared Docker network or exposed agent
-ports are needed: the dashboard never connects to agents over the network.
+ports are needed to reach agents: the dashboard never connects to them over
+the network. The `/state` volume holds the Control audit and the Operator
+account store; apart from it and a `/tmp` tmpfs, the container's filesystem
+is read-only.
+
+### LAN mode behind a reverse proxy
+
+`docker-compose.lan.yml` runs the container in LAN mode behind a reverse
+proxy container on the same host
+([ADR 0012](docs/adr/0012-container-install-is-a-supported-lan-path.md)). On
+top of the base file it:
+
+- publishes the port on `127.0.0.1` only, so the proxy is the only way in
+  from the LAN. It replaces the base file's port list with `!override`,
+  which needs **Docker Compose 2.24 or newer** (`docker compose version`);
+- sets `AGENT_DASHBOARD_LAN_MODE=on`;
+- joins the proxy's external Docker network (`PROXY_NETWORK`) and sets
+  `VIRTUAL_HOST`, `VIRTUAL_PORT` and `LETSENCRYPT_HOST` for nginx-proxy and
+  acme-companion, the tested example. Another proxy works too if it meets
+  [the requirements](#reverse-proxy-and-https).
+
+In `.env`, uncomment the overlay block of `.env.example` and fill in the LAN
+mode settings, for example:
+
+```sh
+COMPOSE_FILE=docker-compose.yml:docker-compose.lan.yml
+PROXY_NETWORK=proxy
+VIRTUAL_HOST=dashboard.example.lan
+LETSENCRYPT_HOST=dashboard.example.lan
+AGENT_DASHBOARD_ALLOWED_HOSTS=dashboard.example.lan
+AGENT_DASHBOARD_TRUSTED_PROXIES=172.18.0.0/16
+```
+
+`PROXY_NETWORK` is the proxy's Docker network, which must already exist.
+`VIRTUAL_HOST` is the name operators type in the browser; leave
+`LETSENCRYPT_HOST` empty when the certificate does not come from
+acme-companion. `AGENT_DASHBOARD_TRUSTED_PROXIES` is the proxy network's
+subnet:
+`docker network inspect proxy --format '{{(index .IPAM.Config 0).Subnet}}'`.
+With `COMPOSE_FILE` set, `docker compose up`, `exec` and `logs` use both
+files without `-f`; `docker compose config` fails with a clear message while
+`VIRTUAL_HOST` or `PROXY_NETWORK` is unset. Then:
+
+```sh
+docker compose up -d
+docker compose logs dashboard        # "LAN mode is on: …"
+docker compose exec dashboard agent-dashboard account add alice \
+  --role controller --url https://dashboard.example.lan
+```
+
+and open the printed link at `https://dashboard.example.lan`.

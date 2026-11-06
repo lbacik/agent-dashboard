@@ -208,7 +208,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-non-loopback",
         action="store_true",
         default=False,
-        help="Opt in to binding on a non-loopback address (test deployments only).",
+        help=(
+            "Opt in to binding on a non-loopback address outside LAN mode "
+            "(Control actions stay unavailable; ignored in LAN mode)."
+        ),
     )
     parser.add_argument(
         "--allowed-hosts",

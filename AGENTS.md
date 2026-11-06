@@ -3,6 +3,8 @@
 Web dashboard (FastAPI + Jinja2 + htmx/SSE) for a fleet of
 simple-coding-agent containers on one Docker host: live monitoring plus
 optional Control actions on live instances (read-only with `--control off`).
+Loopback-only by default; in optional LAN mode every request needs a
+Sign-in session with an Operator account.
 Start with `README.md`.
 
 ## Where things are decided
