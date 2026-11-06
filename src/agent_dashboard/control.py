@@ -8,7 +8,6 @@ authority, and its rejection is harmless and shown with its reason.
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -154,12 +153,6 @@ def request_control_mode(
     if lan_mode and role == "viewer":
         return ControlMode(available=False, reason=VIEWER_REASON)
     return mode
-
-
-def host_guard_disabled_from_env(env: dict[str, str] | None = None) -> bool:
-    """Whether the Host-guard escape hatch is set (test deployments only)."""
-    source = os.environ if env is None else env
-    return source.get("AGENT_DASHBOARD_DISABLE_HOST_GUARD") == "1"
 
 
 @dataclass(frozen=True)
@@ -856,6 +849,5 @@ __all__ = [
     "fleet_chips",
     "follow_command",
     "format_control_age",
-    "host_guard_disabled_from_env",
     "timeline_summary",
 ]
