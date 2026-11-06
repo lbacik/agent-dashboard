@@ -1,8 +1,6 @@
 # agent-dashboard
 
-A web dashboard for a fleet of [simple-coding-agent](https://github.com/lbacik/simple-coding-agent) containers on one Docker host. It discovers agent containers by image label, polls each one with `docker exec <container> agentctl telemetry --json`, and shows what every instance is doing: control state, the current attempt's token budget and context figures, and recent events. On live instances it can also send Control actions (see below); with control switched off it is a read-only view.
-
-Status: specified, not yet built.
+A web dashboard for a fleet of [simple-coding-agent](https://github.com/lbacik/simple-coding-agent) containers on one Docker host. It discovers agent containers by image label, polls each one with `docker exec <container> agentctl telemetry --json`, and shows what every instance is doing: control state, the current attempt's token budget and context figures, and recent events. On live instances it can also send Control actions (see below); with control switched off it is a read-only view. By default it listens on loopback only (reach it through an SSH tunnel); optional [LAN mode](#lan-mode) puts every page behind a sign-in with [Operator accounts](#operator-accounts).
 
 - Design map: [Agent fleet dashboard: map](https://github.com/lbacik/simple-coding-agent/issues/222)
 - v1 specification of this project: [Define the dashboard project: repo, layout, stack and delivery slices](https://github.com/lbacik/simple-coding-agent/issues/228), which links the snapshot contract, discovery and Docker access decisions, and the UI prototype.
@@ -86,11 +84,19 @@ status" button, re-reads an outcome without sending anything.
 (or set `AGENT_DASHBOARD_CONTROL=off`) for read-only mode: every drawer
 shows only "Controls unavailable: control is off
 (`AGENT_DASHBOARD_CONTROL=off`, read-only mode)" and every Control action
-route answers 403. Controls also switch themselves off when the dashboard
-is bound to a non-loopback address (`--allow-non-loopback`, the Docker test
-deployment below); each state names its reason after "Controls unavailable:".
-Setting `AGENT_DASHBOARD_DISABLE_HOST_GUARD=1` skips both the bind and the
-Host checks, so Controls stay available on a trusted test LAN (ADR 0008).
+route answers 403. Each state names its reason after "Controls unavailable:",
+first match wins:
+
+1. control is off (above);
+2. outside LAN mode, the dashboard is bound to a non-loopback address
+   (`--allow-non-loopback`, the Docker test deployment below): Control actions
+   beyond loopback need [LAN mode](#lan-mode);
+3. in LAN mode, the signed-in account has the `viewer` Role: "your account can
+   view but not issue Control actions".
+
+`AGENT_DASHBOARD_DISABLE_HOST_GUARD=1` no longer enables Control actions on a
+non-loopback bind; see
+[Migrating from AGENT_DASHBOARD_DISABLE_HOST_GUARD](#migrating-from-agent_dashboard_disable_host_guard).
 
 **Timeout.** `--control-exec-timeout` (or
 `AGENT_DASHBOARD_CONTROL_EXEC_TIMEOUT`, default 15 s) bounds one control
@@ -104,6 +110,148 @@ action submission and its outcome at submission time lives at
 The directory is created on first write (mode `0700`, file `0600`). Every
 entry is also mirrored to stdout as one `control-audit <json>` line, for
 journald or `docker logs`. There is no rotation: one or two lines per click.
+Each entry carries `operator`: the signed-in account's name in LAN mode,
+`null` outside it. The Operator account store, `accounts.sqlite3`, lives in
+the same directory.
+
+## Running on the host
+
+```sh
+uv run agent-dashboard              # serves http://127.0.0.1:8000
+uv run agent-dashboard --port 8080
+```
+
+Every setting is a CLI flag or an `AGENT_DASHBOARD_*` environment variable;
+a flag wins over the environment, which wins over the default. The process
+reads only its own environment and never loads `.env` (that file feeds
+Docker Compose). To reuse it for a local run:
+
+```sh
+uv run --env-file .env agent-dashboard
+```
+
+`DASHBOARD_BIND`, `DASHBOARD_PORT` and `DOCKER_GID` in `.env` are read by
+Compose only; the process takes its address from `--host` / `--port` (or
+`AGENT_DASHBOARD_HOST` / `AGENT_DASHBOARD_PORT`). Outside LAN mode a
+non-loopback `--host` is refused unless `--allow-non-loopback` is given.
+
+## LAN mode
+
+Off by default. With LAN mode on, every request needs a sign-in session:
+pages redirect to `/login`, and the top bar shows the signed-in account with
+its Role and a "Sign out" button. Any bind address is accepted (`--allow-non-loopback` is
+not needed). Prefer binding to the host's LAN address over `0.0.0.0`, and
+restrict the port with the host firewall.
+
+| Flag / environment | Default | Meaning |
+| --- | --- | --- |
+| `--lan-mode on\|off` / `AGENT_DASHBOARD_LAN_MODE` | `off` | Turns sign-in on. Any value other than on/off (or the usual true/false spellings) is a startup error. |
+| `--allowed-hosts` / `AGENT_DASHBOARD_ALLOWED_HOSTS` | _(empty)_ | `Host` header allow-list: the names or addresses operators type in the browser, comma-separated. `localhost` / `127.0.0.1` are always allowed. Required in LAN mode unless `AGENT_DASHBOARD_DISABLE_HOST_GUARD=1`. |
+| `--trusted-proxies` / `AGENT_DASHBOARD_TRUSTED_PROXIES` | _(none)_ | Comma-separated IPs and CIDR blocks of reverse proxies whose `X-Forwarded-For` gives the client address. Used only for the sign-in delay and the `auth` log lines. |
+| `--sign-in-idle-timeout` / `AGENT_DASHBOARD_SIGN_IN_IDLE_TIMEOUT` | `1800` s | A sign-in session ends after this much inactivity. At least 300. |
+| `--sign-in-max-age` / `AGENT_DASHBOARD_SIGN_IN_MAX_AGE` | `43200` s | A sign-in session ends this long after sign-in, whatever the activity. Between the idle timeout and 604800 (7 days). |
+
+Example, signing in from the same machine:
+
+```sh
+AGENT_DASHBOARD_LAN_MODE=on AGENT_DASHBOARD_ALLOWED_HOSTS=localhost \
+  uv run agent-dashboard
+```
+
+At startup it prints `agent-dashboard: LAN mode is on: every request needs a
+sign-in session (bind …, Host check on|off, trusted proxies …)`. With no
+account that can sign in yet it still starts and says so; create one with
+`agent-dashboard account add` (see [Operator accounts](#operator-accounts)).
+A startup check that fails (an unparsable setting, a missing
+`AGENT_DASHBOARD_ALLOWED_HOSTS`, an account store that cannot be opened)
+prints `agent-dashboard: error: …` and exits 2.
+
+**HTTPS.** The sign-in and set-password forms accept a password only from a
+secure context: a page opened over `https://`, or over `http://` on a
+loopback host (`localhost`, `127.0.0.0/8`, `[::1]`, which is what an SSH
+tunnel gives). Over plain `http://<lan-address>` the page opens but the
+password is refused with "this page was not opened over HTTPS". For LAN
+access, put a TLS-terminating reverse proxy in front of the dashboard and
+list it in `AGENT_DASHBOARD_TRUSTED_PROXIES`
+([ADR 0011](docs/adr/0011-tls-at-a-reverse-proxy-sign-in-from-a-secure-context.md)).
+
+**Failed sign-ins** slow down per account name and per client address: 1 s
+after the first failure, doubling up to 60 s, forgotten 15 minutes after the
+last failure or on a successful sign-in. Accounts are never locked. The delay
+is kept in memory, so a restart clears it.
+
+**Log lines.** Sign-in events go to stdout as `auth <json>` lines (`sign_in`,
+`sign_in_failed`, `sign_in_delayed`, `sign_out`, `password_set`,
+`origin_refused`). They never enter the Control audit.
+
+## Operator accounts
+
+Accounts are managed only on the host, with `agent-dashboard account …`;
+there is no account page in the UI
+([ADR 0013](docs/adr/0013-operator-accounts-managed-from-the-host.md)). The
+commands work whether or not LAN mode is on, and read `XDG_STATE_HOME` like
+the server: the store is `$XDG_STATE_HOME/agent-dashboard/accounts.sqlite3`
+(`~/.local/state/agent-dashboard/accounts.sqlite3` when it is unset). Run
+them with the same environment as the server, e.g.
+`uv run --env-file .env agent-dashboard account list`, or they work on a
+different store.
+
+| Command | Effect |
+| --- | --- |
+| `account add <name> [--role viewer\|controller] [--url <base>]` | Creates an account without a password (Role `viewer` unless given) and prints a Set-password link. |
+| `account reset <name> [--url <base>]` | Deletes the password, ends all of the account's sign-in sessions and prints a new link. |
+| `account role <name> viewer\|controller` | Changes the Role, effective from the account's next request. |
+| `account remove <name>` | Ends the account's sign-in sessions and disables it. The name stays reserved and cannot be reused. |
+| `account list` | All accounts with Role, state (`active`, `link pending`, `no password`, `removed`) and open sign-in sessions. |
+
+Names match `^[a-z][a-z0-9-]{0,31}$`. A `viewer` sees everything a
+`controller` sees but cannot issue Control actions.
+
+**Adding a collaborator:**
+
+```sh
+agent-dashboard account add alice --role controller --url https://dashboard.example.lan
+```
+
+```
+Created Operator account alice (controller).
+Set-password link for alice (works once, until 2026-11-07 10:15 UTC):
+  https://dashboard.example.lan/set-password?token=…
+Send it to alice only. Open it through the dashboard's https:// address, or an SSH tunnel to localhost.
+```
+
+`--url` is the address operators open the dashboard at; without it the link
+is printed as a bare `/set-password?token=…` path. The link works once and
+for 24 hours; issuing a new one for the account voids the previous one. The
+password is 15 to 128 characters. Setting it does not sign the person in:
+they sign in at `/login` afterwards.
+
+**Resetting a password** (forgotten password, or a link that expired):
+`agent-dashboard account reset <name> --url <base>`, then send the new link.
+
+**The last `controller`.** When `account role … viewer` or `account remove`
+leaves no active account with the `controller` Role, the command still
+succeeds and warns on stderr that Control actions are now unavailable to
+everyone. Grant it again with `agent-dashboard account role <name>
+controller`.
+
+## Migrating from AGENT_DASHBOARD_DISABLE_HOST_GUARD
+
+`AGENT_DASHBOARD_DISABLE_HOST_GUARD=1` used to keep Control actions available
+on a non-loopback bind (ADR 0008). It now only turns the `Host` check off, in
+either mode ([ADR 0010](docs/adr/0010-lan-mode-bind-and-host-check.md)). A
+deployment that relied on it keeps running read-only and prints at startup:
+`agent-dashboard: Control actions are unavailable:
+AGENT_DASHBOARD_DISABLE_HOST_GUARD=1 no longer enables them on a non-loopback
+bind. Turn on LAN mode instead`. To get Control actions back:
+
+1. Turn on [LAN mode](#lan-mode) (`AGENT_DASHBOARD_LAN_MODE=on`) and set
+   `AGENT_DASHBOARD_ALLOWED_HOSTS`.
+2. Create an Operator account with the `controller` Role
+   (`agent-dashboard account add <name> --role controller`) and set its
+   password through the printed link.
+3. Put a TLS reverse proxy in front of the dashboard, or reach it through an
+   SSH tunnel to `localhost`, so the sign-in form accepts the password.
 
 ## Running in Docker (test deployments)
 
@@ -114,6 +262,9 @@ journald or `docker logs`. There is no rotation: one or two lines per click.
 > prefer binding to the host's LAN IP over `0.0.0.0`, and consider restricting
 > the port with the host firewall. The supported v1 path stays
 > `uv tool install` + the `systemd --user` unit ([ADR 0001](docs/adr/0001-host-process-with-operator-docker-access.md)).
+> The Compose file does not pass LAN mode settings into the container yet, so
+> sign-in is available only when the dashboard runs on the host
+> ([Running on the host](#running-on-the-host), [LAN mode](#lan-mode)).
 
 Setup on the test host (e.g. a Raspberry Pi 5, arm64):
 
