@@ -254,7 +254,7 @@ def test_optional_figure_present_but_unavailable_renders_unknown():
 
 def test_section_age_formats_like_the_fleet_table():
     old = section_freshness(
-        "2026-11-06T09:12:05Z", now=1_791_000_000.0, poll_interval=5.0
+        "2026-11-06T09:12:05Z", now=1_794_000_000.0, poll_interval=5.0
     )
     assert old.age_text.endswith("ago")
     assert old.stale
@@ -268,7 +268,7 @@ def test_section_age_formats_like_the_fleet_table():
 def test_section_stale_after_three_poll_intervals():
     kwargs = {"poll_interval": 5.0}
     at = "2026-11-06T09:12:05Z"
-    base = 1_791_000_000.0
+    base = 1_794_000_000.0
     observed = base - 1000.0
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(observed))
     assert not section_freshness(stamp, now=observed + 15.0, **kwargs).stale
@@ -281,7 +281,7 @@ def test_stale_since_names_the_oldest_stale_section():
     result["instance"]["observed_at"] = "2026-11-06T09:12:05Z"
     result["intake"]["observed_at"] = "2026-11-06T09:12:06Z"
     result["current_attempt"]["observed_at"] = "2026-11-06T09:12:04Z"
-    detail = read_contract_snapshot(result, now=1_791_000_000.0, poll_interval=5.0)
+    detail = read_contract_snapshot(result, now=1_794_000_000.0, poll_interval=5.0)
     assert detail.stale_since == "2026-11-06T09:12:04Z"
     assert stale_suffix(detail) == " (data stale since 2026-11-06T09:12:04Z)"
     assert detail.instance_observed.stale
@@ -375,7 +375,7 @@ def test_native_events_labelled_unknown_names_raw():
             "text": "something new",
         },
     ]
-    (native, unknown) = read_contract_snapshot(result).events
+    (unknown, native) = read_contract_snapshot(result).events
     assert native.is_native
     assert native.event == "native.model_tick"
     assert not unknown.is_native
@@ -459,6 +459,15 @@ def test_drawer_budget_enforced_and_limits():
     assert '<span class="basis">measured</span>' in body
     assert '<span class="basis">estimated</span>' in body
     assert '<span class="basis">configured</span>' in body
+
+
+def test_drawer_enforced_none_marks_neither():
+    result = _result("status-active")
+    result["current_attempt"]["budget"]["enforced_tokens"] = "none"
+    client = _replay_client([result], now=time.time())
+    body = client.get("/instances/web-0").text
+    assert "1,834,221 tokens" in body
+    assert "enforced-tag" not in body
 
 
 def test_drawer_optional_figures_and_unknown_states():

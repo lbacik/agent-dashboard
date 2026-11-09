@@ -369,7 +369,7 @@ def _event_view(event: contract_status_lib.ContractEvent) -> ContractEventView:
         short_time=_short_time(event.at),
         level=event.level if isinstance(event.level, str) and event.level else UNKNOWN,
         event=name,
-        is_native=name.startswith("native."),
+        is_native=_is_native_name(name),
         attempt_id=event.attempt_id,
         issue=event.issue,
         phase=event.phase,
@@ -464,9 +464,11 @@ def read_contract_snapshot(
 
     current_view: AttemptView | None = None
     attempt_events: tuple[ContractEventView, ...] = ()
+    ordered_events = [_event_view(event) for event in snapshot.recent_events]
     if current is not None:
-        ordered = [_event_view(event) for event in snapshot.recent_events]
-        scoped = [view for view in ordered if view.attempt_id == current.attempt_id]
+        scoped = [
+            view for view in ordered_events if view.attempt_id == current.attempt_id
+        ]
         attempt_total = len(scoped)
         attempt_events = tuple(reversed(scoped[-EVENTS_SHOWN:]))
         current_view = AttemptView(
@@ -501,7 +503,6 @@ def read_contract_snapshot(
             finished_at=last.finished_at,
         )
 
-    ordered_events = [_event_view(event) for event in snapshot.recent_events]
     events_total = len(ordered_events)
     events = tuple(reversed(ordered_events[-EVENTS_SHOWN:]))
 
