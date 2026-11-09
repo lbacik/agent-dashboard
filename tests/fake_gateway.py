@@ -71,6 +71,7 @@ class FakeGateway:
         self.control_delays: dict[str, float] = {}
         self.list_calls = 0
         self.telemetry_calls: list[str] = []
+        self.contract_calls: list[tuple[str, str]] = []
         self.history_calls: list[str] = []
         self.events_calls: list[tuple[str, str, str]] = []
         self.log_calls: list[tuple[str, str, str]] = []
@@ -107,6 +108,41 @@ class FakeGateway:
         self, container_id: str, message: str = "docker exec timed out after 5 s"
     ) -> None:
         self._scripts[container_id] = TelemetryTimeoutError(message)
+
+    def set_contract_status(
+        self, container_id: str, stdout: bytes, returncode: int = 0
+    ) -> None:
+        """Script one contract ``status`` poll reply: reported, never raised."""
+        self._scripts[f"contract:{container_id}"] = TelemetryExec(
+            stdout=stdout, returncode=returncode
+        )
+
+    def set_contract_snapshot(self, container_id: str, snapshot: dict) -> None:
+        """Script one good contract ``status`` snapshot (``ok:true`` envelope)."""
+        self.set_contract_status(
+            container_id,
+            json.dumps({"ok": True, "result": snapshot}).encode(),
+            0,
+        )
+
+    def set_contract_error(
+        self, container_id: str, error: Exception
+    ) -> None:
+        """Script one contract poll error (timeout, unreachable, ...)."""
+        self._scripts[f"contract:{container_id}"] = error
+
+    async def contract_status(
+        self, container_id: str, exec_user: str
+    ) -> TelemetryExec:
+        """One scripted contract ``status`` poll, recorded with its exec user."""
+        self.contract_calls.append((container_id, exec_user))
+        scripted = self._scripts.get(
+            f"contract:{container_id}", DEFAULT_SCRIPT
+        )
+        if isinstance(scripted, Exception):
+            raise scripted
+        assert isinstance(scripted, TelemetryExec)
+        return scripted
 
     def set_history(
         self, container_id: str, payload: dict, returncode: int = 0

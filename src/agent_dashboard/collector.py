@@ -32,10 +32,16 @@ from typing import Any
 
 from .contract_reply import (
     AMBIGUOUS,
-    CONTRACT_MISMATCH as REPLY_CONTRACT_MISMATCH,
-    SUCCESS as REPLY_SUCCESS,
-    UNSUPPORTED as REPLY_UNSUPPORTED,
     classify_contract_reply,
+)
+from .contract_reply import (
+    CONTRACT_MISMATCH as REPLY_CONTRACT_MISMATCH,
+)
+from .contract_reply import (
+    SUCCESS as REPLY_SUCCESS,
+)
+from .contract_reply import (
+    UNSUPPORTED as REPLY_UNSUPPORTED,
 )
 from .contract_status import contract_mismatch_headline
 from .gateway import (

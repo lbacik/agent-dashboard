@@ -61,6 +61,35 @@
        hx-swap="innerHTML"
        hx-disinherit="*">
   <div class="drawer-inner">
+  {% if row.path == "contract" %}
+  <div class="drawer-head">
+    <div class="vc-cockpit-id">
+      <button type="button" class="drawer-back" onclick="closeDrawer()">← Fleet Matrix</button>
+      <div class="vc-unit">
+        <span class="vc-unit-kicker">Unit cockpit // contract instance{% if row.backend %} · {{ row.backend }}{% endif %}</span>
+        <h2 class="drawer-title">{{ row.name }}</h2>
+      </div>
+      <span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>
+    </div>
+    <p class="drawer-subtitle vc-cockpit-headline"><span class="vc-hl-label">Status headline</span> <strong>{{ row.headline }}</strong></p>
+    <div class="vc-cockpit-actions">
+      <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
+    </div>
+  </div>
+  <div class="vc-cockpit-grid">
+  <section class="drawer-section vc-module">
+    <h3 class="vc-module-bar">01 // Contract status</h3>
+    <div class="vc-module-body">
+    <dl class="facts">
+      <div><dt>Backend</dt><dd>{% if row.backend %}{{ row.backend }}{% else %}unavailable{% endif %}</dd></div>
+      <div><dt>Instance state</dt><dd>{{ row.contract.instance_state if row.contract is not none else "unknown" }}</dd></div>
+      <div><dt>Attempt</dt><dd>{{ row.contract.attempt_text if row.contract is not none else "—" }}</dd></div>
+    </dl>
+    <p class="hint">Control, activity, statistics and history are unavailable for contract instances.</p>
+    </div>
+  </section>
+  </div>
+  {% else %}
   <div class="drawer-head">
     <div class="vc-cockpit-id">
       <button type="button" class="drawer-back" onclick="closeDrawer()">← Fleet Matrix</button>
@@ -269,6 +298,7 @@
   </section>
   </div>
   </div>
+  {% endif %}
   {% endif %}
   </div>
 </aside>

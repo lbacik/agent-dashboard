@@ -5,8 +5,16 @@ A view of the managed instances on one Docker host, built from the telemetry sna
 ## Language
 
 **Poll outcome**:
-The dashboard's classification of one attempt to fetch a telemetry snapshot from a managed instance: a good snapshot, the agent unreachable, the operation unsupported, the snapshot failed, or telemetry not supported by the agent's version.
+The dashboard's classification of one attempt to fetch a telemetry snapshot from a managed instance: a good snapshot, the agent unreachable, the operation unsupported, the snapshot failed, telemetry not supported by the agent's version, or contract mismatch (the contract-path refusal naming the `details.supported` contract the instance speaks).
 _Avoid_: Poll result, health check, ping
+
+**Contract path**:
+How the dashboard polls a managed instance carrying the `io.github.lbacik.agent-operator.contract` label: `docker exec --user <exec-user> <container-id> /usr/local/bin/agentctl --contract 1 status` on the normal poll cycle, addressed in URLs by its `instance` label. Contract terms (Reach, Status Snapshot, instance state) are owned by the producer and defined in the [agent-operator-contract glossary](https://github.com/lbacik/agent-operator-contract/blob/main/CONTEXT.md); the dashboard only renders them.
+_Avoid_: v2 path, new telemetry
+
+**Legacy path**:
+How the dashboard polls a managed instance carrying only the legacy role label: the telemetry v1 exec (`agentctl telemetry --json` as `agent`), unchanged by the contract path. A container carrying both labels takes the contract path.
+_Avoid_: Old path, v1 path
 
 **Reach**:
 How current the dashboard's view of a managed instance is: live, stale (the last good snapshot is shown but newer polls failed), unreachable, not running, or unsupported (the agent's version or schema is too old or too new to read).

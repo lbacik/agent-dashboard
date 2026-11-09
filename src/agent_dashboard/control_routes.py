@@ -430,7 +430,14 @@ def _request_mode(request: Request, mode: ControlMode) -> ControlMode:
 
 def _row_availability(row, request: Request):
     """The console view model for one fleet row and the signed-in Operator."""
+    from .control import ControlAvailability
+
     mode = _request_mode(request, request.app.state.control_mode)
+    if getattr(row, "path", "legacy") == "contract":
+        return ControlAvailability(
+            unavailable="unavailable for contract instances: "
+            "control actions are not offered on the contract path"
+        )
     control = MISSING if row.control_raw_missing else row.control_raw
     return control_availability(
         reach=row.reach,

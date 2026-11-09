@@ -19,6 +19,12 @@ own cookie, apart from the drawer's. Every instance is read in parallel
 with a bounded timeout, stopped ones through `docker cp`; an unreadable
 instance is listed under the charts and left out of the totals.
 
+Contract instances appear in the same Fleet view: a container carrying the
+`io.github.lbacik.agent-operator.contract` label is polled with
+`agentctl --contract 1 status` as its labelled exec user and shows its
+Reach, Status headline, Attention rank and backend. Control, activity,
+statistics and history widgets stay unavailable on those rows.
+
 ## Attempt log view
 
 Each Managed instance's drawer links to its **Attempt history**
