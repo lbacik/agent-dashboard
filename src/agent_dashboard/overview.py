@@ -529,10 +529,6 @@ async def collect_overview(
     parts = [inst for inst, _, _ in results]
     total_cost = sum(row.cost_total for row in parts if row.cost_total is not None)
     contract_labels: dict[str, str] = {}
-    for inst in parts:
-        if inst.ok and inst.is_contract:
-            for key in inst.counts:
-                contract_labels.setdefault(key, key)
     for _, _, full in results:
         if isinstance(full, ContractHistoryResult):
             _, labels = counts_by_label(full.summaries)
