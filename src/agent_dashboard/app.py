@@ -73,6 +73,13 @@ from .charts import (
 from .config import Settings
 from .control import compute_control_mode, control_slug
 from .control_routes import register_control_routes
+from .contract_history import (
+    apply_contract_range,
+    collect_contract_history,
+    contract_day_strip,
+    contract_legend,
+    counts_by_label,
+)
 from .cost_summary import summarize_cost
 from .fleet import FleetState, poll_forever
 from .gateway import (
@@ -93,8 +100,12 @@ from .history import (
 )
 from .overview import (
     collect_overview,
+    overview_chart_keys,
+    overview_chart_labels,
     overview_legend,
+    overview_strip,
     read_full_history,
+    summarize_contract_instance,
     summarize_instance,
 )
 from .presentation import format_age
@@ -103,13 +114,12 @@ from .range_stats import (
     COOKIE_MAX_AGE,
     COOKIE_NAME,
     FLEET_COOKIE_NAME,
+    PRESETS as RANGE_PRESETS,
+    RangeSpec,
     apply_range,
     day_strip,
     parse_cookie,
     parse_range,
-)
-from .range_stats import (
-    PRESETS as RANGE_PRESETS,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -389,8 +399,9 @@ def create_app(
             spec=spec,
             now=now_ts,
             max_concurrent_execs=cfg.max_concurrent_execs,
+            contract_cap=cfg.contract_history_cap,
         )
-        strip = day_strip(overview.summaries, spec, now_ts) if rows else []
+        strip = overview_strip(overview, spec, now_ts) if rows else []
         outcome_peak = max((inst.shown for inst in overview.rows if inst.ok), default=0)
         if outcome_peak >= 2:
             outcome_ticks = [0, (outcome_peak + 1) // 2, outcome_peak]
@@ -419,7 +430,8 @@ def create_app(
                 "presets": list(RANGE_PRESETS),
                 "overview": overview,
                 "legend": overview_legend(overview),
-                "chart_keys": list(OUTCOME_ORDER),
+                "chart_keys": overview_chart_keys(overview),
+                "chart_labels": overview_chart_labels(overview),
                 "shape_glyphs": dict(SHAPE_GLYPHS),
                 "strip": strip,
                 "strip_peak": max((day.total for day in strip), default=0),
@@ -674,6 +686,9 @@ def create_app(
             "strip_peak": 0,
             "error": None,
             "cost": None,
+            "contract": False,
+            "capped": False,
+            "cap": cfg.contract_history_cap,
         }
 
         def page() -> Response:
@@ -694,7 +709,62 @@ def create_app(
             )
             return page()
         if is_contract_row(row):
-            ctx["error"] = CONTRACT_WIDGET_MESSAGE
+            # Contract instances page the online ``attempts list``
+            # (newest first) through the shared contract history reader:
+            # outcome charts group by ``outcome.label`` (display only) and
+            # every Attempt counts as missing cost data, never zero.
+            now_ts = time.time()
+            if row.state != "running":
+                ctx["error"] = (
+                    "Attempt list is unavailable for this instance: "
+                    "it is not running."
+                )
+                return page()
+            if not row.exec_user:
+                ctx["error"] = (
+                    "Attempt list is unavailable for this instance: "
+                    "its exec user is missing."
+                )
+                return page()
+            full_contract = await collect_contract_history(
+                gw,
+                row.container_id,
+                row.exec_user,
+                RangeSpec(preset="all"),
+                now=now_ts,
+                cap=cfg.contract_history_cap,
+                instance_name=name,
+            )
+            if not full_contract.ok:
+                ctx["error"] = full_contract.error
+                return page()
+            cut = apply_contract_range(
+                tuple(full_contract.summaries), spec, now_ts
+            )
+            ctx["inst"] = summarize_contract_instance(
+                name=row.name,
+                state=row.state,
+                container_id=row.container_id,
+                reach=row.reach,
+                rank=row.rank,
+                window="all",
+                summaries=cut,
+                total=full_contract.total,
+                unreadable=full_contract.unreadable,
+            )
+            counts, labels = counts_by_label(cut)
+            ctx["chart_keys"] = sorted(counts, key=lambda k: labels[k])
+            ctx["chart_labels"] = dict(labels)
+            ctx["strip"] = contract_day_strip(
+                full_contract.summaries, spec, now_ts
+            )
+            ctx["strip_peak"] = max(
+                (day.total for day in ctx["strip"]), default=0
+            )
+            ctx["legend"] = contract_legend(cut)
+            ctx["contract"] = True
+            ctx["capped"] = full_contract.capped
+            ctx["cap"] = full_contract.cap
             return page()
         # Stopped containers cannot run ``docker exec``: their Attempt log
         # list arrives through a ``docker cp`` tree copy parsed on the
@@ -782,7 +852,46 @@ def create_app(
                 f"Unknown Managed instance {name!r}: it is unknown or was removed.",
             )
         if is_contract_row(row):
-            return history_page(row, None, CONTRACT_WIDGET_MESSAGE)
+            # Contract instances page the online ``attempts list``
+            # (newest first) through the shared contract history reader.
+            # Paging stops at the first Attempt starting before the
+            # selected range; ``All`` stops at the configured cap with a
+            # visible "showing newest N" note. Malformed or unknown replies
+            # render a clear message with status 200, never an error.
+            if row.state != "running":
+                return history_page(
+                    row,
+                    None,
+                    "Attempt list is unavailable for this instance: "
+                    "it is not running.",
+                )
+            if not row.exec_user:
+                return history_page(
+                    row,
+                    None,
+                    "Attempt list is unavailable for this instance: "
+                    "its exec user is missing.",
+                )
+            now_ts = time.time()
+            contracted = await collect_contract_history(
+                gw,
+                row.container_id,
+                row.exec_user,
+                spec,
+                now=now_ts,
+                cap=cfg.contract_history_cap,
+                instance_name=name,
+            )
+            if not contracted.ok:
+                return history_page(row, None, contracted.error)
+            return history_page(
+                row,
+                contracted,
+                None,
+                contract=True,
+                clegend=contract_legend(contracted.summaries),
+                shape_glyphs=dict(SHAPE_GLYPHS),
+            )
         # Stopped containers cannot run ``docker exec``: their Attempt log
         # list arrives through a ``docker cp`` tree copy parsed on the
         # dashboard side, with the same tolerance rules as the exec reader.

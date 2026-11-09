@@ -292,6 +292,7 @@ class FleetState:
             path=entry.path,
             backend=entry.backend,
             contract=None,
+            exec_user=entry.exec_user,
         )
 
     @staticmethod
@@ -323,6 +324,7 @@ class FleetState:
             rank=rank,
             path=entry.path,
             backend=entry.backend,
+            exec_user=entry.exec_user,
         )
 
     @staticmethod
@@ -412,6 +414,7 @@ class FleetState:
             path=entry.path,
             backend=backend,
             contract=detail,
+            exec_user=entry.exec_user,
         )
 
 
