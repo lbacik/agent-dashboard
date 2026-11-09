@@ -326,6 +326,35 @@ table.fleet td.headline { min-width: 14rem; }
   white-space: nowrap;
 }
 
+/* Contract Status Snapshot figures: an unknown figure reads "unknown"
+   (muted with a dotted underline) while a not-applicable one reads
+   "not applicable" (muted, no underline), so the two never look alike.
+   The enforced budget token and native names/events carry small tags. */
+.figure-unknown {
+  color: var(--muted);
+  border-bottom: 1px dotted var(--muted);
+}
+.figure-na { color: var(--muted); }
+.enforced-tag {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  background: var(--info-bg);
+  color: var(--info-ink);
+  white-space: nowrap;
+}
+.native-tag {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+
 /* Control console composer (prototype variant C): the radio group
    renders as a grid of option tiles, the radio itself visually hidden
    but still focusable. The chosen tile gets a thicker accent border, a

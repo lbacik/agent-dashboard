@@ -59,6 +59,22 @@ Semantic tokens (every text pair meets WCAG AA, 4.5:1 or better):
   `--accent` (4.10:1). `var(--accent)` is never body text, only borders,
   fills and focus rings.
 
+## Contract Status Snapshot figures
+
+A contract instance's drawer shows every Figure with its unit and its
+Figure Basis. Values render with their unit (`1,834,221 tokens`,
+`$3.41`, `1,325 s`, `118`, `86%` for `tokens`, `usd`, `seconds`,
+`count`, `ratio`); an unknown unit renders `unknown`.
+
+Each known basis carries a marker in `.basis` beside the figure:
+`measured`, `estimated`, `configured`, `assumed`. An `unavailable`
+figure renders `unknown` (`.figure-unknown`: muted with a dotted
+underline); a `not_applicable` figure renders `not applicable`
+(`.figure-na`: muted, no underline), visually distinct from `unknown`.
+An unknown basis renders `unknown` too. The token count the backend
+enforces carries an `enforced` tag (`.enforced-tag`); `native.*` names
+and events carry a `native` tag (`.native-tag`).
+
 ## Instrument chrome (prototype variant C)
 
 - **Top bar**: white, `border-top: 3px solid var(--accent)`, mono. Three

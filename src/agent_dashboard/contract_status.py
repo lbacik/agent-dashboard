@@ -1,17 +1,22 @@
 """Status Snapshot view models for the contract path (ADR 0014).
 
 Turns the ``result`` of a good contract ``status`` reply into
-framework-free view models for the fleet table: the Reach inputs, the
-Status headline and the Attention rank. Parsing is lenient (spec section
-5): unknown fields are ignored and unknown enum values read as
-``"unknown"``; anything structurally incoherent reads as no snapshot
-rather than breaking the row. Templates consume only these view models;
-there is no public JSON API.
+framework-free view models for the fleet table and the instance drawer:
+the Reach inputs, the Status headline and the Attention rank, plus the
+full Status Snapshot for the drawer (every figure with its unit and
+basis, the budget the way the backend enforces it, every enforced limit,
+the optional figures, per-section freshness, the last Halt, the last
+finished attempt and the recent Contract Events). Parsing is lenient
+(spec section 5): unknown fields are ignored and unknown enum values
+read as ``"unknown"``; anything structurally incoherent reads as no
+snapshot rather than breaking the row. Templates consume only these
+view models; there is no public JSON API.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from agent_operator_contract import status as contract_status_lib
@@ -19,6 +24,158 @@ from agent_operator_contract import status as contract_status_lib
 UNKNOWN = "unknown"
 
 UNAVAILABLE = "unavailable"
+
+#: Figure units the Status Snapshot reports (spec section 7.3).
+FIGURE_UNITS = ("tokens", "usd", "seconds", "count", "ratio")
+
+#: Figure bases with a basis marker (per DESIGN.md). ``unavailable`` reads
+#: as ``"unknown"`` and ``not_applicable`` as ``"not applicable"``.
+FIGURE_BASES = ("measured", "estimated", "configured", "assumed")
+
+NOT_APPLICABLE = "not applicable"
+
+#: A section older than this many poll intervals reads as stale. Reach is
+#: unchanged by section staleness; the Status headline names it instead.
+STALE_AFTER_INTERVALS = 3
+
+#: Recent Contract Events shown in the drawer, newest first (the snapshot
+#: allows up to 50; the drawer keeps the latest 20 like the legacy path).
+EVENTS_SHOWN = 20
+
+#: Optional figures in display order (spec section 7.3 name set): cost,
+#: cache hit rate, context sizes, turns, tool calls, continuations, review
+#: seats, elapsed time. ``native.*`` and unknown names follow, sorted.
+OPTIONAL_FIGURE_LABELS = (
+    ("cost_usd", "Cost"),
+    ("cache_hit_rate", "Cache hit rate"),
+    ("context_used", "Context used"),
+    ("context_peak", "Context peak"),
+    ("context_window", "Context window"),
+    ("turns", "Turns"),
+    ("tool_calls", "Tool calls"),
+    ("continuations", "Continuations"),
+    ("review_seats_running", "Review seats"),
+    ("elapsed_seconds", "Elapsed time"),
+)
+
+
+@dataclass(frozen=True)
+class FigureView:
+    """One figure's final display strings (framework-free).
+
+    ``text`` is the formatted value with its unit (``"1,834,221 tokens"``,
+    ``"$3.41"``, ``"86%"``), ``"unknown"`` or ``"not applicable"``.
+    ``basis`` is the basis marker (``"measured"`` and friends) or ``""``
+    when the text already says unknown/not applicable. ``state`` is
+    ``"value"``, ``"unknown"`` or ``"na"`` so the template can style
+    "not applicable" distinctly from "unknown". ``reason`` is the
+    backend's note (e.g. why a figure is unavailable), for the tooltip.
+    """
+
+    text: str = UNKNOWN
+    basis: str = ""
+    unit: str = UNKNOWN
+    state: str = "unknown"  # "value" | "unknown" | "na"
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class BudgetLimitView:
+    """One enforced ceiling: used against limit, with both bases."""
+
+    name: str = UNKNOWN
+    is_native: bool = False
+    used: FigureView = field(default_factory=FigureView)
+    limit: FigureView = field(default_factory=FigureView)
+
+
+@dataclass(frozen=True)
+class BudgetView:
+    """The attempt budget the way the backend enforces it."""
+
+    raw: FigureView = field(default_factory=FigureView)
+    effective: FigureView = field(default_factory=FigureView)
+    enforced: str = UNKNOWN  # "raw" | "effective" | "none" | "unknown"
+    limits: tuple[BudgetLimitView, ...] = ()
+
+
+@dataclass(frozen=True)
+class OptionalFigureView:
+    """One optional figure the backend reported (absent ones are omitted)."""
+
+    name: str = UNKNOWN
+    label: str = UNKNOWN
+    is_native: bool = False
+    figure: FigureView = field(default_factory=FigureView)
+
+
+@dataclass(frozen=True)
+class SectionFreshness:
+    """One section's ``observed_at`` age and whether it reads as stale."""
+
+    observed_at: str = UNKNOWN
+    age_text: str = UNKNOWN  # e.g. "12 s ago"
+    stale: bool = False
+
+
+@dataclass(frozen=True)
+class AttemptView:
+    """The current attempt: facts, budget, optional figures, its events."""
+
+    attempt_id: str = UNKNOWN
+    issue_number: int = 0
+    issue_title: str | None = None
+    native_phase: str = UNKNOWN
+    started_at: str = UNKNOWN
+    last_activity_at: str | None = None
+    freshness: SectionFreshness = field(default_factory=SectionFreshness)
+    budget: BudgetView = field(default_factory=BudgetView)
+    figures: tuple[OptionalFigureView, ...] = ()
+    events: tuple[ContractEventView, ...] = ()
+    events_total: int = 0
+
+
+@dataclass(frozen=True)
+class HaltView:
+    """The last durably recorded engine halt."""
+
+    reason: str = UNKNOWN
+    detail: str = ""
+    at: str = UNKNOWN
+
+
+@dataclass(frozen=True)
+class LastFinishedView:
+    """The last finished attempt: outcome label, delivery link, attention."""
+
+    attempt_id: str = UNKNOWN
+    issue_number: int | None = None
+    issue_title: str | None = None
+    outcome_label: str | None = None
+    delivery_number: int | None = None
+    delivery_url: str | None = None
+    attention_required: bool = False
+    finished_at: str | None = None
+
+
+@dataclass(frozen=True)
+class ContractEventView:
+    """One recent Contract Event: level, event, attempt, phase, text.
+
+    ``short_time`` is the ``HH:MM:SS`` clock reading for the glanceable
+    column; the full timestamp stays in ``at`` for the tooltip. ``is_native``
+    marks ``native.`` events; unknown event names are shown raw.
+    """
+
+    at: str = UNKNOWN
+    short_time: str = UNKNOWN
+    level: str = UNKNOWN
+    event: str = UNKNOWN
+    is_native: bool = False
+    attempt_id: str | None = None
+    issue: int | None = None
+    phase: str | None = None
+    text: str = ""
 
 
 @dataclass(frozen=True)
@@ -52,14 +209,234 @@ class ContractDetail:
     intake_state: str | None = None
     # Short attempt text for the rail (``#42 · run_step`` or ``—``).
     attempt_text: str = "—"
+    # Status Snapshot detail for the drawer.
+    truncated: bool = False
+    instance_observed: SectionFreshness | None = None
+    intake_observed: SectionFreshness | None = None
+    # The oldest stale section's ``observed_at``; none when nothing is stale.
+    stale_since: str | None = None
+    current: AttemptView | None = None
+    halt: HaltView | None = None
+    last_finished: LastFinishedView | None = None
+    # Recent Contract Events, newest first, at most EVENTS_SHOWN;
+    # ``events_total`` is the full snapshot count for the count line.
+    events: tuple[ContractEventView, ...] = ()
+    events_total: int = 0
 
 
-def read_contract_snapshot(result: Any) -> ContractDetail | None:
+def _fmt_number(value: int | float) -> str:
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return f"{value:,}"
+
+
+def _format_value(value: int | float, unit: str) -> str:
+    """The value with its unit: ``"1,834,221 tokens"``, ``"$3.41"``."""
+    if unit == "tokens":
+        return f"{_fmt_number(value)} tokens"
+    if unit == "usd":
+        return f"${value:,.2f}"
+    if unit == "seconds":
+        return f"{_fmt_number(value)} s"
+    if unit == "count":
+        return _fmt_number(value)
+    if unit == "ratio":
+        return f"{value * 100:.0f}%"
+    return UNKNOWN
+
+
+def _norm_unit(unit: Any) -> str:
+    return unit if isinstance(unit, str) and unit in FIGURE_UNITS else UNKNOWN
+
+
+def figure_view(fig: Any) -> FigureView:
+    """Render one parsed figure: value with unit and basis marker.
+
+    ``unavailable`` (and any unknown unit or basis, or missing value)
+    renders ``"unknown"``; ``not_applicable`` renders ``"not applicable"``.
+    Never raises; never renders a bare number for an absent figure.
+    """
+    if not isinstance(fig, contract_status_lib.Figure):
+        return FigureView()
+    unit = _norm_unit(fig.unit)
+    basis = fig.basis
+    value = fig.value
+    reason = fig.reason if isinstance(fig.reason, str) and fig.reason else None
+    if basis == "not_applicable":
+        if value is None:
+            return FigureView(NOT_APPLICABLE, "", unit, "na", reason)
+        return FigureView(UNKNOWN, "", unit, "unknown", reason)
+    if (
+        basis not in FIGURE_BASES
+        or unit == UNKNOWN
+        or value is None
+        or isinstance(value, bool)
+        or not isinstance(value, (int, float))
+    ):
+        return FigureView(UNKNOWN, "", unit, "unknown", reason)
+    return FigureView(_format_value(value, unit), basis, unit, "value", reason)
+
+
+def _is_native_name(name: str) -> bool:
+    return name.startswith("native.") and len(name) > len("native.")
+
+
+def _optional_figures(figures: dict[str, Any]) -> tuple[OptionalFigureView, ...]:
+    """The reported optional figures in display order; absent ones omitted."""
+    rows: list[OptionalFigureView] = []
+    for name, label in OPTIONAL_FIGURE_LABELS:
+        if name in figures:
+            rows.append(
+                OptionalFigureView(
+                    name=name,
+                    label=label,
+                    is_native=False,
+                    figure=figure_view(figures[name]),
+                )
+            )
+    extra = sorted(name for name in figures if name not in dict(OPTIONAL_FIGURE_LABELS))
+    for name in extra:
+        rows.append(
+            OptionalFigureView(
+                name=name,
+                label=name,
+                is_native=_is_native_name(name),
+                figure=figure_view(figures[name]),
+            )
+        )
+    return tuple(rows)
+
+
+def _format_age(seconds: float) -> str:
+    """Format a section age: '12 s', '3 min', '2 h' (as the fleet table)."""
+    total = max(0, int(seconds))
+    if total < 60:
+        return f"{total} s"
+    minutes = total // 60
+    if minutes < 60:
+        return f"{minutes} min"
+    return f"{minutes // 60} h"
+
+
+def _parse_observed(text: Any, now: float) -> float:
+    """Parse an ``observed_at`` timestamp; unparseable reads as now."""
+    if not isinstance(text, str) or not text.strip():
+        return now
+    try:
+        stamped = text.strip()
+        if stamped.endswith("Z"):
+            stamped = stamped[:-1] + "+00:00"
+        moment = datetime.fromisoformat(stamped)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        return moment.timestamp()
+    except ValueError:
+        return now
+
+
+def section_freshness(
+    observed_at: Any, *, now: float, poll_interval: float
+) -> SectionFreshness:
+    """One section's age and whether it is older than three poll intervals."""
+    if not isinstance(observed_at, str) or not observed_at:
+        return SectionFreshness(UNKNOWN, UNKNOWN, False)
+    age = max(0.0, now - _parse_observed(observed_at, now))
+    return SectionFreshness(
+        observed_at=observed_at,
+        age_text=f"{_format_age(age)} ago",
+        stale=age > STALE_AFTER_INTERVALS * poll_interval,
+    )
+
+
+def _short_time(at: str) -> str:
+    """Extract ``HH:MM:SS`` from an ISO-8601 timestamp, else the full text."""
+    clock = at[11:19] if len(at) >= 19 and at[10] == "T" else ""
+    if (
+        len(clock) == 8
+        and clock[2] == ":"
+        and clock[5] == ":"
+        and clock.replace(":", "").isdigit()
+    ):
+        return clock
+    return at
+
+
+def _event_view(event: contract_status_lib.ContractEvent) -> ContractEventView:
+    """Render one parsed Contract Event; unknown names are shown raw."""
+    name = event.event if isinstance(event.event, str) and event.event else UNKNOWN
+    return ContractEventView(
+        at=event.at,
+        short_time=_short_time(event.at),
+        level=event.level if isinstance(event.level, str) and event.level else UNKNOWN,
+        event=name,
+        is_native=_is_native_name(name),
+        attempt_id=event.attempt_id,
+        issue=event.issue,
+        phase=event.phase,
+        text=event.text if isinstance(event.text, str) else "",
+    )
+
+
+def _read_delivery(result: Any) -> tuple[int | None, str | None]:
+    """The last finished attempt's delivery link, or ``(None, None)``.
+
+    The library DTO drops ``delivery`` (it carries no verdict), so this
+    reads it leniently from the raw result: a pull-request number and URL,
+    never a bare or broken link.
+    """
+    try:
+        last = result.get("last_finished") if isinstance(result, dict) else None
+        delivery = last.get("delivery") if isinstance(last, dict) else None
+        pull = delivery.get("pull_request") if isinstance(delivery, dict) else None
+        if not isinstance(pull, dict):
+            return None, None
+        number = pull.get("number")
+        url = pull.get("url")
+        number = number if isinstance(number, int) and not isinstance(number, bool) else None
+        url = url if isinstance(url, str) and url else None
+        if number is None and url is None:
+            return None, None
+        return number, url
+    except Exception:
+        return None, None
+
+
+def _read_budget(
+    budget: contract_status_lib.Budget,
+) -> BudgetView:
+    """Render the budget the way the backend enforces it."""
+    enforced = budget.enforced_tokens
+    if enforced not in ("raw", "effective", "none"):
+        enforced = UNKNOWN
+    limits: list[BudgetLimitView] = []
+    for entry in budget.limits:
+        name = entry.name if isinstance(entry.name, str) and entry.name else UNKNOWN
+        limits.append(
+            BudgetLimitView(
+                name=name,
+                is_native=_is_native_name(name),
+                used=figure_view(entry.used),
+                limit=figure_view(entry.limit),
+            )
+        )
+    return BudgetView(
+        raw=figure_view(budget.raw_tokens),
+        effective=figure_view(budget.effective_tokens),
+        enforced=enforced,
+        limits=tuple(limits),
+    )
+
+
+def read_contract_snapshot(
+    result: Any, *, now: float | None = None, poll_interval: float = 5.0
+) -> ContractDetail | None:
     """Read one contract ``status`` result into a view model; never raises.
 
     Returns none when the result is not a parsable Status Snapshot (not a
     dict, or structurally incoherent even leniently): the row keeps its
-    poll outcome and renders the generic reach headline instead.
+    poll outcome and renders the generic reach headline instead. ``now``
+    stamps per-section ages; without it ages read as unknown and nothing
+    reads as stale.
     """
     if not isinstance(result, dict):
         return None
@@ -67,6 +444,13 @@ def read_contract_snapshot(result: Any) -> ContractDetail | None:
         snapshot = contract_status_lib.parse_status_lenient(result)
     except Exception:
         return None
+
+    def _fresh(observed_at: Any) -> SectionFreshness:
+        if now is None:
+            text = observed_at if isinstance(observed_at, str) and observed_at else UNKNOWN
+            return SectionFreshness(text, UNKNOWN, False)
+        return section_freshness(observed_at, now=now, poll_interval=poll_interval)
+
     halt = snapshot.instance.last_halt
     current = snapshot.current_attempt
     last = snapshot.last_finished
@@ -74,6 +458,64 @@ def read_contract_snapshot(result: Any) -> ContractDetail | None:
         attempt_text = f"#{current.issue_number} · {current.native_phase}"
     else:
         attempt_text = "—"
+
+    instance_fresh = _fresh(snapshot.instance.observed_at)
+    intake_fresh = _fresh(snapshot.intake.observed_at)
+
+    current_view: AttemptView | None = None
+    attempt_events: tuple[ContractEventView, ...] = ()
+    ordered_events = [_event_view(event) for event in snapshot.recent_events]
+    if current is not None:
+        scoped = [
+            view for view in ordered_events if view.attempt_id == current.attempt_id
+        ]
+        attempt_total = len(scoped)
+        attempt_events = tuple(reversed(scoped[-EVENTS_SHOWN:]))
+        current_view = AttemptView(
+            attempt_id=current.attempt_id,
+            issue_number=current.issue_number,
+            issue_title=current.issue_title,
+            native_phase=current.native_phase,
+            started_at=current.started_at,
+            last_activity_at=current.last_activity_at,
+            freshness=_fresh(current.observed_at),
+            budget=_read_budget(current.budget),
+            figures=_optional_figures(dict(current.figures)),
+            events=attempt_events,
+            events_total=attempt_total,
+        )
+
+    halt_view: HaltView | None = None
+    if halt is not None:
+        halt_view = HaltView(reason=halt.reason, detail=halt.detail, at=halt.at)
+
+    last_view: LastFinishedView | None = None
+    if last is not None:
+        delivery_number, delivery_url = _read_delivery(result)
+        last_view = LastFinishedView(
+            attempt_id=last.attempt_id,
+            issue_number=last.issue_number,
+            issue_title=last.issue_title,
+            outcome_label=last.outcome_label,
+            delivery_number=delivery_number,
+            delivery_url=delivery_url,
+            attention_required=bool(last.attention_required),
+            finished_at=last.finished_at,
+        )
+
+    events_total = len(ordered_events)
+    events = tuple(reversed(ordered_events[-EVENTS_SHOWN:]))
+
+    stale_since: str | None = None
+    if now is not None:
+        candidates = [instance_fresh, intake_fresh]
+        if current_view is not None:
+            candidates.append(current_view.freshness)
+        stale = [fresh for fresh in candidates if fresh.stale]
+        if stale:
+            oldest = min(stale, key=lambda item: _parse_observed(item.observed_at, now))
+            stale_since = oldest.observed_at
+
     return ContractDetail(
         has_snapshot=True,
         backend=snapshot.identity.backend,
@@ -100,7 +542,23 @@ def read_contract_snapshot(result: Any) -> ContractDetail | None:
         ),
         intake_state=snapshot.intake.state,
         attempt_text=attempt_text,
+        truncated=bool(snapshot.truncated),
+        instance_observed=instance_fresh,
+        intake_observed=intake_fresh,
+        stale_since=stale_since,
+        current=current_view,
+        halt=halt_view,
+        last_finished=last_view,
+        events=events,
+        events_total=events_total,
     )
+
+
+def stale_suffix(detail: ContractDetail) -> str:
+    """The headline suffix naming section staleness, or ``""`` when fresh."""
+    if detail.stale_since is None:
+        return ""
+    return f" (data stale since {detail.stale_since})"
 
 
 def contract_mismatch_headline(supported: Any) -> str:

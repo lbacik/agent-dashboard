@@ -1,0 +1,33 @@
+{# Contract Activity widget fragment: the active attempt's native phase,
+   its last activity, and its recent Contract Events. Loaded into the
+   drawer's `.activity-body` on every poll cycle; the one-line state
+   travels out-of-band into the (possibly collapsed) summary slot, so the
+   header stays live while collapsed. The Status Snapshot already carries
+   everything shown here, so unlike the legacy widget this fragment needs
+   no gateway exec and offers no Attempt-log links: the Attempt log, the
+   Last call pane and the progress page cannot feed a contract instance. #}
+<span id="{{ summary_id }}" class="activity-sum" hx-swap-oob="true">{% if error %}unavailable{% elif contract is not none and contract.current is not none %}<strong>{{ contract.current.native_phase }}</strong>{% if last_activity_age %} · last activity {{ last_activity_age }}{% endif %}{% else %}no attempt in progress{% endif %}</span>
+{% if error %}
+<p class="hint">{{ error }}</p>
+{% elif contract is not none and contract.current is not none %}
+{% set cur = contract.current %}
+<div class="activity-contract">
+  <dl class="facts">
+    <div><dt>Native phase</dt><dd>{{ cur.native_phase }}</dd></div>
+    <div><dt>Last activity</dt><dd>{% if cur.last_activity_at %}{{ cur.last_activity_at }}{% if last_activity_age %} ({{ last_activity_age }}){% endif %}{% else %}—{% endif %}</dd></div>
+  </dl>
+  {% if cur.events %}
+  <h4>Attempt events</h4>
+  <ul class="events">
+    {% for ev in cur.events %}
+    <li><span class="ev-time" title="{{ ev.at }}">{{ ev.short_time }}</span> <span class="ev-level">{{ ev.level }}</span> <span class="ev-name">{{ ev.event }}</span>{% if ev.is_native %} <span class="native-tag">native</span>{% endif %} <span class="ev-text">{{ ev.text }}</span></li>
+    {% endfor %}
+  </ul>
+  {% if cur.events_total > 20 %}<p class="hint">Showing the latest 20 of {{ cur.events_total }}.</p>{% endif %}
+  {% else %}
+  <p class="hint">No events for this attempt yet.</p>
+  {% endif %}
+</div>
+{% else %}
+<p class="hint">No attempt in progress.</p>
+{% endif %}
