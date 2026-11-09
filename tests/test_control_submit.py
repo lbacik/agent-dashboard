@@ -871,6 +871,11 @@ def test_submit_audit_entry_schema():
         "reason",
         "error",
         "duration_ms",
+        "protocol",
+        "backend",
+        "error_code",
+        "replayed",
+        "attempts",
     }
     for entry in audit_entries():
         assert set(entry) == wanted, entry["outcome"]

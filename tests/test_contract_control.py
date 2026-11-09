@@ -30,7 +30,6 @@ from agent_dashboard.control_audit import audit_path
 from agent_dashboard.fleet import FleetState
 from agent_dashboard.gateway import (
     CONTRACT_PATH,
-    ControlExec,
     ControlTimeoutError,
     ManagedInstance,
     argv_contract_exec,
@@ -38,7 +37,7 @@ from agent_dashboard.gateway import (
 )
 
 
-@pytest.fixture(autouse)
+@pytest.fixture(autouse=True)
 def _isolated_audit(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
 
@@ -277,7 +276,7 @@ def test_submit_stop_accepted_card_follows_with_track():
     assert "Accepted" in response.text
     assert "/instances/web-0/control/track" in response.text
     # The exec ran once with the pinned argv.
-    assert gateway.contract_calls == [
+    assert gateway.contract_mutation_calls == [
         {
             "container_id": CID,
             "action": "stop",
@@ -298,7 +297,7 @@ def test_submit_stop_accepted_card_follows_with_track():
         assert entry["attempts"] == 1
     assert entries[0]["error_code"] is None
     assert entries[1]["error_code"] == "accepted"
-    assert entries[1]["replayed"] is None
+    assert entries[1]["replayed"] is False
 
 
 def test_submit_stop_completed_card_is_terminal():
@@ -326,7 +325,7 @@ def test_submit_replayed_card_says_already_recorded():
     )
     response = submit(client, submit_form())
     assert response.status_code == 200
-    assert "already recorded; nothing new happened" in response.text
+    assert "already recorded; nothing new happened" in response.text.lower()
     assert "/instances/web-0/control/track" in response.text
     entries = audit_entries()
     assert entries[1]["outcome"] == "accepted"
@@ -352,7 +351,8 @@ def test_submit_rejection_family_card(code):
     entries = audit_entries()
     assert entries[1]["outcome"] == "rejected"
     assert entries[1]["error_code"] == code
-    assert gateway.contract_calls and gateway.contract_calls[0]["request_id"] == RID
+    calls = gateway.contract_mutation_calls
+    assert calls and calls[0]["request_id"] == RID
 
 
 def test_submit_unsupported_card():

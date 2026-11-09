@@ -86,7 +86,7 @@ class FakeGateway:
         self.control_argvs: list[list[str]] = []
         self._contract_scripts: dict[str, ControlExec | Exception] = {}
         self._contract_command_scripts: dict[str, ControlExec | Exception] = {}
-        self.contract_calls: list[dict] = []
+        self.contract_mutation_calls: list[dict] = []
         self.contract_command_calls: list[dict] = []
         self.contract_argvs: list[list[str]] = []
         self.file_calls: list[tuple[str, str, str, str]] = []
@@ -388,7 +388,7 @@ class FakeGateway:
                 f"another control exec for container {container_id} is already in flight"
             )
         self.contract_argvs.append(argv)
-        self.contract_calls.append(
+        self.contract_mutation_calls.append(
             {
                 "container_id": container_id,
                 "action": action,
