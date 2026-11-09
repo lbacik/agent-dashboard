@@ -76,6 +76,7 @@
     </div>
     <p class="drawer-subtitle vc-cockpit-headline"><span class="vc-hl-label">Status headline</span> <strong>{{ row.headline }}</strong></p>
     <div class="vc-cockpit-actions">
+      <a class="btn" href="/instances/{{ row.name | urlencode }}/history">{{ logs_icon() }}<span>Logs</span></a>
       <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">×</button>
     </div>
   </div>
@@ -99,6 +100,7 @@
     </dl>
     {% if c is not none and c.truncated %}<p class="hint">Truncated snapshot: older entries were trimmed.</p>{% endif %}
     <p class="hint">Attempt statistics and history are unavailable for contract instances.</p>
+    <p class="hint">Control console is unavailable for contract instances.</p>
     </div>
   </section>
   <section class="drawer-section vc-module">
@@ -213,6 +215,18 @@
     </div>
   </section>
   </div>
+  </div>
+  <div class="vc-cockpit-col" data-col="history">
+  {% set slot_id = "stats-" ~ (row.name | replace(" ", "-") | replace(".", "-")) %}
+  <section class="drawer-section vc-module">
+  <h3 class="vc-module-bar">05 // Attempt statistics</h3>
+  <div class="vc-module-body">
+  <div id="{{ slot_id }}" hx-preserve
+       hx-get="/instances/{{ row.name | urlencode }}/stats" hx-trigger="load" hx-swap="innerHTML">
+    <p class="hint"><a href="/instances/{{ row.name | urlencode }}/history">Attempt history</a> · Loading…</p>
+  </div>
+  </div>
+  </section>
   </div>
   {% else %}
   <div class="drawer-head">

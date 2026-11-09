@@ -21,8 +21,8 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from .charts import LegendEntry
@@ -278,11 +278,13 @@ def parse_contract_attempts_page(
     if cls not in (SUCCESS, "replay"):
         code, message = _envelope_error(stdout if isinstance(stdout, bytes) else b"")
         if cls == CONTRACT_MISMATCH:
-            return ContractPage(ok=False, error=f"Contract mismatch: {message or code or 'the instance speaks another contract major'}")
+            detail = message or code or "the instance speaks another contract major"
+            return ContractPage(ok=False, error=f"Contract mismatch: {detail}")
         if cls == UNSUPPORTED:
+            detail = message or code or "unsupported"
             return ContractPage(
                 ok=False,
-                error=f"Attempt list not supported by this instance: {message or code or 'unsupported'}",
+                error=f"Attempt list not supported by this instance: {detail}",
             )
         if cls == NOT_FOUND:
             return ContractPage(
@@ -493,7 +495,7 @@ def contract_day_strip(
 
     rows = tuple(attempts)
     today = datetime.fromtimestamp(now, tz=UTC).date()
-    first = today - __import__("datetime").timedelta(days=STRIP_DAYS - 1)
+    first = today - timedelta(days=STRIP_DAYS - 1)
     per_day: dict[date, dict[str, int]] = {}
     display: dict[str, str] = {}
     for summary in rows:
@@ -514,7 +516,7 @@ def contract_day_strip(
         if preset == "all":
             return True
         span = int(PRESET_DAYS.get(preset, 30))
-        return day > today - __import__("datetime").timedelta(days=span)
+        return day > today - timedelta(days=span)
 
     def tooltip(label: str, total: int, counts: dict[str, int]) -> str:
         if not total:
@@ -527,7 +529,7 @@ def contract_day_strip(
 
     out: list[ContractStripDay] = []
     for offset in range(STRIP_DAYS):
-        day = first + __import__("datetime").timedelta(days=offset)
+        day = first + timedelta(days=offset)
         bucket = per_day.get(day, {})
         label = f"{day.day} {day:%b}"
         total = sum(bucket.values())
