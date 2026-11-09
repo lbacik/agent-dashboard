@@ -33,8 +33,38 @@ from agent_operator_contract import client as contract_client
 AGENT_ROLE_LABEL = "io.github.lbacik.simple-coding-agent.role=agent"
 ONEOFF_LABEL = "com.docker.compose.oneoff"
 
-# Tab-separated columns: id, name, state, oneoff label value.
-PS_FORMAT = '{{.ID}}\t{{.Names}}\t{{.State}}\t{{.Label "com.docker.compose.oneoff"}}'
+#: Discovery labels for the contract path (ADR 0014): a container carrying
+#: the contract label takes the contract path; the instance label addresses
+#: it in URLs, the exec-user label selects the ``docker exec --user`` it
+#: polls as, and the backend label names its engine in the Fleet view.
+CONTRACT_LABEL = "io.github.lbacik.agent-operator.contract"
+INSTANCE_LABEL = "io.github.lbacik.agent-operator.instance"
+EXEC_USER_LABEL = "io.github.lbacik.agent-operator.exec-user"
+BACKEND_LABEL = "io.github.lbacik.agent-operator.backend"
+
+#: Marker label for the dashboard's own Offline Read helper containers (ADR
+#: 0014): a network-less, read-only ``docker run --rm`` helper must never be
+#: mistaken for a managed instance, so discovery ignores any container
+#: carrying this label.
+OFFLINE_READ_MARKER_LABEL = "io.github.lbacik.agent-dashboard.offline-read"
+
+#: Container paths through discovery: the legacy telemetry path or the
+#: contract ``agentctl --contract 1 status`` path (ADR 0014).
+LEGACY_PATH = "legacy"
+CONTRACT_PATH = "contract"
+
+# Tab-separated columns: id, name, state, oneoff label value, then the
+# contract discovery labels (contract presence, instance, exec user,
+# backend) plus the Offline Read marker. A row whose contract column is
+# non-empty takes the contract path; otherwise it is a legacy instance.
+PS_FORMAT = (
+    '{{.ID}}\t{{.Names}}\t{{.State}}\t{{.Label "com.docker.compose.oneoff"}}'
+    f'\t{{{{.Label "{CONTRACT_LABEL}"}}}}'
+    f'\t{{{{.Label "{INSTANCE_LABEL}"}}}}'
+    f'\t{{{{.Label "{EXEC_USER_LABEL}"}}}}'
+    f'\t{{{{.Label "{BACKEND_LABEL}"}}}}'
+    f'\t{{{{.Label "{OFFLINE_READ_MARKER_LABEL}"}}}}'
+)
 
 AGENT_USER = "agent"
 AGENTCTL_PATH = "/usr/local/bin/agentctl"
@@ -648,11 +678,26 @@ class ControlExec:
 
 @dataclass(frozen=True)
 class ManagedInstance:
-    """One managed instance (agent container) seen by discovery."""
+    """One managed instance (agent container) seen by discovery.
+
+    ``name`` is the dashboard address: the ``instance`` label for a valid
+    contract instance, else the container name. ``path`` is ``legacy`` or
+    ``contract`` (ADR 0014); the contract label wins when a container
+    carries both. ``note`` explains why a row is never polled: a
+    misconfigured contract container (bad instance name, missing or
+    privileged exec user) or a duplicated address. ``duplicate`` is true
+    when another container shares the address.
+    """
 
     name: str
     container_id: str
     raw_state: str
+    path: str = LEGACY_PATH
+    instance: str | None = None
+    exec_user: str | None = None
+    backend: str | None = None
+    note: str | None = None
+    duplicate: bool = False
 
     @property
     def state(self) -> str:
@@ -660,14 +705,38 @@ class ManagedInstance:
         return "running" if self.raw_state.strip().lower() == "running" else "not running"
 
 
+def validate_exec_user(exec_user: str) -> str:
+    """Return the ``docker exec --user`` for a contract instance, else raise.
+
+    The label must name a non-root user: empty, whitespace-carrying,
+    ``root`` and ``0`` are all rejected before any argv exists, and the
+    row is shown as misconfigured instead of polled.
+    """
+    if (
+        not isinstance(exec_user, str)
+        or not exec_user
+        or any(char.isspace() for char in exec_user)
+        or exec_user in ("root", "0")
+    ):
+        raise ValueError(f"invalid exec user: {exec_user!r}")
+    return exec_user
+
+
 def argv_list_instances() -> list[str]:
-    """Argv for discovery: list agent containers, running or exited."""
+    """Argv for discovery: list agent containers, running or exited.
+
+    Both label sets are listed at once (the filters are OR-ed): the legacy
+    role label and the contract label. The contract label wins per
+    container (see :func:`parse_ps_output`).
+    """
     return [
         "docker",
         "ps",
         "-a",
         "--filter",
         f"label={AGENT_ROLE_LABEL}",
+        "--filter",
+        f"label={CONTRACT_LABEL}",
         "--format",
         PS_FORMAT,
     ]
@@ -978,24 +1047,111 @@ def argv_attempt_events(container_id: str, issue: int | str, started: str) -> li
     ]
 
 
+def _misconfigured_note(instance: str, exec_user: str) -> str | None:
+    """The misconfiguration reason for a contract row, or none when valid.
+
+    Only the three dashboard-side misconfigurations are reported here: a
+    malformed instance name, a missing exec user, and a privileged exec
+    user (``root`` or ``0``). Anything deeper (a wrong contract major, an
+    agent that does not answer) is the producer's authority at poll time.
+    """
+    from agent_operator_contract import documents
+
+    if documents.validate_instance_name(instance) != []:
+        return f"misconfigured contract instance: invalid instance name {instance!r}"
+    if not exec_user:
+        return "misconfigured contract instance: missing exec-user label"
+    try:
+        validate_exec_user(exec_user)
+    except ValueError:
+        return f"misconfigured contract instance: invalid exec user {exec_user!r}"
+    return None
+
+
 def parse_ps_output(output: str) -> list[ManagedInstance]:
-    """Parse ``docker ps --format`` rows, dropping compose one-off containers."""
+    """Parse ``docker ps --format`` rows from :data:`PS_FORMAT`.
+
+    Compose one-off containers and the dashboard's own Offline Read helper
+    containers (marker label) are ignored. A row carrying the contract
+    label takes the contract path (the contract label wins over the legacy
+    role label); every other row keeps the legacy path. A contract row
+    with a malformed instance name, a missing exec user, or a privileged
+    exec user is kept as a misconfigured row that is never polled. Rows
+    sharing one address — including a legacy container name equal to a
+    contract instance name — are all marked duplicated and never polled.
+    """
     instances: list[ManagedInstance] = []
     for line in output.splitlines():
         if not line.strip():
             continue
         parts = line.split("\t")
-        if len(parts) != 4:
+        if len(parts) != 9:
             continue
-        container_id, name, raw_state, oneoff = (p.strip() for p in parts)
-        if oneoff == "True":
+        (
+            container_id,
+            name,
+            raw_state,
+            oneoff,
+            contract,
+            instance,
+            exec_user,
+            backend,
+            offline_marker,
+        ) = (p.strip() for p in parts)
+        if oneoff == "True" or offline_marker != "":
             continue
         name = name.removeprefix("/")
         if not name:
             continue
+        if contract == "":
+            instances.append(
+                ManagedInstance(
+                    name=name, container_id=container_id, raw_state=raw_state
+                )
+            )
+            continue
+        note = _misconfigured_note(instance, exec_user)
+        address = instance if note is None else name
         instances.append(
-            ManagedInstance(name=name, container_id=container_id, raw_state=raw_state)
+            ManagedInstance(
+                name=address,
+                container_id=container_id,
+                raw_state=raw_state,
+                path=CONTRACT_PATH,
+                instance=instance or None,
+                exec_user=exec_user or None,
+                backend=backend or None,
+                note=note,
+            )
         )
+    counts: dict[str, int] = {}
+    for inst in instances:
+        counts[inst.name] = counts.get(inst.name, 0) + 1
+    if any(count > 1 for count in counts.values()):
+        marked: list[ManagedInstance] = []
+        for inst in instances:
+            if counts[inst.name] > 1:
+                marked.append(
+                    ManagedInstance(
+                        name=inst.name,
+                        container_id=inst.container_id,
+                        raw_state=inst.raw_state,
+                        path=inst.path,
+                        instance=inst.instance,
+                        exec_user=inst.exec_user,
+                        backend=inst.backend,
+                        note=(
+                            inst.note
+                            or f"duplicated instance address {inst.name!r}: "
+                            "another container carries this address; "
+                            "neither is polled"
+                        ),
+                        duplicate=True,
+                    )
+                )
+            else:
+                marked.append(inst)
+        return marked
     return instances
 
 
@@ -1498,6 +1654,20 @@ class DockerGateway:
             timeout_error=ControlTimeoutError(
                 f"docker exec timed out after {self.control_exec_timeout:g} s"
             ),
+        )
+
+    async def contract_status(self, container_id: str, exec_user: str) -> ControlExec:
+        """Run one contract ``status`` poll against a container ID (never a name).
+
+        Exactly ``docker exec --user <exec-user> <container-id>
+        /usr/local/bin/agentctl --contract 1 status``: no TTY flag, no
+        stdin. The bound is the contract's read policy for ``status``
+        (10 s). The exit code is reported, never raised: the collector
+        classifies each exec into a poll outcome. A bad container ID or
+        exec user raises :class:`ValueError` before anything is spawned.
+        """
+        return await self.contract_exec(
+            container_id, ["status"], exec_user=exec_user, operation="status"
         )
 
     async def contract_exec(

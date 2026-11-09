@@ -13,13 +13,30 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from .collector import GOOD, InstancePoll, run_cycle
+from .collector import CONTRACT_MISMATCH, GOOD, InstancePoll, run_cycle
+from .contract_status import (
+    ContractDetail,
+    contract_headline,
+    contract_state_rank,
+    needs_operator,
+    read_contract_snapshot,
+)
 from .control import fleet_chips
 from .drawer import DrawerDetail, read_drawer
-from .gateway import ManagedInstance, validate_attempt_ref
+from .gateway import CONTRACT_PATH, LEGACY_PATH, ManagedInstance, validate_attempt_ref
 from .presentation import (
+    LIVE,
+    NOT_RUNNING,
+    RANK_IDLE,
+    RANK_OFFLINE,
+    RANK_UNREACHABLE,
+    RANK_WORKING,
+    STALE,
+    UNREACHABLE,
+    UNSUPPORTED,
     attention_rank,
     attention_rank_title,
+    build_headline,
     build_row_headline,
     format_age,
     reach_for_snapshot,
@@ -59,6 +76,12 @@ class FleetRow:
     # Command-state chips for the Intake cell, from the latest good
     # snapshot's ``control`` section only (spec 8.1).
     control_chips: tuple[str, ...] = ()
+    # Contract-path view model: the Fleet view's Reach, Status headline,
+    # Attention rank and backend for a contract instance. Legacy rows leave
+    # these as the defaults and render from ``detail`` instead.
+    path: str = LEGACY_PATH
+    backend: str | None = None
+    contract: ContractDetail | None = None
 
     @property
     def rank_title(self) -> str:
@@ -73,6 +96,9 @@ class _InstanceEntry:
     name: str
     container_id: str
     container_state: str  # "running" or "not running"
+    path: str = LEGACY_PATH
+    backend: str | None = None
+    note: str | None = None
     snapshot: dict[str, Any] | None = None
     snapshot_at: float | None = None
     outcome_kind: str | None = None
@@ -121,14 +147,17 @@ class FleetState:
     ) -> None:
         """Replace rows from discovery plus this cycle's telemetry.
 
-        A recreated container (changed container ID) drops its old snapshot.
-        Instances the discovery no longer lists disappear.
+        Entries are keyed by container ID: a recreated container (changed
+        container ID) drops its old snapshot, duplicated addresses keep
+        one row per container, and instances the discovery no longer lists
+        disappear. Polls are keyed by container ID too, so duplicated
+        addresses never share a poll.
         """
         async with self._lock:
             entries: dict[str, _InstanceEntry] = {}
             for inst in discovered:
-                previous = self._entries.get(inst.name)
-                if previous is not None and previous.container_id == inst.container_id:
+                previous = self._entries.get(inst.container_id)
+                if previous is not None and previous.name == inst.name:
                     entry = previous
                 else:
                     entry = _InstanceEntry(
@@ -136,9 +165,13 @@ class FleetState:
                         container_id=inst.container_id,
                         container_state=inst.state,
                     )
+                entry.name = inst.name
                 entry.container_id = inst.container_id
                 entry.container_state = inst.state
-                poll = polls.get(inst.name)
+                entry.path = inst.path
+                entry.backend = inst.backend
+                entry.note = inst.note
+                poll = polls.get(inst.container_id)
                 if poll is not None:
                     entry.outcome_kind = poll.outcome.kind
                     entry.outcome_reason = poll.outcome.reason
@@ -146,7 +179,7 @@ class FleetState:
                     if poll.outcome.kind == GOOD and poll.snapshot is not None:
                         entry.snapshot = poll.snapshot
                         entry.snapshot_at = poll.outcome.at
-                entries[inst.name] = entry
+                entries[inst.container_id] = entry
             self._entries = entries
             self.last_error = None
             self._publish()
@@ -190,6 +223,10 @@ class FleetState:
 
     @staticmethod
     def _render(entry: _InstanceEntry, now: float, poll_interval: float) -> FleetRow:
+        if entry.note is not None:
+            return FleetState._render_noted(entry)
+        if entry.path == CONTRACT_PATH:
+            return FleetState._render_contract(entry, now)
         reach = reach_for_snapshot(entry.container_state, entry.outcome_kind, entry.snapshot)
         has_snapshot = entry.snapshot is not None
         detail = read_snapshot(
@@ -248,6 +285,120 @@ class FleetState:
             control_raw_missing=control_raw_missing,
             control_age_text=control_age_text,
             control_chips=control_chips,
+            path=entry.path,
+            backend=entry.backend,
+            contract=None,
+        )
+
+    @staticmethod
+    def _render_noted(entry: _InstanceEntry) -> FleetRow:
+        """A row that is never polled: misconfigured or duplicated.
+
+        A running row reads as unreachable with the reason as its headline,
+        so it sorts with the rows needing the operator; a stopped row keeps
+        its ``not running`` reach with the reason as its headline.
+        """
+        assert entry.note is not None
+        if entry.container_state == "running":
+            reach = UNREACHABLE
+            headline = f"Unreachable: {entry.note}"
+            rank = RANK_UNREACHABLE
+        else:
+            reach = NOT_RUNNING
+            headline = entry.note
+            rank = RANK_OFFLINE
+        return FleetRow(
+            name=entry.name,
+            state=entry.container_state,
+            container_id=entry.container_id,
+            reach=reach,
+            headline=headline,
+            snapshot_age=None,
+            age_text=None,
+            has_snapshot=False,
+            rank=rank,
+            path=entry.path,
+            backend=entry.backend,
+        )
+
+    @staticmethod
+    def _render_contract(entry: _InstanceEntry, now: float) -> FleetRow:
+        """A contract-path row: reach, headline, rank and backend.
+
+        Legacy view models (drawer, live link, control chips) do not apply
+        to contract snapshots, so they stay empty; the contract detail
+        carries what the Fleet view shows.
+        """
+        reach = reach_for_snapshot(
+            entry.container_state, entry.outcome_kind, entry.snapshot
+        )
+        has_snapshot = entry.snapshot is not None
+        detail = (
+            read_contract_snapshot(entry.snapshot) if has_snapshot else None
+        )
+        if detail is None:
+            detail = ContractDetail()
+        backend = entry.backend or detail.backend
+        age: float | None = None
+        age_text: str | None = None
+        if has_snapshot and entry.snapshot_at is not None:
+            age = max(0.0, now - entry.snapshot_at)
+            age_text = format_age(age)
+        if entry.outcome_kind == CONTRACT_MISMATCH:
+            headline = entry.outcome_reason
+        elif reach == UNREACHABLE:
+            headline = f"Unreachable: {entry.outcome_reason}"
+        elif reach == NOT_RUNNING:
+            headline = "Not running"
+        elif reach == UNSUPPORTED:
+            headline = entry.outcome_reason or "contract not supported"
+        elif detail.has_snapshot:
+            derived = contract_headline(detail)
+            if derived is not None:
+                headline = derived
+            else:
+                headline = build_headline(
+                    LIVE, reason="", age_text=None, has_snapshot=True
+                )
+        else:
+            headline = build_headline(
+                reach,
+                reason=entry.outcome_reason,
+                age_text=age_text,
+                has_snapshot=has_snapshot,
+            )
+        if reach == UNREACHABLE:
+            rank = RANK_UNREACHABLE
+        elif detail.has_snapshot and needs_operator(detail):
+            rank = RANK_UNREACHABLE
+        elif detail.has_snapshot:
+            state_rank = contract_state_rank(detail.instance_state)
+            rank = state_rank if state_rank is not None else RANK_WORKING
+        elif reach == LIVE:
+            rank = RANK_WORKING
+        elif reach == STALE:
+            rank = RANK_WORKING if has_snapshot else RANK_IDLE
+        else:
+            rank = RANK_OFFLINE
+        return FleetRow(
+            name=entry.name,
+            state=entry.container_state,
+            container_id=entry.container_id,
+            reach=reach,
+            headline=headline,
+            snapshot_age=age,
+            age_text=age_text,
+            has_snapshot=has_snapshot,
+            rank=rank,
+            detail=None,
+            live_url=None,
+            live_issue=None,
+            control_raw=None,
+            control_raw_missing=True,
+            control_chips=(),
+            path=entry.path,
+            backend=backend,
+            contract=detail,
         )
 
 
