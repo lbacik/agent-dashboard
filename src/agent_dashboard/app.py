@@ -27,6 +27,7 @@ from .activity import (
     call_preview,
     elapsed_text,
     find_activity,
+    parse_ts,
     result_preview,
 )
 from .attempt_log import (
@@ -96,6 +97,7 @@ from .overview import (
     read_full_history,
     summarize_instance,
 )
+from .presentation import format_age
 from .progress import progress_series, read_progress, read_stopped_progress
 from .range_stats import (
     COOKIE_MAX_AGE,
@@ -526,9 +528,32 @@ def create_app(
                 },
             )
 
+        def contract_page(contract, **extra) -> Response:
+            return templates.TemplateResponse(
+                request,
+                "_activity_contract.html",
+                {
+                    **context(request),
+                    "name": name,
+                    "row": row,
+                    "summary_id": summary_id,
+                    "contract": contract,
+                    **extra,
+                },
+            )
+
         drawer = row.drawer if row is not None else None
         if is_contract_row(row):
-            return page(error=CONTRACT_WIDGET_MESSAGE)
+            contract = row.contract if row is not None else None
+            current = contract.current if contract is not None else None
+            if current is None:
+                return contract_page(None, error="No attempt in progress.")
+            age_text: str | None = None
+            seen = parse_ts(current.last_activity_at)
+            if seen is not None:
+                age = max(0.0, datetime.now(UTC).timestamp() - seen.timestamp())
+                age_text = f"{format_age(age)} ago"
+            return contract_page(contract, error=None, last_activity_age=age_text)
         if row is None or row.state != "running" or drawer is None:
             return page(error="Instance is not running.")
         issue = (

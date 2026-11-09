@@ -20,6 +20,7 @@ from .contract_status import (
     contract_state_rank,
     needs_operator,
     read_contract_snapshot,
+    stale_suffix,
 )
 from .control import fleet_chips
 from .drawer import DrawerDetail, read_drawer
@@ -226,7 +227,7 @@ class FleetState:
         if entry.note is not None:
             return FleetState._render_noted(entry)
         if entry.path == CONTRACT_PATH:
-            return FleetState._render_contract(entry, now)
+            return FleetState._render_contract(entry, now, poll_interval)
         reach = reach_for_snapshot(entry.container_state, entry.outcome_kind, entry.snapshot)
         has_snapshot = entry.snapshot is not None
         detail = read_snapshot(
@@ -322,19 +323,26 @@ class FleetState:
         )
 
     @staticmethod
-    def _render_contract(entry: _InstanceEntry, now: float) -> FleetRow:
+    def _render_contract(
+        entry: _InstanceEntry, now: float, poll_interval: float = 5.0
+    ) -> FleetRow:
         """A contract-path row: reach, headline, rank and backend.
 
         Legacy view models (drawer, live link, control chips) do not apply
         to contract snapshots, so they stay empty; the contract detail
-        carries what the Fleet view shows.
+        carries what the Fleet view and the drawer show. Section staleness
+        never changes reach: it only suffixes the Status headline.
         """
         reach = reach_for_snapshot(
             entry.container_state, entry.outcome_kind, entry.snapshot
         )
         has_snapshot = entry.snapshot is not None
         detail = (
-            read_contract_snapshot(entry.snapshot) if has_snapshot else None
+            read_contract_snapshot(
+                entry.snapshot, now=now, poll_interval=poll_interval
+            )
+            if has_snapshot
+            else None
         )
         if detail is None:
             detail = ContractDetail()
@@ -367,6 +375,8 @@ class FleetState:
                 age_text=age_text,
                 has_snapshot=has_snapshot,
             )
+        if detail.has_snapshot:
+            headline += stale_suffix(detail)
         if reach == UNREACHABLE:
             rank = RANK_UNREACHABLE
         elif detail.has_snapshot and needs_operator(detail):
