@@ -71,8 +71,6 @@ from .charts import (
     undated_count,
 )
 from .config import Settings
-from .control import compute_control_mode, control_slug
-from .control_routes import register_control_routes
 from .contract_history import (
     apply_contract_range,
     collect_contract_history,
@@ -80,6 +78,8 @@ from .contract_history import (
     contract_legend,
     counts_by_label,
 )
+from .control import compute_control_mode, control_slug
+from .control_routes import register_control_routes
 from .cost_summary import summarize_cost
 from .fleet import FleetState, poll_forever
 from .gateway import (
@@ -114,12 +114,14 @@ from .range_stats import (
     COOKIE_MAX_AGE,
     COOKIE_NAME,
     FLEET_COOKIE_NAME,
-    PRESETS as RANGE_PRESETS,
     RangeSpec,
     apply_range,
     day_strip,
     parse_cookie,
     parse_range,
+)
+from .range_stats import (
+    PRESETS as RANGE_PRESETS,
 )
 
 BASE_DIR = Path(__file__).resolve().parent

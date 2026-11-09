@@ -134,9 +134,20 @@ def test_every_argv_producer_is_pinned():
         "argv_copy_logs",
         "argv_copy_run",
     }
-    for argv in producers.values():
+    assert producers["argv_contract_attempts_list"] == [
+        "attempts",
+        "list",
+        "--limit",
+        "100",
+    ]
+    for name, argv in producers.items():
         assert isinstance(argv, list)
         assert all(isinstance(part, str) for part in argv)
+        if name == "argv_contract_attempts_list":
+            # Agentctl-level argv: the gateway wraps it in the pinned
+            # ``docker exec`` via ``argv_contract_exec`` (see the
+            # ``contract_attempts_list`` tests in test_contract_history).
+            continue
         assert argv[0] == "docker"
 
 

@@ -619,6 +619,11 @@ async def collect_contract_history(
         cursor = page.next_cursor
     else:
         capped = len(fetched) >= cap
+    if len(fetched) > cap:
+        # The final page arrived cursor-less past the cap: keep only the
+        # newest ``cap`` Attempts with the visible note.
+        fetched = fetched[:cap]
+        capped = True
     cut = apply_contract_range(tuple(fetched), spec, at)
     return ContractHistoryResult(
         ok=True,

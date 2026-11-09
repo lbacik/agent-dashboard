@@ -706,4 +706,9 @@ def test_drawer_shows_the_contract_capsule_without_legacy_widgets():
     assert "Contract status" in page.text
     assert "coding-agent" in page.text
     assert "Idle: waiting for a ready issue" in page.text
-    assert "Logs" not in page.text
+    # Attempt history and statistics are available on the contract path;
+    # control and activity stay legacy-only.
+    assert "/instances/web-1/history" in page.text
+    assert "/instances/web-1/stats" in page.text
+    assert "/instances/web-1/control" not in page.text
+    assert "/instances/web-1/activity" not in page.text
