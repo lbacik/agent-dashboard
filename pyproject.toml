@@ -15,6 +15,10 @@ dependencies = [
   "jinja2>=3.1",
   "httpx>=0.27",
   "argon2-cffi>=25.1.0",
+  # Contract path (ADR 0014): pinned tag; only the library's pure parts are
+  # used (DTOs/validation, argv grammar, envelope classification, capability
+  # and request-ID checks). Execution stays in the gateway's async runner.
+  "agent-operator-contract @ git+https://github.com/lbacik/agent-operator-contract.git@v1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -29,6 +33,11 @@ agent-dashboard = "agent_dashboard.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_dashboard"]
+
+[tool.hatch.metadata]
+# Allowed: the contract path pins agent-operator-contract to its v1.0.0 tag
+# (ADR 0014) as a direct git reference.
+allow-direct-references = true
 
 [tool.uv]
 # Transitive via httpx. Floor excludes the compromised emSign ECC Root CA - G3

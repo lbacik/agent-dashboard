@@ -19,6 +19,7 @@ from agent_dashboard.gateway import (
     argv_attempt_log,
     argv_attempt_tail_log,
     argv_command_status,
+    argv_contract_exec,
     argv_control,
     argv_copy_logs,
     argv_copy_run,
@@ -73,6 +74,7 @@ def test_every_argv_producer_is_pinned():
         "argv_command_status": argv_command_status(
             "abc123", "dash-0123456789abcdef"
         ),
+        "argv_contract_exec": argv_contract_exec("abc123", ["status"]),
         "argv_read_file": argv_read_file(
             "abc123", 98, "2026-09-27T16:33:43.385090Z", "0003_tool_call.json"
         ),
@@ -89,6 +91,7 @@ def test_every_argv_producer_is_pinned():
         "argv_telemetry",
         "argv_control",
         "argv_command_status",
+        "argv_contract_exec",
         "argv_attempt_history",
         "argv_attempt_events",
         "argv_attempt_log",
