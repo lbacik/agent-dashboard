@@ -35,7 +35,7 @@
 {% endif %}
 <table class="fleet history">
   <thead>
-    <tr><th>Issue</th><th>Started</th><th>Finished</th><th>Duration</th><th>Lifecycle</th><th>Outcome</th><th>Delivery</th><th>Attention</th><th>Sealed</th><th>Cost</th><th>Tokens</th></tr>
+    <tr><th>Issue</th><th>Started</th><th>Finished</th><th>Duration</th><th>Lifecycle</th><th>Outcome</th><th>Delivery</th><th>Attention</th><th>Sealed</th><th>Cost</th><th>Input</th><th>Cache read</th><th>Cache creation</th><th>Output</th></tr>
   </thead>
   <tbody>
     {% for attempt in result.summaries %}
@@ -51,6 +51,9 @@
       <td>{{ attempt.sealed_text }}</td>
       <td>{{ attempt.cost_text }}</td>
       <td>{{ attempt.input_text }}</td>
+      <td>{{ attempt.cache_read_text }}</td>
+      <td>{{ attempt.cache_creation_text }}</td>
+      <td>{{ attempt.output_text }}</td>
     </tr>
     {% endfor %}
   </tbody>
