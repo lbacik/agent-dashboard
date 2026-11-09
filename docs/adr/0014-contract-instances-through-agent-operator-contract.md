@@ -21,7 +21,9 @@ From the library only its pure parts are used:
 - envelope parsing and classification by `error.code`, with the exit code
   as the fallback for malformed stdout;
 - capability checks (`required_capability`, the identity's advertised set);
-- request-ID generation and validation.
+- request-ID generation and validation;
+- the timeout policy (`client.timeout_for`, a pure operation-to-seconds
+  mapping with no executor coupling).
 
 Execution, timeouts, kill-and-reap and concurrency stay in the gateway's
 async runner. The library's client part couples its argv shape to a blocking

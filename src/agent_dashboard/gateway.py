@@ -888,7 +888,7 @@ def argv_contract_exec(
     parts = list(agentctl_argv)
     if not parts or any(not isinstance(part, str) or not part for part in parts):
         raise ValueError(f"invalid contract argv: {agentctl_argv!r}")
-    if parts[0] == "--contract":
+    if any(part == "--contract" or part.startswith("--contract=") for part in parts):
         raise ValueError(
             "invalid contract argv: the gateway adds '--contract <major>' itself"
         )

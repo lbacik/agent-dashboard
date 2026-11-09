@@ -66,6 +66,10 @@ def test_contract_argv_rejects_bad_values():
     with pytest.raises(ValueError):
         argv_contract_exec("abc123", ["--contract", "1", "status"])
     with pytest.raises(ValueError):
+        argv_contract_exec("abc123", ["status", "--contract", "1"])
+    with pytest.raises(ValueError):
+        argv_contract_exec("abc123", ["status", "--contract=1"])
+    with pytest.raises(ValueError):
         argv_contract_exec("abc123", ["status", ""])
     with pytest.raises(ValueError):
         argv_contract_exec("abc123", ["status"], exec_user="has space")
