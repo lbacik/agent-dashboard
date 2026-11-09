@@ -974,6 +974,30 @@ def argv_contract_exec(
     ]
 
 
+def argv_contract_attempts_list(
+    limit: int = 100, before: str | None = None
+) -> list[str]:
+    """Agentctl argv for one ``attempts list`` page (without ``--contract``).
+
+    ``limit`` is the page size (a positive int); ``before`` is the opaque
+    server cursor for the next page (a non-empty string without whitespace),
+    or ``None`` for the first page. Anything else raises :class:`ValueError`
+    before any argv exists, so the gateway only ever sends the pinned
+    ``attempts list --limit 100 [--before <cursor>]`` shape.
+    """
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError(f"invalid attempts list limit: {limit!r}")
+    if before is not None:
+        if not isinstance(before, str) or not before:
+            raise ValueError(f"invalid attempts list cursor: {before!r}")
+        if any(char.isspace() for char in before):
+            raise ValueError(f"invalid attempts list cursor: {before!r}")
+    argv = ["attempts", "list", "--limit", str(limit)]
+    if before is not None:
+        argv += ["--before", before]
+    return argv
+
+
 def argv_attempt_history(container_id: str) -> list[str]:
     """Argv for one Attempt log history exec: every attempt summary at once.
 
@@ -1703,6 +1727,34 @@ class DockerGateway:
             timeout_error=ControlTimeoutError(
                 f"docker exec timed out after {effective:g} s"
             ),
+        )
+
+    async def contract_attempts_list(
+        self,
+        container_id: str,
+        exec_user: str,
+        *,
+        limit: int = 100,
+        before: str | None = None,
+        timeout: float | None = None,
+    ) -> ControlExec:
+        """Run one ``attempts list --limit 100 [--before <cursor>]`` page.
+
+        The argv is pinned here from validated values (contract section 3.1,
+        no TTY, no stdin); the bound is the contract's ``attempts-list``
+        policy (15 s) unless ``timeout`` overrides it with a positive number
+        of seconds. The exit code is reported, never raised: the contract
+        history reader classifies each page into attempts or a clear
+        message. A bad container ID, exec user, limit or cursor raises
+        :class:`ValueError` before anything is spawned.
+        """
+        agentctl_argv = argv_contract_attempts_list(limit=limit, before=before)
+        return await self.contract_exec(
+            container_id,
+            agentctl_argv,
+            exec_user=exec_user,
+            operation="attempts-list",
+            timeout=timeout,
         )
 
     def _claim_control(self, container_id: str) -> None:

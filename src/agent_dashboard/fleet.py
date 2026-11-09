@@ -83,6 +83,7 @@ class FleetRow:
     path: str = LEGACY_PATH
     backend: str | None = None
     contract: ContractDetail | None = None
+    exec_user: str | None = None
 
     @property
     def rank_title(self) -> str:
@@ -99,6 +100,7 @@ class _InstanceEntry:
     container_state: str  # "running" or "not running"
     path: str = LEGACY_PATH
     backend: str | None = None
+    exec_user: str | None = None
     note: str | None = None
     snapshot: dict[str, Any] | None = None
     snapshot_at: float | None = None
@@ -171,6 +173,7 @@ class FleetState:
                 entry.container_state = inst.state
                 entry.path = inst.path
                 entry.backend = inst.backend
+                entry.exec_user = inst.exec_user
                 entry.note = inst.note
                 poll = polls.get(inst.container_id)
                 if poll is not None:
