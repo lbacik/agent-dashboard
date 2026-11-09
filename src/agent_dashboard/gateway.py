@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import re
+import secrets
 import tarfile
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -1336,6 +1338,275 @@ def argv_copy_run(container_id: str, issue: int | str, started: str) -> list[str
     ]
 
 
+#: Offline Read for stopped contract instances (spec sections 3.2 and 12,
+#: ADR 0014): the stopped container is never started. The dashboard
+#: re-inspects it (``docker inspect``) and runs its image as a throwaway
+#: helper (``docker run --rm``) with no network (``--network none``), every
+#: ``type=volume`` mount re-mounted read-only at the same destination, and
+#: ``agentctl --contract 1 --offline status`` as the entrypoint command. A
+#: running container is never read offline: the live engine owns the volume.
+#: Bind mounts are never re-mounted (only durable named volumes cross into
+#: the helper); ephemeral mount types carry no durable state and are skipped
+#: too.
+
+#: A stopped image ID is the daemon's content digest, never a tag.
+OFFLINE_IMAGE_RE = re.compile(r"sha256:[0-9a-fA-F]{64}\Z")
+
+#: A durable volume name crossing into the helper: no comma (the ``--mount``
+#: flag is comma-separated), no path separator, no whitespace.
+OFFLINE_VOLUME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
+
+#: A dashboard-generated helper container name: a valid Docker container name
+#: (never a shell, so the argv carries only this validated value).
+OFFLINE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
+
+#: Container statuses with no live engine (spec section 12): any other
+#: status (``paused``, ``restarting``, ``removing``, or an unrecognized
+#: value) keeps the Offline Read refused, as does a missing state.
+OFFLINE_STOPPED_STATUSES = frozenset({"created", "dead", "exited"})
+
+#: Bound for the best-effort ``docker rm -f`` of a timed-out helper: the
+#: original timeout still raises, whatever the cleanup does.
+OFFLINE_CLEANUP_TIMEOUT = 5.0
+
+
+@dataclass(frozen=True)
+class OfflineMount:
+    """One durable volume re-mounted read-only into the Offline Read helper."""
+
+    source: str
+    destination: str
+
+
+@dataclass(frozen=True)
+class OfflineInspect:
+    """What ``docker inspect`` says about one stopped container.
+
+    ``running`` is true unless the container is explicitly stopped (an
+    unknown or missing state reads as running: the read is refused rather
+    than risk the live engine's volume). ``finished_at`` is the daemon's
+    ``State.FinishedAt`` reading (``""`` when the daemon reports none); the
+    poll loop keys one Offline Read per stop on it. ``image`` is the raw
+    digest and ``mounts`` holds only the ``type=volume`` mounts.
+    """
+
+    running: bool
+    finished_at: str
+    image: str
+    mounts: tuple[OfflineMount, ...]
+
+
+def validate_offline_image(image: str) -> str:
+    """Return the stopped image's digest, or raise before any argv exists.
+
+    Only a ``sha256:<hex>`` digest is accepted: a tag (or anything else) is
+    not a stable identity for the helper to run.
+    """
+    if not isinstance(image, str) or OFFLINE_IMAGE_RE.fullmatch(image) is None:
+        raise ValueError(f"invalid offline image: {image!r}")
+    return image
+
+
+def validate_offline_volume_name(name: str) -> str:
+    """Return the volume name crossing into the helper, or raise.
+
+    The name lands in a comma-separated ``--mount`` value, so anything that
+    could split the value (a comma, a slash, whitespace) is rejected before
+    any argv exists.
+    """
+    if not isinstance(name, str) or OFFLINE_VOLUME_RE.fullmatch(name) is None:
+        raise ValueError(f"invalid offline volume name: {name!r}")
+    return name
+
+
+def validate_offline_destination(destination: str) -> str:
+    """Return the helper's mount destination, or raise before any argv exists.
+
+    The destination lands in a comma-separated ``--mount`` value at the same
+    path the stopped container used, so it must be absolute with no comma
+    and no whitespace.
+    """
+    if (
+        not isinstance(destination, str)
+        or not destination
+        or not destination.startswith("/")
+        or "," in destination
+        or any(char.isspace() for char in destination)
+    ):
+        raise ValueError(f"invalid offline mount destination: {destination!r}")
+    return destination
+
+
+def validate_offline_helper_name(helper_name: str) -> str:
+    """Return the helper container name, or raise before any argv exists.
+
+    The name is interpolated into the ``docker run`` argv and the
+    best-effort ``docker rm -f`` cleanup, so only valid Docker container
+    names pass.
+    """
+    if not isinstance(helper_name, str) or OFFLINE_NAME_RE.fullmatch(helper_name) is None:
+        raise ValueError(f"invalid offline helper name: {helper_name!r}")
+    return helper_name
+
+
+def make_offline_helper_name() -> str:
+    """Generate one dashboard-owned helper container name.
+
+    The prefix names the owner; the random suffix keeps concurrent helpers
+    apart. Discovery ignores the helper by its marker label, and ``--rm``
+    removes it when the read finishes.
+    """
+    return f"agent-dashboard-offline-{secrets.token_hex(8)}"
+
+
+def argv_inspect_offline(container_id: str) -> list[str]:
+    """Argv for re-inspecting a stopped container before an Offline Read.
+
+    The fresh ``docker inspect`` (spec section 12) decides liveness, yields
+    the finish time that keys one read per stop, the image digest and the
+    durable mounts. Besides the validated container ID the argv carries only
+    the fixed subcommand.
+    """
+    validate_container_id(container_id)
+    return ["docker", "inspect", container_id]
+
+
+def argv_offline_status(
+    image: str,
+    mounts: Sequence[OfflineMount],
+    exec_user: str,
+    helper_name: str,
+) -> list[str]:
+    """Argv for one Offline Read ``status`` through a throwaway helper.
+
+    The stopped image runs removed (``--rm``) with no network
+    (``--network none``) as the instance's exec user, every volume
+    re-mounted read-only at the same destination, and
+    ``agentctl --contract 1 --offline status`` as the entrypoint command.
+    The helper carries the dashboard-generated name plus the marker label
+    discovery skips, so it is never mistaken for a managed instance. Every
+    value is validated first (the image digest, each volume name and
+    destination, the exec user, the helper name): a bad value raises
+    :class:`ValueError` before any argv exists, and the read is reported as
+    unavailable with that reason instead of running.
+    """
+    validate_offline_image(image)
+    validate_exec_user(exec_user)
+    validate_offline_helper_name(helper_name)
+    if isinstance(mounts, (str, bytes)) or not isinstance(mounts, Sequence):
+        raise ValueError(f"invalid offline mounts: {mounts!r}")
+    checked = list(mounts)
+    for mount in checked:
+        if not isinstance(mount, OfflineMount):
+            raise ValueError(f"invalid offline mount: {mount!r}")
+        validate_offline_volume_name(mount.source)
+        validate_offline_destination(mount.destination)
+    argv = [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--user",
+        exec_user,
+        "--name",
+        helper_name,
+        "--label",
+        f"{OFFLINE_READ_MARKER_LABEL}=1",
+        *[
+            part
+            for mount in checked
+            for part in (
+                "--mount",
+                f"type=volume,src={mount.source},dst={mount.destination},readonly",
+            )
+        ],
+        "--entrypoint",
+        AGENTCTL_PATH,
+        image,
+        "--contract",
+        str(CONTRACT_MAJOR),
+        "--offline",
+        "status",
+    ]
+    return argv
+
+
+def argv_offline_cleanup(helper_name: str) -> list[str]:
+    """Argv for the best-effort removal of a timed-out Offline Read helper.
+
+    A ``docker run`` whose bound lapsed may still be starting (or stuck)
+    under its helper name; the gateway removes it by the validated name so
+    no helper outlives its read. Only the validated name varies.
+    """
+    validate_offline_helper_name(helper_name)
+    return ["docker", "rm", "-f", helper_name]
+
+
+def parse_inspect_offline(data: bytes) -> OfflineInspect:
+    """Parse one ``docker inspect`` document into an Offline Read target.
+
+    Yields the running state (unknown or missing reads as running, so the
+    read is refused rather than risk the live engine's volume), the finish
+    time that keys one read per stop (``""`` when the daemon reports none),
+    the raw image digest, and the ``type=volume`` mounts. Bind mounts are
+    never re-mounted into the helper and are skipped here, as are ephemeral
+    mount types and entries missing their source or destination. Raises
+    :class:`GatewayError` when the bytes are not a one-entry inspect array.
+    """
+    try:
+        entries = json.loads(data.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise GatewayError(f"docker inspect output is not JSON: {exc}") from exc
+    if (
+        not isinstance(entries, list)
+        or not entries
+        or not isinstance(entries[0], dict)
+    ):
+        raise GatewayError("docker inspect output is not an array")
+    entry = entries[0]
+    state = entry.get("State")
+    if not isinstance(state, dict):
+        running = True
+    elif state.get("Running") is True or state.get("Paused") is True:
+        running = True
+    else:
+        status = state.get("Status")
+        if isinstance(status, str) and status:
+            running = status not in OFFLINE_STOPPED_STATUSES
+        else:
+            running = state.get("Running") is not False
+    finished = state.get("FinishedAt") if isinstance(state, dict) else None
+    finished_at = finished if isinstance(finished, str) else ""
+    image = entry.get("Image")
+    raw_mounts = entry.get("Mounts")
+    mounts: list[OfflineMount] = []
+    if isinstance(raw_mounts, list):
+        for item in raw_mounts:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("Type", "")).lower() != "volume":
+                continue
+            name = item.get("Name")
+            source = (
+                name
+                if isinstance(name, str) and name
+                else item.get("Source")
+            )
+            destination = item.get("Destination")
+            if not isinstance(source, str) or not source:
+                continue
+            if not isinstance(destination, str) or not destination:
+                continue
+            mounts.append(OfflineMount(source, destination))
+    return OfflineInspect(
+        running=running,
+        finished_at=finished_at,
+        image=image if isinstance(image, str) else "",
+        mounts=tuple(mounts),
+    )
+
+
 @dataclass(frozen=True)
 class FileResult:
     """One Evidence file read: ``content`` (up to the cap), its header size,
@@ -1704,6 +1975,82 @@ class DockerGateway:
                 f"docker exec timed out after {effective:g} s"
             ),
         )
+
+    async def inspect_offline(self, container_id: str) -> OfflineInspect:
+        """Re-inspect one stopped container for an Offline Read (never a start).
+
+        Runs the pinned ``docker inspect`` argv and parses the running
+        state, the finish time, the image digest and the ``type=volume``
+        mounts (spec section 12). A bad container ID or an unparsable
+        document raises :class:`ValueError`/:class:`GatewayError` before
+        anything runs; a nonzero exit or a lapsed bound raises
+        :class:`GatewayError` (the read is retried next cycle).
+        """
+        proc = await self._run(argv_inspect_offline(container_id))
+        stdout, stderr = await _bounded_wait(
+            proc,
+            proc.communicate(),
+            self.timeout,
+            TelemetryTimeoutError,
+            f"docker inspect timed out after {self.timeout:g} s",
+        )
+        if proc.returncode != 0:
+            detail = stderr.decode(errors="replace").strip()
+            reason = detail or f"docker inspect exited with status {proc.returncode}"
+            raise GatewayError(reason)
+        return parse_inspect_offline(stdout)
+
+    async def offline_status(
+        self,
+        image: str,
+        mounts: Sequence[OfflineMount],
+        exec_user: str,
+        *,
+        helper_name: str | None = None,
+    ) -> ControlExec:
+        """Run one Offline Read ``status`` through a throwaway helper container.
+
+        The stopped image runs removed with no network, every volume
+        re-mounted read-only and the instance's exec user (see
+        :func:`argv_offline_status`). The bound is the contract's read
+        policy for ``status`` (10 s). Exit codes are reported, never raised:
+        the collector classifies each exec into a poll outcome. A bad value
+        raises :class:`ValueError` before anything is spawned (the read is
+        reported as unavailable with that reason). On a lapsed bound the
+        helper is removed best-effort (``docker rm -f``) and
+        :class:`ControlTimeoutError` raises: killing the ``docker run``
+        client does not stop the helper, so the removal keeps no helper
+        past its read.
+        """
+        name = (
+            make_offline_helper_name()
+            if helper_name is None
+            else validate_offline_helper_name(helper_name)
+        )
+        argv = argv_offline_status(image, mounts, exec_user, name)
+        effective = contract_client.timeout_for("status")
+        try:
+            return await self._process_runner.run(
+                argv,
+                timeout=effective,
+                timeout_error=ControlTimeoutError(
+                    f"docker run timed out after {effective:g} s"
+                ),
+            )
+        except ControlTimeoutError:
+            cleanup = argv_offline_cleanup(name)
+            try:
+                await self._process_runner.run(
+                    cleanup,
+                    timeout=OFFLINE_CLEANUP_TIMEOUT,
+                    timeout_error=ControlTimeoutError(
+                        "docker rm timed out "
+                        f"after {OFFLINE_CLEANUP_TIMEOUT:g} s"
+                    ),
+                )
+            except Exception:
+                pass
+            raise
 
     def _claim_control(self, container_id: str) -> None:
         """Take the per-container control slot, or raise :class:`ControlBusyError`.

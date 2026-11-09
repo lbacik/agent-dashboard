@@ -4,9 +4,11 @@ Each cycle discovers the fleet, then runs one exec against every running
 container (at most one exec in flight per instance, at most
 ``max_concurrent_execs`` overall): legacy instances keep ``telemetry``
 v1, while contract-path instances poll with ``agentctl --contract 1
-status`` as their labelled exec user (ADR 0014). Misconfigured and
-duplicated rows are never polled. Each exec is classified into a poll
-outcome:
+status`` as their labelled exec user (ADR 0014). Stopped contract-path
+instances are read offline instead (``docker exec`` fails on stopped
+containers): one Offline Read ``status`` per stopped instance per stop,
+through the same shared semaphore. Misconfigured and duplicated rows are
+never polled. Each exec is classified into a poll outcome:
 
 - exit 0 with a JSON snapshot -> good snapshot;
 - a JSON error object -> its ``code`` (``agent_unreachable``,
@@ -20,6 +22,11 @@ snapshot; ``agent_unreachable``, Docker exits 125-127 and timeouts to
 agent unreachable; ``internal`` and malformed stdout to snapshot failed;
 ``contract_mismatch`` to the contract-mismatch outcome (whose reason
 names ``details.supported``); ``unsupported`` to unsupported operation.
+
+An Offline Read whose helper is refused (``rejected`` with
+``details.reason`` ``instance_running``: the container started between
+inspection and the run) maps to the instance-started outcome: the row
+renders "instance started, refresh" and waits for the next discovery.
 """
 
 from __future__ import annotations
@@ -61,6 +68,17 @@ SNAPSHOT_FAILED = "snapshot_failed"
 NOT_SUPPORTED = "not_supported"
 TIMEOUT = "timeout"
 CONTRACT_MISMATCH = "contract_mismatch"
+INSTANCE_STARTED = "instance_started"
+
+#: Headline for the instance-started outcome: the stopped container started
+#: between inspection and its Offline Read, so the row waits for the next
+#: discovery (when the running poll takes over).
+INSTANCE_STARTED_REASON = "instance started, refresh"
+
+#: Headline prefix when the Offline Read cannot run: the image digest, a
+#: volume name or a mount destination failed validation before any helper
+#: was started, and the suffix names the offending value.
+OFFLINE_UNAVAILABLE_PREFIX = "offline read unavailable: "
 
 POLL_OUTCOME_KINDS = frozenset(
     {
@@ -71,6 +89,7 @@ POLL_OUTCOME_KINDS = frozenset(
         NOT_SUPPORTED,
         TIMEOUT,
         CONTRACT_MISMATCH,
+        INSTANCE_STARTED,
     }
 )
 
@@ -88,10 +107,16 @@ class PollOutcome:
 
 @dataclass(frozen=True)
 class InstancePoll:
-    """Everything one cycle learned about one managed instance."""
+    """Everything one cycle learned about one managed instance.
+
+    ``offline_key`` is the finish time of the stop an Offline Read belongs
+    to (``None`` for every other poll): the fleet records it so the loop
+    runs one Offline Read ``status`` per stopped instance per stop.
+    """
 
     outcome: PollOutcome
     snapshot: dict[str, Any] | None
+    offline_key: str | None = None
 
 
 def _outcome(kind: str, reason: str, now: float) -> PollOutcome:
@@ -230,6 +255,26 @@ def _contract_message(stdout: bytes) -> str:
     return message or code or "unsupported operation"
 
 
+def classify_offline_status(
+    stdout: bytes, returncode: int | None, *, now: float
+) -> tuple[PollOutcome, dict[str, Any] | None]:
+    """Classify one finished Offline Read ``status``.
+
+    A ``rejected`` helper (the container started between inspection and the
+    run, so the live engine refused the read) is the instance-started
+    outcome; everything else classifies exactly like an online ``status``.
+    """
+    try:
+        envelope = json.loads(stdout)
+    except ValueError:
+        envelope = None
+    if isinstance(envelope, dict):
+        error = envelope.get("error")
+        if isinstance(error, dict) and error.get("code") == "rejected":
+            return _outcome(INSTANCE_STARTED, INSTANCE_STARTED_REASON, now), None
+    return classify_contract_status(stdout, returncode, now=now)
+
+
 async def _poll_one(
     gateway,
     instance: ManagedInstance,
@@ -295,6 +340,69 @@ async def _poll_contract_one(
     return instance.container_id, InstancePoll(outcome, snapshot)
 
 
+async def _poll_offline_one(
+    gateway,
+    state,
+    instance: ManagedInstance,
+    semaphore: asyncio.Semaphore,
+    now: float,
+) -> tuple[str, InstancePoll] | None:
+    """One Offline Read ``status`` for a stopped contract instance.
+
+    The instance is never started: it is re-inspected (spec section 12) and
+    its image runs as a throwaway helper with no network and read-only
+    volumes. The read runs at most once per stop, keyed by container ID
+    plus the inspect finish time, through the poll cycle's shared semaphore
+    (counted against the global exec limit like every other exec). A stale
+    key (the container restarted with a new finish time) reads again; a
+    running container, a misconfigured or duplicated row, an unparsable
+    inspect, and any transient failure (including the helper timeout, whose
+    cleanup already ran) skip the cycle and are retried next time. An
+    invalid image, volume or destination never starts a helper: it is the
+    unavailable outcome with its reason. A refused helper (the container
+    started mid-read) is the instance-started outcome with no key, so the
+    row waits for the next discovery instead of caching the refusal.
+    """
+    if (
+        instance.note is not None
+        or instance.path != CONTRACT_PATH
+        or not instance.exec_user
+    ):
+        return None
+    async with semaphore:
+        try:
+            info = await gateway.inspect_offline(instance.container_id)
+        except GatewayError:
+            return None
+        if info.running:
+            return instance.container_id, InstancePoll(
+                _outcome(INSTANCE_STARTED, INSTANCE_STARTED_REASON, now), None
+            )
+        if await state.is_offline_done(instance.container_id, info.finished_at):
+            return None
+        key = info.finished_at
+        try:
+            exec_result = await gateway.offline_status(
+                info.image, info.mounts, instance.exec_user
+            )
+        except ValueError as exc:
+            return instance.container_id, InstancePoll(
+                _outcome(
+                    SNAPSHOT_FAILED, f"{OFFLINE_UNAVAILABLE_PREFIX}{exc}", now
+                ),
+                None,
+                offline_key=key,
+            )
+        except GatewayError:
+            return None
+        outcome, snapshot = classify_offline_status(
+            exec_result.stdout, exec_result.returncode, now=now
+        )
+        if outcome.kind == INSTANCE_STARTED:
+            return instance.container_id, InstancePoll(outcome, None)
+        return instance.container_id, InstancePoll(outcome, snapshot, offline_key=key)
+
+
 async def run_cycle(
     state,
     gateway,
@@ -305,10 +413,14 @@ async def run_cycle(
     """Run one poll cycle: discovery, then telemetry for running instances.
 
     A discovery failure keeps the previous rows and records the reason; a
-    removed container disappears; exited containers get no exec. The exec
-    timeout lives on the gateway; ``now`` stamps every outcome and snapshot
-    of the cycle as its receive time (exec-level skew inside one cycle is
-    milliseconds against second-granularity ages).
+    removed container disappears; running containers get one exec each,
+    while stopped contract-path instances get one Offline Read ``status``
+    per stop (keyed by container ID plus finish time) through the same
+    shared semaphore, so every exec of the cycle counts against
+    ``max_concurrent_execs``. The exec timeout lives on the gateway;
+    ``now`` stamps every outcome and snapshot of the cycle as its receive
+    time (exec-level skew inside one cycle is milliseconds against
+    second-granularity ages).
     """
     if max_concurrent_execs < 1:
         raise ValueError(f"max concurrent execs must be >= 1: {max_concurrent_execs}")
@@ -320,8 +432,17 @@ async def run_cycle(
         return
     semaphore = asyncio.Semaphore(max_concurrent_execs)
     running = [inst for inst in discovered if inst.state == "running"]
+    stopped = [
+        inst
+        for inst in discovered
+        if inst.state != "running"
+        and inst.path == CONTRACT_PATH
+        and inst.note is None
+        and inst.exec_user
+    ]
     results = await asyncio.gather(
-        *(_poll_one(gateway, inst, semaphore, at) for inst in running)
+        *(_poll_one(gateway, inst, semaphore, at) for inst in running),
+        *(_poll_offline_one(gateway, state, inst, semaphore, at) for inst in stopped),
     )
     polls = {name: poll for item in results if item is not None for name, poll in [item]}
     await state.apply_cycle(discovered, polls, at)

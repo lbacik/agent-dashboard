@@ -12,6 +12,7 @@ from agent_dashboard.collector import (
     AGENT_UNREACHABLE,
     CONTRACT_MISMATCH,
     GOOD,
+    INSTANCE_STARTED,
     NOT_SUPPORTED,
     NOT_SUPPORTED_REASON,
     SNAPSHOT_FAILED,
@@ -152,6 +153,7 @@ def test_collector_exports_every_poll_outcome_kind():
         NOT_SUPPORTED,
         TIMEOUT,
         CONTRACT_MISMATCH,
+        INSTANCE_STARTED,
     }
 
 

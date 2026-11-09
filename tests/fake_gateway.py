@@ -21,11 +21,14 @@ from agent_dashboard.gateway import (
     ControlExec,
     ControlTimeoutError,
     FileResult,
+    GatewayError,
     ManagedInstance,
+    OfflineInspect,
     TelemetryExec,
     TelemetryTimeoutError,
     argv_command_status,
     argv_control,
+    argv_offline_status,
 )
 
 DEFAULT_SCRIPT = TelemetryExec(stdout=b"", returncode=2)
@@ -51,6 +54,14 @@ class FakeGateway:
     def __init__(self, rows=None, error=None):
         self._rows = list(rows or [])
         self._error = error
+        self._inspects: dict[str, OfflineInspect | Exception] = {}
+        self._offline_scripts: dict[str, ControlExec | Exception] = {}
+        self.offline_delay = 0.0
+        self.offline_in_flight = 0
+        self.peak_offline_in_flight = 0
+        self.inspect_calls: list[str] = []
+        self.offline_calls: list[dict] = []
+        self.offline_argvs: list[list[str]] = []
         self._scripts: dict[str, TelemetryExec | Exception] = {}
         self._histories: dict[str, TelemetryExec | Exception] = {}
         self._events: dict[str, TelemetryExec | Exception] = {}
@@ -136,6 +147,83 @@ class FakeGateway:
     ) -> None:
         """Script one contract poll error (timeout, unreachable, ...)."""
         self._scripts[f"contract:{container_id}"] = error
+
+    def set_inspect(self, container_id: str, info: OfflineInspect) -> None:
+        """Script one ``docker inspect`` answer for a stopped container."""
+        self._inspects[container_id] = info
+
+    def set_inspect_error(self, container_id: str, error: Exception) -> None:
+        """Script one ``docker inspect`` failure (transient: retried next cycle)."""
+        self._inspects[container_id] = error
+
+    async def inspect_offline(self, container_id: str) -> OfflineInspect:
+        """One scripted re-inspect; unscripted containers fail transiently."""
+        self.inspect_calls.append(container_id)
+        scripted = self._inspects.get(
+            container_id, GatewayError(f"no inspect scripted for {container_id}")
+        )
+        if isinstance(scripted, Exception):
+            raise scripted
+        assert isinstance(scripted, OfflineInspect)
+        return scripted
+
+    def set_offline_status(
+        self, image: str, stdout: bytes, returncode: int = 0
+    ) -> None:
+        """Script one Offline Read ``status`` reply: reported, never raised."""
+        self._offline_scripts[image] = ControlExec(
+            stdout=stdout, stderr=b"", returncode=returncode
+        )
+
+    def set_offline_snapshot(self, image: str, snapshot: dict) -> None:
+        """Script one good Offline Read ``status`` snapshot (``ok:true`` envelope)."""
+        self.set_offline_status(
+            image,
+            json.dumps(
+                {"contract": "1.0", "ok": True, "result": snapshot}
+            ).encode(),
+            0,
+        )
+
+    def set_offline_error(self, image: str, error: Exception) -> None:
+        """Script one Offline Read error (timeout, unreachable, ...)."""
+        self._offline_scripts[image] = error
+
+    async def offline_status(
+        self,
+        image: str,
+        mounts,
+        exec_user: str,
+        *,
+        helper_name: str | None = None,
+    ):
+        """One scripted Offline Read, validated like the real gateway.
+
+        The argv is built from validated values (a bad value raises
+        :class:`ValueError` before anything is recorded), then the scripted
+        reply for the image is returned.
+        """
+        name = helper_name or "fake-offline-helper"
+        argv = argv_offline_status(image, mounts, exec_user, name)
+        self.offline_argvs.append(argv)
+        self.offline_calls.append(
+            {"image": image, "mounts": mounts, "exec_user": exec_user}
+        )
+        self.offline_in_flight += 1
+        self.peak_offline_in_flight = max(
+            self.peak_offline_in_flight, self.offline_in_flight
+        )
+        try:
+            if self.offline_delay:
+                await asyncio.sleep(self.offline_delay)
+            scripted = self._offline_scripts.get(
+                image, GatewayError(f"no offline read scripted for {image}")
+            )
+            if isinstance(scripted, Exception):
+                raise scripted
+            return scripted
+        finally:
+            self.offline_in_flight -= 1
 
     async def contract_status(
         self, container_id: str, exec_user: str

@@ -13,7 +13,13 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from .collector import CONTRACT_MISMATCH, GOOD, InstancePoll, run_cycle
+from .collector import (
+    CONTRACT_MISMATCH,
+    GOOD,
+    INSTANCE_STARTED,
+    InstancePoll,
+    run_cycle,
+)
 from .contract_status import (
     ContractDetail,
     contract_headline,
@@ -105,6 +111,12 @@ class _InstanceEntry:
     outcome_kind: str | None = None
     outcome_reason: str = ""
     outcome_at: float | None = None
+    # Finish time of the stop the last Offline Read belongs to (contract
+    # stopped instances only): the poll loop reads once per stop. Whether
+    # the stored snapshot came from such a read: a stopped row never shows
+    # a live-era snapshot, so only an offline-sourced snapshot renders.
+    offline_key: str | None = None
+    snapshot_offline: bool = False
 
 
 @dataclass
@@ -139,6 +151,18 @@ class FleetState:
         async with self._lock:
             self.last_error = reason
             self._publish()
+
+    async def is_offline_done(self, container_id: str, finished_at: str) -> bool:
+        """True when this stop (container plus finish time) was already read.
+
+        The poll loop consults this after re-inspecting a stopped contract
+        instance and before starting its helper, so one stop yields exactly
+        one Offline Read ``status``. HTTP handlers never consult it: only
+        the background poll loop starts Offline Reads.
+        """
+        async with self._lock:
+            entry = self._entries.get(container_id)
+            return entry is not None and entry.offline_key == finished_at
 
     async def apply_cycle(
         self,
@@ -177,9 +201,12 @@ class FleetState:
                     entry.outcome_kind = poll.outcome.kind
                     entry.outcome_reason = poll.outcome.reason
                     entry.outcome_at = poll.outcome.at
+                    if poll.offline_key is not None:
+                        entry.offline_key = poll.offline_key
                     if poll.outcome.kind == GOOD and poll.snapshot is not None:
                         entry.snapshot = poll.snapshot
                         entry.snapshot_at = poll.outcome.at
+                        entry.snapshot_offline = poll.offline_key is not None
                 entries[inst.container_id] = entry
             self._entries = entries
             self.last_error = None
@@ -331,15 +358,23 @@ class FleetState:
         Legacy view models (drawer, live link, control chips) do not apply
         to contract snapshots, so they stay empty; the contract detail
         carries what the Fleet view and the drawer show. Section staleness
-        never changes reach: it only suffixes the Status headline.
+        never changes reach: it only suffixes the Status headline. A stopped
+        row never shows a live-era snapshot: only an offline-sourced
+        snapshot renders, so a stop keeps no stale running headline.
         """
-        reach = reach_for_snapshot(
-            entry.container_state, entry.outcome_kind, entry.snapshot
+        is_stopped = entry.container_state != "running"
+        effective_snapshot = (
+            entry.snapshot
+            if (entry.snapshot is not None and (not is_stopped or entry.snapshot_offline))
+            else None
         )
-        has_snapshot = entry.snapshot is not None
+        reach = reach_for_snapshot(
+            entry.container_state, entry.outcome_kind, effective_snapshot
+        )
+        has_snapshot = effective_snapshot is not None
         detail = (
             read_contract_snapshot(
-                entry.snapshot, now=now, poll_interval=poll_interval
+                effective_snapshot, now=now, poll_interval=poll_interval
             )
             if has_snapshot
             else None
@@ -354,6 +389,21 @@ class FleetState:
             age_text = format_age(age)
         if entry.outcome_kind == CONTRACT_MISMATCH:
             headline = entry.outcome_reason
+        elif is_stopped:
+            if entry.outcome_kind == INSTANCE_STARTED:
+                headline = entry.outcome_reason or "instance started, refresh"
+            elif detail.has_snapshot:
+                derived = contract_headline(detail)
+                if derived is not None:
+                    headline = derived
+                else:
+                    headline = build_headline(
+                        LIVE, reason="", age_text=None, has_snapshot=True
+                    )
+            elif entry.outcome_reason:
+                headline = entry.outcome_reason
+            else:
+                headline = "Not running"
         elif reach == UNREACHABLE:
             headline = f"Unreachable: {entry.outcome_reason}"
         elif reach == NOT_RUNNING:
@@ -379,6 +429,12 @@ class FleetState:
             headline += stale_suffix(detail)
         if reach == UNREACHABLE:
             rank = RANK_UNREACHABLE
+        elif is_stopped:
+            rank = (
+                RANK_UNREACHABLE
+                if (detail.has_snapshot and needs_operator(detail))
+                else RANK_OFFLINE
+            )
         elif detail.has_snapshot and needs_operator(detail):
             rank = RANK_UNREACHABLE
         elif detail.has_snapshot:
