@@ -27,7 +27,9 @@ Start with `README.md`.
   can produce is pinned by a test.
 - Templates consume framework-free view models only.
 - Test fixtures are synthetic; `tests/fixtures/contract/v1/` is copied
-  from the agent repo (source commit in `SOURCE.txt`).
+  from the agent repo (source commit in `SOURCE.txt`). Contract-path
+  fixtures are never copied: they load from the pinned
+  agent-operator-contract package data at test time (ADR 0014).
 - Web tests assert HTML fragments through `TestClient`; there are no
   browser end-to-end tests.
 

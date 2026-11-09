@@ -23,7 +23,12 @@ import asyncio
 import io
 import re
 import tarfile
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol
+
+from agent_operator_contract import CONTRACT_MAJOR
+from agent_operator_contract import client as contract_client
 
 AGENT_ROLE_LABEL = "io.github.lbacik.simple-coding-agent.role=agent"
 ONEOFF_LABEL = "com.docker.compose.oneoff"
@@ -855,6 +860,51 @@ def argv_command_status(container_id: str, request_id: str) -> list[str]:
     ]
 
 
+def argv_contract_exec(
+    container_id: str, agentctl_argv: Sequence[str], *, exec_user: str = AGENT_USER
+) -> list[str]:
+    """Argv for one contract ``agentctl`` exec, addressed by container ID.
+
+    The agent call is ``agentctl --contract 1 ...`` (contract section 3.1,
+    no TTY): the library builds this shape inline in its blocking executor,
+    which the gateway cannot use, so the gateway builds it here from the
+    section and the ADR records that choice. ``agentctl_argv`` is the
+    operation argv (``["status"]``, ``["stop", "--request-id=..."]``, ...):
+    a non-empty list of non-empty strings that must not already carry
+    ``--contract``. Every value is validated first, so a bad value raises
+    :class:`ValueError` before any argv exists.
+    """
+    validate_container_id(container_id)
+    if (
+        not isinstance(exec_user, str)
+        or not exec_user
+        or any(char.isspace() for char in exec_user)
+    ):
+        raise ValueError(f"invalid exec user: {exec_user!r}")
+    if isinstance(agentctl_argv, (str, bytes)) or not isinstance(
+        agentctl_argv, Sequence
+    ):
+        raise ValueError(f"invalid contract argv: {agentctl_argv!r}")
+    parts = list(agentctl_argv)
+    if not parts or any(not isinstance(part, str) or not part for part in parts):
+        raise ValueError(f"invalid contract argv: {agentctl_argv!r}")
+    if any(part == "--contract" or part.startswith("--contract=") for part in parts):
+        raise ValueError(
+            "invalid contract argv: the gateway adds '--contract <major>' itself"
+        )
+    return [
+        "docker",
+        "exec",
+        "--user",
+        exec_user,
+        container_id,
+        AGENTCTL_PATH,
+        "--contract",
+        str(CONTRACT_MAJOR),
+        *parts,
+    ]
+
+
 def argv_attempt_history(container_id: str) -> list[str]:
     """Argv for one Attempt log history exec: every attempt summary at once.
 
@@ -1140,6 +1190,22 @@ class FileResult:
     truncated: bool
 
 
+async def _spawn_docker_cli(argv: list[str]):
+    """Spawn the Docker CLI; raise when it cannot even start."""
+    try:
+        return await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        raise DockerNotAvailableError(
+            "docker CLI not found: install Docker and ensure it is on PATH"
+        ) from exc
+    except OSError as exc:
+        raise DockerNotAvailableError(f"cannot run docker CLI: {exc}") from exc
+
+
 async def _kill_and_reap(proc) -> None:
     """Kill a still-running Docker CLI child and reap it.
 
@@ -1273,6 +1339,55 @@ def _extract_single_member(data: bytes) -> bytes:
         ) from exc
 
 
+class ProcessRunner(Protocol):
+    """Runs one Docker argv to a finished exec: the injectable seam for tests.
+
+    The default runner is the existing async subprocess path, with its
+    timeouts and kill-and-reap. Tests inject a replaying runner at this
+    boundary instead of touching Docker.
+    """
+
+    async def run(
+        self, argv: list[str], *, timeout: float, timeout_error: GatewayError
+    ) -> ControlExec:
+        """Run ``argv`` to completion and report stdout, stderr and exit code.
+
+        Raises ``timeout_error`` (after killing and reaping the child) when
+        the run outlives ``timeout``, and :class:`DockerNotAvailableError`
+        when Docker never started. Exit codes are reported, never raised.
+        """
+        ...  # pragma: no cover - the protocol is never run directly
+
+
+class AsyncSubprocessRunner:
+    """The default process runner: the existing async subprocess path."""
+
+    async def run(
+        self, argv: list[str], *, timeout: float, timeout_error: GatewayError
+    ) -> ControlExec:
+        """Spawn the Docker CLI and report its stdout, stderr and exit code.
+
+        A lapsed bound kills and reaps the child, then raises
+        ``timeout_error``; a missing Docker CLI raises
+        :class:`DockerNotAvailableError`. Anything else (including
+        cancellation) reaps a still-running child before propagating.
+        """
+        proc = await _spawn_docker_cli(argv)
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
+        except TimeoutError as exc:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+            raise timeout_error from exc
+        except BaseException:
+            await _kill_and_reap(proc)
+            raise
+        return ControlExec(stdout=stdout, stderr=stderr, returncode=proc.returncode)
+
+
 class DockerGateway:
     """Runs discovery and telemetry execs through the Docker CLI.
 
@@ -1284,6 +1399,11 @@ class DockerGateway:
     :data:`LOG_MAX_CONCURRENT` Attempt log reads run at once on
     ``_log_semaphore``, separate from the poll cycle's
     ``max_concurrent_execs``; control execs never take that semaphore.
+
+    ``process_runner`` is the injectable seam every contract operation runs
+    through; the default is the existing async subprocess path
+    (:class:`AsyncSubprocessRunner`). The legacy path keeps its own inline
+    spawn calls and is unchanged.
     """
 
     def __init__(
@@ -1291,6 +1411,7 @@ class DockerGateway:
         timeout: float = 5.0,
         log_timeout: float = LOG_EXEC_TIMEOUT,
         control_exec_timeout: float = DEFAULT_CONTROL_EXEC_TIMEOUT,
+        process_runner: ProcessRunner | None = None,
     ) -> None:
         if timeout <= 0:
             raise ValueError(f"timeout must be positive: {timeout}")
@@ -1308,24 +1429,16 @@ class DockerGateway:
         self.control_exec_timeout = control_exec_timeout
         self._log_semaphore = asyncio.Semaphore(LOG_MAX_CONCURRENT)
         self._control_in_flight: set[str] = set()
+        self._process_runner = (
+            process_runner if process_runner is not None else AsyncSubprocessRunner()
+        )
 
     def argv(self) -> list[str]:
         return argv_list_instances()
 
     async def _run(self, argv: list[str]):
         """Spawn the Docker CLI; raise when it cannot even start."""
-        try:
-            return await asyncio.create_subprocess_exec(
-                *argv,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except FileNotFoundError as exc:
-            raise DockerNotAvailableError(
-                "docker CLI not found: install Docker and ensure it is on PATH"
-            ) from exc
-        except OSError as exc:
-            raise DockerNotAvailableError(f"cannot run docker CLI: {exc}") from exc
+        return await _spawn_docker_cli(argv)
 
     async def list_instances(self) -> list[ManagedInstance]:
         proc = await self._run(self.argv())
@@ -1379,15 +1492,48 @@ class DockerGateway:
         not stop ``agentctl`` inside the container, so a timeout means
         "outcome unknown".
         """
-        proc = await self._run(argv)
-        stdout, stderr = await _bounded_wait(
-            proc,
-            proc.communicate(),
-            self.control_exec_timeout,
-            ControlTimeoutError,
-            f"docker exec timed out after {self.control_exec_timeout:g} s",
+        return await self._process_runner.run(
+            argv,
+            timeout=self.control_exec_timeout,
+            timeout_error=ControlTimeoutError(
+                f"docker exec timed out after {self.control_exec_timeout:g} s"
+            ),
         )
-        return ControlExec(stdout=stdout, stderr=stderr, returncode=proc.returncode)
+
+    async def contract_exec(
+        self,
+        container_id: str,
+        agentctl_argv: Sequence[str],
+        *,
+        exec_user: str = AGENT_USER,
+        operation: str = "mutation",
+        timeout: float | None = None,
+    ) -> ControlExec:
+        """Run one contract ``agentctl`` exec through the injectable runner.
+
+        The argv is built here from validated values (contract section 3.1);
+        exit codes are reported, never raised. The bound comes from the
+        contract's timeout policy (spec section 3.3) for ``operation`` unless
+        ``timeout`` overrides it with a positive number of seconds. Raises
+        :class:`DockerNotAvailableError` when Docker never started and
+        :class:`ControlTimeoutError` (after killing and reaping the client)
+        when the bound lapses: killing the ``docker exec`` client does not
+        stop ``agentctl`` inside the container, so a timeout means "outcome
+        unknown" and the same request ID may be retried.
+        """
+        argv = argv_contract_exec(container_id, agentctl_argv, exec_user=exec_user)
+        # ``not x > 0`` (not ``x <= 0``) so NaN is also a startup error:
+        # every comparison with NaN is False, including ``<=``.
+        if timeout is not None and not timeout > 0:
+            raise ValueError(f"contract exec timeout must be positive: {timeout}")
+        effective = contract_client.timeout_for(operation, timeout)
+        return await self._process_runner.run(
+            argv,
+            timeout=effective,
+            timeout_error=ControlTimeoutError(
+                f"docker exec timed out after {effective:g} s"
+            ),
+        )
 
     def _claim_control(self, container_id: str) -> None:
         """Take the per-container control slot, or raise :class:`ControlBusyError`.
