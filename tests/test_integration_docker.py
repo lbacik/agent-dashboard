@@ -22,10 +22,19 @@ from pathlib import Path
 
 import pytest
 
-from agent_dashboard.collector import GOOD, NOT_SUPPORTED, classify_telemetry
+from agent_dashboard.collector import (
+    GOOD,
+    NOT_SUPPORTED,
+    classify_contract_status,
+    classify_telemetry,
+)
 from agent_dashboard.gateway import (
     AGENT_ROLE_LABEL,
+    BACKEND_LABEL,
+    CONTRACT_LABEL,
     EVIDENCE_PREVIEW_CAP,
+    EXEC_USER_LABEL,
+    INSTANCE_LABEL,
     DockerGateway,
 )
 from agent_dashboard.history import read_history
@@ -553,6 +562,104 @@ def test_stopped_instance_logs_via_docker_cp(tmp_path):
             gateway.read_file(container_id, LOG_ISSUE, LOG_STARTED_DASH, LOG_SMALL_FILE)
         )
         assert small.content == LOG_SMALL_CONTENT
+    finally:
+        _run("docker", "rm", "-f", name)
+        _run("docker", "rmi", "-f", tag)
+
+
+CONTRACT_AGENTCTL_STUB = """\
+#!/bin/sh
+# Stub contract agentctl: proves the gateway's contract exec runs as the
+# labelled user without a TTY (both facts on stderr), then answers the
+# status poll with a recorded producer envelope on stdout.
+echo "user=$(id -un)" >&2
+if [ -t 0 ]; then echo "tty=yes" >&2; else echo "tty=no" >&2; fi
+cat /snapshot.json
+"""
+
+CONTRACT_DOCKERFILE = """\
+FROM busybox:stable
+COPY agentctl /usr/local/bin/agentctl
+COPY snapshot.json /snapshot.json
+RUN chmod +x /usr/local/bin/agentctl && adduser -D contractor
+CMD ["sh", "-c", "while true; do sleep 3600; done"]
+"""
+
+
+@docker
+def test_contract_status_against_real_docker(tmp_path):
+    """A contract ``status`` poll against a stub agentctl on a real daemon.
+
+    The container carries the contract discovery labels; discovery addresses
+    it by its ``instance`` label and binds control by container ID. The exec
+    proves it ran as the labelled user (not the hardcoded legacy one) with
+    no TTY, and the stdout classifies to a good snapshot.
+    """
+    from agent_operator_contract import documents
+
+    tag = f"agent-dashboard-contract:{uuid.uuid4().hex[:12]}"
+    name = f"e2e-contract-{uuid.uuid4().hex[:8]}"
+    instance = f"e2e-c-{uuid.uuid4().hex[:8]}"
+    try:
+        (tmp_path / "agentctl").write_text(CONTRACT_AGENTCTL_STUB)
+        (tmp_path / "snapshot.json").write_text(
+            documents.load_fixture("status-idle")["stdout"]
+        )
+        (tmp_path / "Dockerfile").write_text(CONTRACT_DOCKERFILE)
+        build = _run("docker", "build", "-q", "-t", tag, str(tmp_path))
+        assert build.returncode == 0, build.stderr
+
+        started = _run(
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            name,
+            "--label",
+            f"{CONTRACT_LABEL}=1",
+            "--label",
+            f"{INSTANCE_LABEL}={instance}",
+            "--label",
+            f"{EXEC_USER_LABEL}=contractor",
+            "--label",
+            f"{BACKEND_LABEL}=coding-agent",
+            tag,
+        )
+        assert started.returncode == 0, started.stderr
+
+        import time
+
+        deadline = time.time() + 30
+        container_id = None
+        found = None
+        while time.time() < deadline:
+            discovered = asyncio.run(DockerGateway(timeout=10.0).list_instances())
+            matches = [inst for inst in discovered if inst.container_id and inst.name == instance]
+            if matches:
+                (found,) = matches
+                container_id = found.container_id
+                break
+            time.sleep(1)
+        assert container_id is not None
+        assert found.path == "contract"
+        assert found.instance == instance
+        assert found.exec_user == "contractor"
+        assert found.backend == "coding-agent"
+
+        gateway = DockerGateway(timeout=10.0)
+        exec_result = asyncio.run(
+            gateway.contract_status(container_id, found.exec_user)
+        )
+        assert exec_result.returncode == 0
+        assert "user=contractor" in exec_result.stderr.decode()
+        assert "tty=no" in exec_result.stderr.decode()
+
+        outcome, snapshot = classify_contract_status(
+            exec_result.stdout, exec_result.returncode, now=NOW
+        )
+        assert outcome.kind == GOOD
+        assert snapshot is not None
+        assert snapshot["instance"]["state"] == "idle"
     finally:
         _run("docker", "rm", "-f", name)
         _run("docker", "rmi", "-f", tag)

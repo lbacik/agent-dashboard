@@ -118,10 +118,16 @@ class FakeGateway:
         )
 
     def set_contract_snapshot(self, container_id: str, snapshot: dict) -> None:
-        """Script one good contract ``status`` snapshot (``ok:true`` envelope)."""
+        """Script one good contract ``status`` snapshot (``ok:true`` envelope).
+
+        The envelope carries the producer's ``contract`` member like a real
+        ``agentctl`` answer, so the reply classifier accepts it.
+        """
         self.set_contract_status(
             container_id,
-            json.dumps({"ok": True, "result": snapshot}).encode(),
+            json.dumps(
+                {"contract": "1.0", "ok": True, "result": snapshot}
+            ).encode(),
             0,
         )
 
