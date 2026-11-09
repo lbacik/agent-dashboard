@@ -13,7 +13,13 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from .collector import CONTRACT_MISMATCH, GOOD, InstancePoll, run_cycle
+from .collector import (
+    CONTRACT_MISMATCH,
+    GOOD,
+    INSTANCE_STARTED,
+    InstancePoll,
+    run_cycle,
+)
 from .contract_status import (
     ContractDetail,
     contract_headline,
@@ -105,6 +111,12 @@ class _InstanceEntry:
     outcome_kind: str | None = None
     outcome_reason: str = ""
     outcome_at: float | None = None
+    # Finish time of the stop the last Offline Read belongs to (contract
+    # stopped instances only): the poll loop reads once per stop. Whether
+    # the stored snapshot came from such a read: a stopped row never shows
+    # a live-era snapshot, so only an offline-sourced snapshot renders.
+    offline_key: str | None = None
+    snapshot_offline: bool = False
 
 
 @dataclass
@@ -139,6 +151,18 @@ class FleetState:
         async with self._lock:
             self.last_error = reason
             self._publish()
+
+    async def is_offline_done(self, container_id: str, finished_at: str) -> bool:
+        """True when this stop (container plus finish time) was already read.
+
+        The poll loop consults this after re-inspecting a stopped contract
+        instance and before starting its helper, so one stop yields exactly
+        one Offline Read ``status``. HTTP handlers never consult it: only
+        the background poll loop starts Offline Reads.
+        """
+        async with self._lock:
+            entry = self._entries.get(container_id)
+            return entry is not None and entry.offline_key == finished_at
 
     async def apply_cycle(
         self,
@@ -177,9 +201,12 @@ class FleetState:
                     entry.outcome_kind = poll.outcome.kind
                     entry.outcome_reason = poll.outcome.reason
                     entry.outcome_at = poll.outcome.at
+                    if poll.offline_key is not None:
+                        entry.offline_key = poll.offline_key
                     if poll.outcome.kind == GOOD and poll.snapshot is not None:
                         entry.snapshot = poll.snapshot
                         entry.snapshot_at = poll.outcome.at
+                        entry.snapshot_offline = poll.offline_key is not None
                 entries[inst.container_id] = entry
             self._entries = entries
             self.last_error = None

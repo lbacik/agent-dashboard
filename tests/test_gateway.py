@@ -14,6 +14,7 @@ from agent_dashboard.gateway import (
     DockerNotAvailableError,
     GatewayError,
     ManagedInstance,
+    OfflineMount,
     TelemetryTimeoutError,
     argv_attempt_events,
     argv_attempt_history,
@@ -24,8 +25,11 @@ from agent_dashboard.gateway import (
     argv_control,
     argv_copy_logs,
     argv_copy_run,
+    argv_inspect_offline,
     argv_list_instances,
     argv_list_run_files,
+    argv_offline_cleanup,
+    argv_offline_status,
     argv_read_file,
     argv_telemetry,
     parse_ps_output,
@@ -115,6 +119,14 @@ def test_every_argv_producer_is_pinned():
         "argv_copy_run": argv_copy_run(
             "abc123", 98, "2026-09-27T16:33:43.385090Z"
         ),
+        "argv_inspect_offline": argv_inspect_offline("abc123"),
+        "argv_offline_status": argv_offline_status(
+            "sha256:" + "ab" * 32,
+            (OfflineMount("data-vol", "/data"),),
+            "agent",
+            "offline-helper-01",
+        ),
+        "argv_offline_cleanup": argv_offline_cleanup("offline-helper-01"),
     }
     assert set(producers) == {
         "argv_list_instances",
@@ -130,6 +142,9 @@ def test_every_argv_producer_is_pinned():
         "argv_list_run_files",
         "argv_copy_logs",
         "argv_copy_run",
+        "argv_inspect_offline",
+        "argv_offline_status",
+        "argv_offline_cleanup",
     }
     for argv in producers.values():
         assert isinstance(argv, list)
