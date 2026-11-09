@@ -28,6 +28,32 @@ from .agentctl_reply import (
     reply_for_exception,
     supports_expect_repo,
 )
+from .contract_reply import (
+    AMBIGUOUS as CONTRACT_AMBIGUOUS,
+)
+from .contract_reply import (
+    CONTRACT_MISMATCH as CONTRACT_REPLY_MISMATCH,
+)
+from .contract_reply import (
+    NOT_FOUND as CONTRACT_NOT_FOUND,
+)
+from .contract_reply import (
+    REJECTION as CONTRACT_REJECTION,
+)
+from .contract_reply import (
+    REPLAY as CONTRACT_REPLAY,
+)
+from .contract_reply import (
+    SUCCESS as CONTRACT_SUCCESS,
+)
+from .contract_reply import (
+    UNSUPPORTED as CONTRACT_UNSUPPORTED,
+)
+from .contract_reply import (
+    describe_contract_reply,
+    validate_contract_request_id,
+)
+from .contract_status import contract_timeline_summary, follow_contract_command
 from .control import (
     ACTION_COMMANDS,
     ACTION_LABELS,
@@ -39,6 +65,7 @@ from .control import (
     ControlMode,
     FollowResult,
     command_timeline,
+    contract_availability,
     control_availability,
     control_slug,
     follow_command,
@@ -54,10 +81,15 @@ from .control_audit import (
     submitted_entry,
 )
 from .gateway import (
+    AGENT_USER,
+    CONTRACT_CONTROL_ACTIONS,
     CONTROL_ACTIONS,
     ControlBusyError,
     ControlTimeoutError,
     DockerNotAvailableError,
+    argv_contract_command,
+    argv_contract_exec,
+    argv_contract_mutation,
     argv_control,
     validate_container_id,
     validate_control_action,
@@ -430,14 +462,9 @@ def _request_mode(request: Request, mode: ControlMode) -> ControlMode:
 
 def _row_availability(row, request: Request):
     """The console view model for one fleet row and the signed-in Operator."""
-    from .control import ControlAvailability
-
     mode = _request_mode(request, request.app.state.control_mode)
     if getattr(row, "path", "legacy") == "contract":
-        return ControlAvailability(
-            unavailable="unavailable for contract instances: "
-            "control actions are not offered on the contract path"
-        )
+        return contract_availability(reach=row.reach, mode=mode)
     control = MISSING if row.control_raw_missing else row.control_raw
     return control_availability(
         reach=row.reach,
@@ -448,10 +475,64 @@ def _row_availability(row, request: Request):
     )
 
 
+def _contract_repository(row) -> str | None:
+    """The contract row's Target Repository, or none when never named one."""
+    contract = getattr(row, "contract", None)
+    repository = getattr(contract, "repository", None)
+    if isinstance(repository, str) and repository and repository != "unavailable":
+        return repository
+    return None
+
+
 def _row_commands(row) -> tuple:
     """The timeline entries for one fleet row (latest good snapshot only)."""
+    if getattr(row, "path", "legacy") == "contract":
+        contract = getattr(row, "contract", None)
+        commands = getattr(contract, "commands", None)
+        return tuple(commands) if commands else ()
     control = None if row.control_raw_missing else row.control_raw
     return command_timeline(control)
+
+
+#: Contract reply classes that are definitive refusals: nothing was stored.
+CONTRACT_REJECTED_CODES = frozenset(
+    {"rejected", "repository_mismatch", "payload_mismatch", "invalid_argument"}
+)
+
+#: Card titles and tones per contract Command Record Acknowledgement.
+CONTRACT_ACK_TITLES = {
+    "accepted": "Accepted",
+    "completed": "Completed",
+    "superseded": "Superseded",
+    "not_fulfilled": "Not fulfilled",
+}
+CONTRACT_ACK_TONES = {
+    "accepted": "info",
+    "completed": "ok",
+    "superseded": "muted",
+    "not_fulfilled": "warn",
+}
+
+#: Contract command timeline cards keep following until one of these acks.
+CONTRACT_FOLLOW_TERMINAL = frozenset({"completed", "superseded", "not_fulfilled"})
+
+#: Outcome unknown card body for a contract mutation (spec: contract path).
+CONTRACT_UNKNOWN_BODY = (
+    "Outcome unknown: the agent may or may not have applied the command. "
+    "Retry with the same request ID, or check whether it was recorded."
+)
+
+#: Not stored card body for a contract ``internal`` refusal (retry allowed).
+CONTRACT_NOT_STORED_BODY = (
+    "Not stored: the agent recorded nothing. "
+    "Retry with the same request ID to send it."
+)
+
+#: Not recorded card body for a contract ``command <id>`` check.
+CONTRACT_CHECK_NOT_RECORDED_BODY = (
+    "Not recorded: the agent has no command with this request ID. "
+    "It is safe to retry with the same request ID."
+)
 
 
 def parse_form(body: bytes) -> dict[str, str]:
@@ -501,11 +582,275 @@ def check_protection(request: Request, mode: ControlMode) -> tuple[str, str] | N
 
 def _agent_version(row) -> str | None:
     """The row's agent version, or none when the snapshot never named one."""
-    detail = getattr(row, "detail", None)
+    if getattr(row, "path", "legacy") == "contract":
+        detail = getattr(row, "contract", None)
+    else:
+        detail = getattr(row, "detail", None)
     version = getattr(detail, "agent_version", None)
     if isinstance(version, str) and version and version != "unavailable":
         return version
     return None
+
+
+def _contract_exec_user(row) -> str | None:
+    """The ``docker exec --user`` for a contract row, or none when missing."""
+    exec_user = getattr(row, "exec_user", None)
+    if isinstance(exec_user, str) and exec_user and not any(
+        char.isspace() for char in exec_user
+    ):
+        return exec_user
+    return None
+
+
+def _validate_contract_submit(form: dict[str, str]) -> tuple[dict | None, str | None]:
+    """Validate every contract submit field, including the contract request ID.
+
+    Returns ``(values, None)`` with the parsed action, container ID,
+    repository, request ID, retry flag and human command, or ``(None,
+    message)`` with the first failure in field order. Only ``stop`` and
+    ``resume`` are accepted; ``n``/``issue`` must be absent. A failure
+    answers 422 with a Refused card; it never reaches argv.
+    """
+    action_raw = form.get("action", "")
+    container_raw = form.get("container_id", "")
+    repository_raw = form.get("repository", "")
+    request_id_raw = form.get("request_id", "")
+    retry_raw = form.get("retry", "")
+    try:
+        if not isinstance(action_raw, str) or action_raw not in CONTRACT_CONTROL_ACTIONS:
+            raise ValueError(f"invalid contract control action: {action_raw!r}")
+        action = action_raw
+    except ValueError:
+        return None, (
+            f"Invalid action: {action_raw!r} (expected one of stop, resume)."
+        )
+    if form.get("n", "") or form.get("issue", ""):
+        return None, f"Action {action!r} takes no parameter."
+    try:
+        container_id = validate_container_id(container_raw)
+    except ValueError:
+        return None, f"Invalid container ID: {container_raw!r}."
+    try:
+        repository = validate_expect_repo(repository_raw)
+    except ValueError:
+        return None, f"Invalid repository: {repository_raw!r} (expected owner/name)."
+    try:
+        request_id = validate_contract_request_id(request_id_raw)
+    except ValueError:
+        return None, f"Invalid request ID: {request_id_raw!r}."
+    if retry_raw in ("", None):
+        retry = False
+    elif retry_raw == "1":
+        retry = True
+    else:
+        return None, f"Invalid retry flag: {retry_raw!r} (expected 1)."
+    return (
+        {
+            "action": action,
+            "container_id": container_id,
+            "repository": repository,
+            "request_id": request_id,
+            "retry": retry,
+            "command": action,
+        },
+        None,
+    )
+
+
+def _validate_contract_track(query: dict[str, str]) -> tuple[dict | None, str | None]:
+    """Validate the contract ``track`` query parameters (the card's values).
+
+    Returns ``(values, None)`` or ``(None, message)``; a failure answers 422
+    and never reaches the snapshot.
+    """
+    action_raw = query.get("action", "")
+    if not isinstance(action_raw, str) or action_raw not in CONTRACT_CONTROL_ACTIONS:
+        return None, (
+            f"Invalid action: {action_raw!r} (expected one of stop, resume)."
+        )
+    try:
+        container_id = validate_container_id(query.get("container_id", ""))
+    except ValueError:
+        return None, f"Invalid container ID: {query.get('container_id', '')!r}."
+    try:
+        request_id = validate_contract_request_id(query.get("request_id", ""))
+    except ValueError:
+        return None, f"Invalid request ID: {query.get('request_id', '')!r}."
+    raw_sequence = query.get("sequence", "")
+    sequence: int | None = None
+    if raw_sequence not in ("", None):
+        try:
+            sequence = int(str(raw_sequence))
+        except (TypeError, ValueError):
+            return None, f"Invalid sequence: {raw_sequence!r} (expected an integer)."
+        if sequence < 0:
+            return None, f"Invalid sequence: {raw_sequence!r} (expected an integer)."
+    return (
+        {
+            "action": action_raw,
+            "n_value": None,
+            "issue_value": None,
+            "container_id": container_id,
+            "repository": query.get("repository", ""),
+            "request_id": request_id,
+            "sequence": sequence,
+        },
+        None,
+    )
+
+
+def _audit_path(row) -> dict:
+    """The audit's path fields for one fleet row: contract, else the default."""
+    if row is not None and getattr(row, "path", "legacy") == "contract":
+        return {"protocol": "contract", "backend": getattr(row, "backend", None)}
+    return {}
+
+
+async def _review_contract(request, name, row, templates, form, action_raw):
+    """Step 2 confirmation for a contract mutation (``stop``/``resume``).
+
+    Request protection already ran; this validates the action (422, composer
+    re-rendered), the instance's controls available (403, console line), the
+    action enabled (409, composer with the disabled reason) and the Target
+    Repository plus exec user (409: ``--expect-repo`` is always sent, so
+    review refuses without them). Then 200 with the confirmation showing
+    the exact argv, the instance, the Target Repository and a newly
+    generated request ID. Each refusal writes one ``refused`` entry with
+    the contract protocol; a 200 writes nothing and runs no exec.
+    """
+    action: str | None = None
+    validation_message: str | None = None
+    if not isinstance(action_raw, str) or action_raw not in CONTRACT_CONTROL_ACTIONS:
+        validation_message = (
+            f"Invalid action: {action_raw!r} (expected one of stop, resume)."
+        )
+    else:
+        action = action_raw
+
+    def composer_error(message: str, status: int):
+        _write_refused(
+            refused_entry(
+                instance=name,
+                reason="validation" if status == 422 else "action_unavailable",
+                error=message,
+                operator=_operator_name(request),
+                container_id=None,
+                expected_repository=None,
+                action=action,
+                params={},
+                command="",
+                agent_version=_agent_version(row),
+                protocol="contract",
+                backend=getattr(row, "backend", None),
+            )
+        )
+        context = _composer_context_for(request, name, row)
+        context["review_error"] = message
+        context["entered_action"] = action
+        return templates.TemplateResponse(request, "_control.html", context, status_code=status)
+
+    if validation_message is not None:
+        return composer_error(validation_message, 422)
+
+    assert action is not None
+    availability = _row_availability(row, request)
+    if availability.unavailable is not None:
+        error = f"Controls unavailable: {availability.unavailable}"
+        _write_refused(
+            refused_entry(
+                instance=name,
+                reason="action_unavailable",
+                error=error,
+                operator=_operator_name(request),
+                container_id=None,
+                expected_repository=None,
+                action=action,
+                params={},
+                command=action,
+                agent_version=_agent_version(row),
+                protocol="contract",
+                backend=getattr(row, "backend", None),
+            )
+        )
+        context = _composer_context_for(request, name, row)
+        return templates.TemplateResponse(request, "_control.html", context, status_code=403)
+
+    selected = next((a for a in availability.actions if a.key == action), None)
+    if selected is not None and not selected.enabled:
+        label = ACTION_LABELS.get(action, action)
+        return composer_error(f"{label} is unavailable: {selected.reason}", 409)
+
+    repository = _contract_repository(row)
+    try:
+        expect_repo = validate_expect_repo(repository or "")
+    except ValueError:
+        return composer_error(
+            "No Target Repository: the snapshot names no repository, "
+            "so --expect-repo cannot be built. Nothing was sent.",
+            409,
+        )
+    exec_user = _contract_exec_user(row)
+    if exec_user is None:
+        return composer_error(
+            "No exec user: the instance names none, so the command cannot run. "
+            "Nothing was sent.",
+            409,
+        )
+
+    request_id = "dash-" + secrets.token_hex(8)
+    argv = argv_contract_exec(
+        row.container_id,
+        argv_contract_mutation(action, request_id, expect_repo),
+        exec_user=exec_user,
+    )
+    tone = "danger" if action == "stop" else "primary"
+    return templates.TemplateResponse(
+        request,
+        "_control_confirm.html",
+        {
+            "name": name,
+            "slug": control_slug(name),
+            "action": action,
+            "action_label": ACTION_LABELS.get(action, action),
+            "display_command": action,
+            "argv_text": " ".join(argv),
+            "request_id": request_id,
+            "container_id": row.container_id,
+            "repository": repository,
+            "expect_repo": expect_repo,
+            "n_value": None,
+            "issue_value": None,
+            "tone": tone,
+            "submit_url": f"/instances/{quote(name, safe='')}/control/submit",
+            "console_url": f"/instances/{quote(name, safe='')}/control",
+        },
+        status_code=200,
+    )
+
+
+def _composer_context_for(request, name: str, row) -> dict:
+    """The shared template context for every composer render (any path)."""
+    availability = _row_availability(row, request)
+    commands = _row_commands(row)
+    if getattr(row, "path", "legacy") == "contract":
+        commands_summary = contract_timeline_summary(commands)
+    else:
+        commands_summary = timeline_summary(commands)
+    return {
+        "name": name,
+        "slug": control_slug(name),
+        "av": availability,
+        "error": None,
+        "review_error": None,
+        "entered_action": None,
+        "entered_n": None,
+        "entered_issue": None,
+        "review_url": f"/instances/{quote(name, safe='')}/control/review",
+        "commands_url": f"/instances/{quote(name, safe='')}/control/commands",
+        "commands": commands,
+        "commands_summary": commands_summary,
+        "ACTION_COMMANDS": dict(ACTION_COMMANDS),
+    }
 
 
 def _repository(row) -> str | None:
@@ -561,6 +906,10 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
             )
         availability = _row_availability(row, request)
         commands = _row_commands(row)
+        if getattr(row, "path", "legacy") == "contract":
+            commands_summary = contract_timeline_summary(commands)
+        else:
+            commands_summary = timeline_summary(commands)
         return templates.TemplateResponse(
             request,
             "_control.html",
@@ -572,7 +921,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                 "review_url": f"/instances/{quote(name, safe='')}/control/review",
                 "commands_url": f"/instances/{quote(name, safe='')}/control/commands",
                 "commands": commands,
-                "commands_summary": timeline_summary(commands),
+                "commands_summary": commands_summary,
                 "ACTION_COMMANDS": dict(ACTION_COMMANDS),
             },
         )
@@ -601,6 +950,10 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                 status_code=404,
             )
         commands = _row_commands(row)
+        if getattr(row, "path", "legacy") == "contract":
+            commands_summary = contract_timeline_summary(commands)
+        else:
+            commands_summary = timeline_summary(commands)
         return templates.TemplateResponse(
             request,
             "_control_commands.html",
@@ -608,13 +961,17 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                 "name": name,
                 "slug": control_slug(name),
                 "commands": commands,
-                "commands_summary": timeline_summary(commands),
+                "commands_summary": commands_summary,
             },
         )
 
     def _composer_context(row, name: str, availability) -> dict:
         """The shared template context for every composer render."""
         commands = _row_commands(row)
+        if getattr(row, "path", "legacy") == "contract":
+            commands_summary = contract_timeline_summary(commands)
+        else:
+            commands_summary = timeline_summary(commands)
         return {
             "name": name,
             "slug": control_slug(name),
@@ -627,7 +984,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
             "review_url": f"/instances/{quote(name, safe='')}/control/review",
             "commands_url": f"/instances/{quote(name, safe='')}/control/commands",
             "commands": commands,
-            "commands_summary": timeline_summary(commands),
+            "commands_summary": commands_summary,
             "ACTION_COMMANDS": dict(ACTION_COMMANDS),
         }
 
@@ -691,6 +1048,11 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                 "_control.html",
                 {"name": name, "slug": control_slug(name), "error": "instance not found"},
                 status_code=404,
+            )
+
+        if getattr(row, "path", "legacy") == "contract":
+            return await _review_contract(
+                request, name, row, templates, form, action_raw
             )
 
         # Validation of action, n, issue (422).
@@ -777,7 +1139,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
         # The action enabled (409: the composer with the disabled reason).
         selected = next((a for a in availability.actions if a.key == action), None)
         if selected is not None and not selected.enabled:
-            label = ACTION_LABELS.get(action, action)
+            label = ACTIONACTION_LABELS.get(action, action)
             error = f"{label} is unavailable: {selected.reason}"
             _write_refused(
                 refused_entry(
@@ -826,7 +1188,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                 "name": name,
                 "slug": control_slug(name),
                 "action": action,
-                "action_label": ACTION_LABELS.get(action, action),
+                "action_label": ACTIONACTION_LABELS.get(action, action),
                 "display_command": command,
                 "argv_text": " ".join(argv),
                 "request_id": request_id,
