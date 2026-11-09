@@ -1,8 +1,11 @@
 """Poll cycle: fetch one telemetry snapshot per running instance.
 
-Each cycle discovers the fleet, then runs ``telemetry`` against every
-running container (at most one exec in flight per instance, at most
-``max_concurrent_execs`` overall). Each exec is classified into a poll
+Each cycle discovers the fleet, then runs one exec against every running
+container (at most one exec in flight per instance, at most
+``max_concurrent_execs`` overall): legacy instances keep ``telemetry``
+v1, while contract-path instances poll with ``agentctl --contract 1
+status`` as their labelled exec user (ADR 0014). Misconfigured and
+duplicated rows are never polled. Each exec is classified into a poll
 outcome:
 
 - exit 0 with a JSON snapshot -> good snapshot;
@@ -11,6 +14,12 @@ outcome:
 - stdout that is not a JSON object -> telemetry not supported by this
   agent version (older images reject the subcommand with exit 2);
 - dashboard-side timeout -> unreachable (timeout).
+
+Contract ``status`` replies map by reply class: success to a good
+snapshot; ``agent_unreachable``, Docker exits 125-127 and timeouts to
+agent unreachable; ``internal`` and malformed stdout to snapshot failed;
+``contract_mismatch`` to the contract-mismatch outcome (whose reason
+names ``details.supported``); ``unsupported`` to unsupported operation.
 """
 
 from __future__ import annotations
@@ -21,7 +30,24 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from .contract_reply import (
+    AMBIGUOUS,
+    classify_contract_reply,
+)
+from .contract_reply import (
+    CONTRACT_MISMATCH as REPLY_CONTRACT_MISMATCH,
+)
+from .contract_reply import (
+    SUCCESS as REPLY_SUCCESS,
+)
+from .contract_reply import (
+    UNSUPPORTED as REPLY_UNSUPPORTED,
+)
+from .contract_status import contract_mismatch_headline
 from .gateway import (
+    CONTRACT_PATH,
+    ControlTimeoutError,
+    DockerNotAvailableError,
     GatewayError,
     ManagedInstance,
     TelemetryExec,
@@ -34,6 +60,7 @@ UNSUPPORTED_OPERATION = "unsupported_operation"
 SNAPSHOT_FAILED = "snapshot_failed"
 NOT_SUPPORTED = "not_supported"
 TIMEOUT = "timeout"
+CONTRACT_MISMATCH = "contract_mismatch"
 
 POLL_OUTCOME_KINDS = frozenset(
     {
@@ -43,6 +70,7 @@ POLL_OUTCOME_KINDS = frozenset(
         SNAPSHOT_FAILED,
         NOT_SUPPORTED,
         TIMEOUT,
+        CONTRACT_MISMATCH,
     }
 )
 
@@ -115,6 +143,93 @@ def classify_telemetry(
     return _outcome(GOOD, "", now), payload
 
 
+def classify_contract_status(
+    stdout: bytes, returncode: int | None, *, now: float
+) -> tuple[PollOutcome, dict[str, Any] | None]:
+    """Classify one finished contract ``status`` exec.
+
+    A coherent ``ok:true`` envelope is a good snapshot (its ``result``); a
+    ``contract_mismatch`` refusal is the contract-mismatch outcome (its
+    reason names ``details.supported``); an ``unsupported`` refusal is the
+    unsupported-operation outcome. Of the ambiguous answers, an
+    ``agent_unreachable`` envelope, a Docker transport failure (exits
+    125-127) and a dashboard-side timeout mean the agent is unreachable,
+    while ``internal`` and malformed stdout mean the snapshot failed.
+    Anything else definitive-but-unexpected is a snapshot failure too: an
+    unknown reply class never breaks the row.
+    """
+    cls = classify_contract_reply(returncode, stdout)
+    if cls == REPLY_SUCCESS:
+        try:
+            result = json.loads(stdout)
+        except ValueError:
+            return _outcome(SNAPSHOT_FAILED, "malformed stdout", now), None
+        if not isinstance(result, dict):
+            return _outcome(SNAPSHOT_FAILED, "malformed stdout", now), None
+        snapshot = result.get("result")
+        if not isinstance(snapshot, dict):
+            return _outcome(SNAPSHOT_FAILED, "malformed stdout", now), None
+        return _outcome(GOOD, "", now), snapshot
+    if cls == REPLY_CONTRACT_MISMATCH:
+        supported: Any = None
+        try:
+            envelope = json.loads(stdout)
+            error = envelope.get("error", {})
+            details = error.get("details", {}) if isinstance(error, dict) else {}
+            supported = details.get("supported") if isinstance(details, dict) else None
+        except ValueError:
+            supported = None
+        # The reason is the headline: it names details.supported.
+        return _outcome(CONTRACT_MISMATCH, contract_mismatch_headline(supported), now), None
+    if cls == REPLY_UNSUPPORTED:
+        return _outcome(UNSUPPORTED_OPERATION, _contract_message(stdout), now), None
+    if cls == AMBIGUOUS:
+        code, message = _contract_error(stdout)
+        if code == "agent_unreachable":
+            return _outcome(AGENT_UNREACHABLE, message or code, now), None
+        if isinstance(returncode, int) and 125 <= returncode <= 127:
+            return (
+                _outcome(
+                    AGENT_UNREACHABLE,
+                    f"docker exec exited with status {returncode}",
+                    now,
+                ),
+                None,
+            )
+        if code == "internal":
+            return _outcome(SNAPSHOT_FAILED, message or code, now), None
+        return _outcome(SNAPSHOT_FAILED, message or code or "malformed stdout", now), None
+    return (
+        _outcome(SNAPSHOT_FAILED, f"unexpected contract reply: {cls}", now),
+        None,
+    )
+
+
+def _contract_error(stdout: bytes) -> tuple[str | None, str]:
+    """The ``(code, message)`` of a contract error envelope, or unknowns."""
+    try:
+        envelope = json.loads(stdout)
+    except ValueError:
+        return None, ""
+    if not isinstance(envelope, dict):
+        return None, ""
+    error = envelope.get("error")
+    if not isinstance(error, dict):
+        return None, ""
+    code = error.get("code")
+    message = error.get("message")
+    return (
+        code if isinstance(code, str) else None,
+        message if isinstance(message, str) else "",
+    )
+
+
+def _contract_message(stdout: bytes) -> str:
+    """The message of a contract error envelope, or its code, or a fallback."""
+    code, message = _contract_error(stdout)
+    return message or code or "unsupported operation"
+
+
 async def _poll_one(
     gateway,
     instance: ManagedInstance,
@@ -123,26 +238,61 @@ async def _poll_one(
 ) -> tuple[str, InstancePoll] | None:
     """One exec for one running instance, bounded by the shared semaphore.
 
-    A running instance with a control exec in flight gets no telemetry exec
-    this cycle: ``None`` stands for "skipped", so ``apply_cycle`` keeps its
-    previous poll outcome and snapshot. The skip is not counted as a failure.
-    The check runs right before the exec, after taking the poll semaphore.
+    A running instance with a control exec in flight gets no exec this
+    cycle; a misconfigured or duplicated row never gets one either:
+    ``None`` stands for "skipped", so ``apply_cycle`` keeps its previous
+    poll outcome and snapshot. The skip is not counted as a failure. The
+    control-slot check runs right before the exec, after taking the poll
+    semaphore. Contract-path instances poll with ``agentctl --contract 1
+    status`` as their labelled user; legacy ones keep telemetry v1.
     """
+    if instance.note is not None:
+        return None
     async with semaphore:
         in_flight = getattr(gateway, "control_in_flight", None)
         if in_flight is not None and in_flight(instance.container_id):
             return None
+        if instance.path == CONTRACT_PATH:
+            return await _poll_contract_one(gateway, instance, now)
         try:
             exec_result: TelemetryExec = await gateway.telemetry(instance.container_id)
         except TelemetryTimeoutError as exc:
             # The gateway's message carries the budget that actually fired.
-            return instance.name, InstancePoll(_outcome(TIMEOUT, str(exc), now), None)
+            return instance.container_id, InstancePoll(
+                _outcome(TIMEOUT, str(exc), now), None
+            )
         except GatewayError as exc:
-            return instance.name, InstancePoll(_outcome(AGENT_UNREACHABLE, str(exc), now), None)
+            return instance.container_id, InstancePoll(
+                _outcome(AGENT_UNREACHABLE, str(exc), now), None
+            )
         outcome, snapshot = classify_telemetry(
             exec_result.stdout, exec_result.returncode, now=now
         )
-        return instance.name, InstancePoll(outcome, snapshot)
+        return instance.container_id, InstancePoll(outcome, snapshot)
+
+
+async def _poll_contract_one(
+    gateway, instance: ManagedInstance, now: float
+) -> tuple[str, InstancePoll] | None:
+    """One contract ``status`` exec; exit codes are classified, not raised."""
+    assert instance.exec_user is not None
+    try:
+        exec_result = await gateway.contract_status(
+            instance.container_id, instance.exec_user
+        )
+    except ControlTimeoutError as exc:
+        # The gateway's message carries the budget that actually fired.
+        return instance.container_id, InstancePoll(
+            _outcome(TIMEOUT, str(exc), now), None
+        )
+    except (GatewayError, DockerNotAvailableError) as exc:
+        return instance.container_id, InstancePoll(
+            _outcome(AGENT_UNREACHABLE, str(exc), now), None
+        )
+    outcome, snapshot = classify_contract_status(
+        exec_result.stdout, exec_result.returncode, now=now
+    )
+    return instance.container_id, InstancePoll(outcome, snapshot)
 
 
 async def run_cycle(

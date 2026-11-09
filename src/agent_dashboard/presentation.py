@@ -14,6 +14,7 @@ from typing import Any
 
 from .collector import (
     AGENT_UNREACHABLE,
+    CONTRACT_MISMATCH,
     GOOD,
     NOT_SUPPORTED,
     NOT_SUPPORTED_REASON,
@@ -62,7 +63,7 @@ def derive_reach(container_state: str, outcome_kind: str | None) -> str:
         return LIVE
     if outcome_kind in (AGENT_UNREACHABLE, TIMEOUT):
         return UNREACHABLE
-    if outcome_kind in (UNSUPPORTED_OPERATION, NOT_SUPPORTED):
+    if outcome_kind in (UNSUPPORTED_OPERATION, NOT_SUPPORTED, CONTRACT_MISMATCH):
         return UNSUPPORTED
     if outcome_kind == SNAPSHOT_FAILED:
         return STALE

@@ -8,6 +8,7 @@ from agent_dashboard import gateway
 from agent_dashboard.gateway import (
     AGENT_ROLE_LABEL,
     AGENT_USER,
+    CONTRACT_LABEL,
     DiscoveryTimeoutError,
     DockerGateway,
     DockerNotAvailableError,
@@ -36,9 +37,38 @@ EXPECTED_ARGV = [
     "-a",
     "--filter",
     f"label={AGENT_ROLE_LABEL}",
+    "--filter",
+    f"label={CONTRACT_LABEL}",
     "--format",
     gateway.PS_FORMAT,
 ]
+
+
+def _ps_row(
+    container_id: str,
+    name: str,
+    state: str,
+    oneoff: str = "",
+    contract: str = "",
+    instance: str = "",
+    exec_user: str = "",
+    backend: str = "",
+    marker: str = "",
+) -> str:
+    """One 9-column discovery row for the pinned ``PS_FORMAT`` layout."""
+    return "\t".join(
+        [
+            container_id,
+            name,
+            state,
+            oneoff,
+            contract,
+            instance,
+            exec_user,
+            backend,
+            marker,
+        ]
+    )
 
 
 def test_agent_role_label():
@@ -117,7 +147,12 @@ def test_no_shell_in_gateway_source():
 
 
 def test_parse_ps_output_states_and_fields():
-    output = "abc123\tworker-1\trunning\t\ndef456\tworker-2\texited\t\n"
+    output = "\n".join(
+        [
+            _ps_row("abc123", "worker-1", "running"),
+            _ps_row("def456", "worker-2", "exited"),
+        ]
+    )
     rows = parse_ps_output(output)
     assert [(r.name, r.state, r.container_id) for r in rows] == [
         ("worker-1", "running", "abc123"),
@@ -128,9 +163,9 @@ def test_parse_ps_output_states_and_fields():
 def test_parse_ps_output_drops_oneoff_and_blank_or_malformed():
     output = "\n".join(
         [
-            "aaa\toneoff-run\trunning\tTrue",
-            "bbb\tworker-3\trunning\tFalse",
-            "ccc\t/worker-4\texited\t",
+            _ps_row("aaa", "oneoff-run", "running", oneoff="True"),
+            _ps_row("bbb", "worker-3", "running", oneoff="False"),
+            _ps_row("ccc", "/worker-4", "exited"),
             "malformed-line",
             "",
         ]
@@ -183,7 +218,8 @@ def _patch_create_subprocess(monkeypatch, process=None, *, exc=None):
 
 
 def test_list_instances_uses_pinned_argv(monkeypatch):
-    proc = _FakeProcess(stdout=b"abc\tworker-1\trunning\t\n")
+    row = _ps_row("abc", "worker-1", "running").encode() + b"\n"
+    proc = _FakeProcess(stdout=row)
     seen = _patch_create_subprocess(monkeypatch, proc)
     rows = asyncio.run(DockerGateway(timeout=5.0).list_instances())
     assert seen["argv"] == EXPECTED_ARGV

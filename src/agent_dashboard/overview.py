@@ -210,8 +210,11 @@ async def read_full_history(row: FleetRow, gateway, *, now: float) -> HistoryRes
     read is bounded only by the gateway's own timeouts: no outer timeout
     wraps the calls, so a slow read can never cancel the gateway mid-exec
     and orphan a ``docker`` child. Any failure comes back as a display
-    message, never an exception.
+    message, never an exception. Contract-path rows carry no Attempt log,
+    so they are excluded with a message instead of an exec.
     """
+    if getattr(row, "path", "legacy") == "contract":
+        return "Unavailable for contract instances."
     try:
         if row.state == "running":
             exec_result = await gateway.attempt_history(row.container_id)

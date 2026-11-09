@@ -10,6 +10,7 @@ from fake_gateway import FakeGateway
 from agent_dashboard import collector
 from agent_dashboard.collector import (
     AGENT_UNREACHABLE,
+    CONTRACT_MISMATCH,
     GOOD,
     NOT_SUPPORTED,
     NOT_SUPPORTED_REASON,
@@ -150,6 +151,7 @@ def test_collector_exports_every_poll_outcome_kind():
         SNAPSHOT_FAILED,
         NOT_SUPPORTED,
         TIMEOUT,
+        CONTRACT_MISMATCH,
     }
 
 

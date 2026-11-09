@@ -36,7 +36,7 @@
 {% set ns = namespace(alerts=0, working=0) %}
 {% for row in running %}
 {% if row.rank <= 4 %}{% set ns.alerts = ns.alerts + 1 %}{% endif %}
-{% if row.detail is not none and row.detail.attempt_kind == "active" %}{% set ns.working = ns.working + 1 %}{% endif %}
+{% if row.detail is not none and row.detail.attempt_kind == "active" %}{% set ns.working = ns.working + 1 %}{% elif row.path == "contract" and row.contract is not none and row.contract.instance_state in ("active", "draining") %}{% set ns.working = ns.working + 1 %}{% endif %}
 {% endfor %}
 {% set filter_specs = [
   ("online", "Online units", "Online", running | length, "running instances"),
@@ -45,7 +45,7 @@
   ("offline", "Offline units", "Offline", stopped | length, "not running / exited"),
 ] %}
 {% macro filter_attrs(row) -%}
-{%- if row.state == "running" %} data-vc-online="1"{% if row.rank <= 4 %} data-vc-alerts="1"{% endif %}{% if row.detail is not none and row.detail.attempt_kind == "active" %} data-vc-working="1"{% endif %}{% else %} data-vc-offline="1"{% endif -%}
+{%- if row.state == "running" %} data-vc-online="1"{% if row.rank <= 4 %} data-vc-alerts="1"{% endif %}{% if row.detail is not none and row.detail.attempt_kind == "active" %} data-vc-working="1"{% elif row.path == "contract" and row.contract is not none and row.contract.instance_state in ("active", "draining") %} data-vc-working="1"{% endif %}{% else %} data-vc-offline="1"{% endif -%}
 {%- endmacro %}
 {% macro rail_item(row, attempt) -%}
 <li class="vc-rail-row"{{ filter_attrs(row) }}{% if row.state != "running" and row.name != selected %} hidden{% endif %}>
@@ -61,7 +61,7 @@
       <span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>
     </span>
     <span class="vc-rail-line vc-rail-meta">
-      <span class="vc-rail-repo">{{ row.detail.repository_display }}</span>
+      {% if row.path == "contract" %}<span class="vc-rail-repo">{{ row.contract.repository_display if row.contract is not none else "unavailable" }}</span>{% else %}<span class="vc-rail-repo">{{ row.detail.repository_display }}</span>{% endif %}
       <span class="vc-rail-attempt">{{ attempt }}</span>
     </span>
     {% if row.state == "running" and row.detail is not none and row.detail.budget_has_bar %}
@@ -95,7 +95,7 @@
   {% if running %}
   <ul class="vc-rail-list">
     {% for row in running %}
-    {{ rail_item(row, row.detail.attempt_text) }}
+    {% if row.path == "contract" %}{{ rail_item(row, row.contract.attempt_text if row.contract is not none else "—") }}{% else %}{{ rail_item(row, row.detail.attempt_text) }}{% endif %}
     {% endfor %}
   </ul>
   {% endif %}
@@ -147,6 +147,26 @@
   <tbody>
     {% for row in rows %}
     {% if row.state == "running" %}
+    {% if row.path == "contract" %}
+    <tr class="fleet-row {{ stripe_class(row) }}"
+       {{ filter_attrs(row) }}
+        hx-get="/instances/{{ row.name | urlencode }}"
+        hx-target="#drawer-holder"
+        hx-swap="innerHTML"
+        hx-push-url="/?instance={{ row.name | urlencode }}">
+      <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{% if row.backend %}{{ row.backend }}{% else %}<span class="hint">n/a</span>{% endif %}</div></td>
+      <td class="headline">{{ row.headline }}</td>
+      <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.reach != "live" and row.age_text %} <span class="age">{{ row.age_text }} ago</span>{% endif %}</td>
+      <td><span class="hint">n/a</span></td>
+      <td>{{ row.contract.attempt_text if row.contract is not none else "—" }}</td>
+      <td><div class="figure"><span class="hint">n/a</span></div></td>
+      <td><div class="figure"><span class="hint">n/a</span></div></td>
+      <td><div class="figure"><span class="hint">n/a</span></div></td>
+      <td><div class="figure"><span class="hint">n/a</span></div></td>
+      <td><span class="hint">n/a</span></td>
+      <td class="row-actions"><div class="row-actions-inner"><span class="hint">n/a</span></div></td>
+    </tr>
+    {% else %}
     <tr class="fleet-row {{ stripe_class(row) }}"
        {{ filter_attrs(row) }}
         hx-get="/instances/{{ row.name | urlencode }}"
@@ -176,6 +196,7 @@
         {% if row.live_url %}<a class="btn btn-live" href="{{ row.live_url }}" onclick="event.stopPropagation()">{{ live_icon() }} Live #{{ row.live_issue }}</a>{% endif %}
       </div></td>
     </tr>
+    {% endif %}
     {% else %}
     {% set d = row.drawer %}
     <tr class="fleet-row {{ stripe_class(row) }}"
@@ -185,7 +206,7 @@
         hx-target="#drawer-holder"
         hx-swap="innerHTML"
         hx-push-url="/?instance={{ row.name | urlencode }}">
-      <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{{ row.detail.repository_display }}</div></td>
+      <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{% if row.path == "contract" %}{% if row.backend %}{{ row.backend }}{% else %}<span class="hint">n/a</span>{% endif %}{% else %}{{ row.detail.repository_display }}{% endif %}</div></td>
       <td class="headline">{{ row.headline }}</td>
       <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.age_text %} <span class="age">last seen {{ row.age_text }} ago</span>{% endif %}</td>
       <td><span class="hint">n/a</span></td>
@@ -196,7 +217,7 @@
       <td><div class="figure"><span class="hint">n/a</span></div></td>
       <td><span class="hint">n/a</span></td>
       <td class="row-actions">
-        <a class="btn" href="/instances/{{ row.name | urlencode }}/history" onclick="event.stopPropagation()">{{ logs_icon() }} Logs</a>
+        {% if row.path == "contract" %}<span class="hint">n/a</span>{% else %}<a class="btn" href="/instances/{{ row.name | urlencode }}/history" onclick="event.stopPropagation()">{{ logs_icon() }} Logs</a>{% endif %}
       </td>
     </tr>
     {% endif %}

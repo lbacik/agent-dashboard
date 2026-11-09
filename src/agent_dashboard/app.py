@@ -76,6 +76,7 @@ from .cost_summary import summarize_cost
 from .fleet import FleetState, poll_forever
 from .gateway import (
     COMMAND_LOG_RE,
+    CONTRACT_PATH,
     EVIDENCE_PREVIEW_CAP,
     DockerGateway,
     GatewayError,
@@ -321,6 +322,16 @@ def create_app(
         """The fleet row for one instance name, or None when unknown/removed."""
         return next((r for r in rows if r.name == name), None)
 
+    def is_contract_row(row) -> bool:
+        """True when the row takes the contract path (no legacy widgets)."""
+        return row is not None and row.path == CONTRACT_PATH
+
+    #: Message for legacy Attempt-log widgets on a contract-path row.
+    CONTRACT_WIDGET_MESSAGE = (
+        "Unavailable for contract instances: this instance reports "
+        "a contract Status Snapshot, not Attempt logs."
+    )
+
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> Response:
         """Fleet table plus the instance drawer.
@@ -516,6 +527,8 @@ def create_app(
             )
 
         drawer = row.drawer if row is not None else None
+        if is_contract_row(row):
+            return page(error=CONTRACT_WIDGET_MESSAGE)
         if row is None or row.state != "running" or drawer is None:
             return page(error="Instance is not running.")
         issue = (
@@ -655,6 +668,9 @@ def create_app(
                 f"Unknown Managed instance {name!r}: it is unknown or was removed."
             )
             return page()
+        if is_contract_row(row):
+            ctx["error"] = CONTRACT_WIDGET_MESSAGE
+            return page()
         # Stopped containers cannot run ``docker exec``: their Attempt log
         # list arrives through a ``docker cp`` tree copy parsed on the
         # dashboard side, with the same tolerance rules as the exec reader.
@@ -740,6 +756,8 @@ def create_app(
                 None,
                 f"Unknown Managed instance {name!r}: it is unknown or was removed.",
             )
+        if is_contract_row(row):
+            return history_page(row, None, CONTRACT_WIDGET_MESSAGE)
         # Stopped containers cannot run ``docker exec``: their Attempt log
         # list arrives through a ``docker cp`` tree copy parsed on the
         # dashboard side, with the same tolerance rules as the exec reader.
@@ -982,6 +1000,8 @@ def create_app(
                 None,
                 f"Unknown Managed instance {name!r}: it is unknown or was removed.",
             )
+        if is_contract_row(row):
+            return progress_page(row, CONTRACT_WIDGET_MESSAGE)
         try:
             number, dash_started = validate_attempt_ref(issue, started)
         except ValueError as exc:
@@ -1162,6 +1182,15 @@ def create_app(
             return log_page(
                 None,
                 f"Unknown Managed instance {name!r}: it is unknown or was removed.",
+                attempt_url=base_url,
+                reset_url=base_url,
+                refresh_url=base_url,
+            )
+        if is_contract_row(row):
+            base_url = attempt_base_url("")
+            return log_page(
+                row,
+                CONTRACT_WIDGET_MESSAGE,
                 attempt_url=base_url,
                 reset_url=base_url,
                 refresh_url=base_url,
@@ -1369,6 +1398,8 @@ def create_app(
             return fragment(
                 f"Unknown Managed instance {name!r}: it is unknown or was removed."
             )
+        if is_contract_row(row):
+            return fragment(CONTRACT_WIDGET_MESSAGE)
         # Evidence files arrive via ``docker cp``, which works on stopped
         # containers too, so no running-instance guard is needed here.
         try:
@@ -1429,6 +1460,8 @@ def create_app(
             return PlainTextResponse(
                 f"Unknown Managed instance {name!r}: it is unknown or was removed."
             )
+        if is_contract_row(row):
+            return PlainTextResponse(CONTRACT_WIDGET_MESSAGE)
         # Evidence files arrive via ``docker cp``, which works on stopped
         # containers too, so no running-instance guard is needed here.
         try:
