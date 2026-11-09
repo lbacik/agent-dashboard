@@ -772,6 +772,12 @@ def validate_container_id(container_id: str) -> str:
 #: ``control.commands`` record and a Control audit entry.
 CONTROL_ACTIONS = frozenset({"stop", "stop_after", "resume", "handoff", "next_issue"})
 
+#: Contract-path Control actions the dashboard offers on live contract
+#: instances: the core mutations (spec "Control actions (contract path)").
+#: Legacy-only actions (``stop_after``, ``handoff``, ``next_issue``) stay on
+#: the legacy path.
+CONTRACT_CONTROL_ACTIONS = frozenset({"stop", "resume"})
+
 #: ``stop --after`` takes 1-99 attempts, no leading zeros.
 CONTROL_N_RE = re.compile(r"[1-9][0-9]?\Z")
 
@@ -927,6 +933,40 @@ def argv_command_status(container_id: str, request_id: str) -> list[str]:
         "command",
         request_id,
     ]
+
+
+def argv_contract_mutation(
+    action: str, request_id: str, expect_repo: str
+) -> list[str]:
+    """Agentctl argv for one contract mutation: ``stop`` or ``resume``.
+
+    The shape is pinned: ``[action, "--request-id", id, "--expect-repo",
+    repo]`` with space-separated flags (contract section 3.1), and
+    ``--expect-repo`` is always present. The request ID must fit the
+    contract pattern (``dash-`` IDs the dashboard generates do); the
+    repository must be ``owner/name``. A bad value raises
+    :class:`ValueError` before any argv exists.
+    """
+    from .contract_reply import validate_contract_request_id
+
+    if not isinstance(action, str) or action not in CONTRACT_CONTROL_ACTIONS:
+        raise ValueError(f"invalid contract control action: {action!r}")
+    validate_contract_request_id(request_id)
+    validate_expect_repo(expect_repo)
+    return [action, "--request-id", request_id, "--expect-repo", expect_repo]
+
+
+def argv_contract_command(request_id: str) -> list[str]:
+    """Agentctl argv for one read-only contract ``command <id>`` check.
+
+    The shape is pinned: ``["command", id]`` with the request ID as a
+    positional. A bad value raises :class:`ValueError` before any argv
+    exists.
+    """
+    from .contract_reply import validate_contract_request_id
+
+    validate_contract_request_id(request_id)
+    return ["command", request_id]
 
 
 def argv_contract_exec(
@@ -1775,6 +1815,79 @@ class DockerGateway:
         """
         argv = argv_command_status(container_id, request_id)
         return await self._run_single_control(container_id, argv)
+
+    async def _run_single_contract(
+        self,
+        container_id: str,
+        agentctl_argv: Sequence[str],
+        *,
+        exec_user: str = AGENT_USER,
+        operation: str = "mutation",
+    ) -> ControlExec:
+        """Run one validated contract argv in the per-container control slot.
+
+        Claims the same slot as :meth:`control` (raising
+        :class:`ControlBusyError` when another control exec for the same
+        container is in flight), then runs through the injectable runner
+        with the contract's timeout policy for ``operation``. Contract
+        ``status`` polls never take this slot: they keep being polled
+        while a Control action is in flight. Exit codes are reported,
+        never raised.
+        """
+        self._claim_control(container_id)
+        try:
+            argv = argv_contract_exec(
+                container_id, agentctl_argv, exec_user=exec_user
+            )
+            effective = contract_client.timeout_for(operation)
+            return await self._process_runner.run(
+                argv,
+                timeout=effective,
+                timeout_error=ControlTimeoutError(
+                    f"docker exec timed out after {effective:g} s"
+                ),
+            )
+        finally:
+            self._control_in_flight.discard(container_id)
+
+    async def contract_mutation(
+        self,
+        container_id: str,
+        action: str,
+        *,
+        request_id: str,
+        expect_repo: str,
+        exec_user: str = AGENT_USER,
+    ) -> ControlExec:
+        """Run one contract mutation (``stop``/``resume``) in the control slot.
+
+        The agentctl argv is pinned
+        (``stop|resume --request-id <id> --expect-repo <owner/name>`` with
+        space-separated flags); ``--expect-repo`` is always present and the
+        legacy minimum-version table does not apply. Shares the
+        per-container control slot with :meth:`control`: a second call for
+        the same container raises :class:`ControlBusyError`. The bound is
+        the contract's mutation policy (15 s). No automatic retry here:
+        the caller retries ambiguous outcomes with the same request ID.
+        """
+        agentctl_argv = argv_contract_mutation(action, request_id, expect_repo)
+        return await self._run_single_contract(
+            container_id, agentctl_argv, exec_user=exec_user, operation=action
+        )
+
+    async def contract_command(
+        self, container_id: str, request_id: str, *, exec_user: str = AGENT_USER
+    ) -> ControlExec:
+        """Run one read-only contract ``command <id>`` check in the slot.
+
+        The agentctl argv is pinned (``["command", id]``). Shares the
+        per-container control slot; the bound is the contract's read
+        policy (10 s). Exit codes are reported, never raised.
+        """
+        agentctl_argv = argv_contract_command(request_id)
+        return await self._run_single_contract(
+            container_id, agentctl_argv, exec_user=exec_user, operation="command"
+        )
 
     async def attempt_events(
         self, container_id: str, issue: int | str, started: str

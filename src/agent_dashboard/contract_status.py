@@ -42,6 +42,24 @@ STALE_AFTER_INTERVALS = 3
 #: allows up to 50; the drawer keeps the latest 20 like the legacy path).
 EVENTS_SHOWN = 20
 
+#: Command timeline entries shown, newest first (like the legacy path).
+COMMANDS_SHOWN = 10
+
+#: Terminal acknowledgements for a contract CommandRecord (spec 7.5).
+CONTRACT_TERMINAL_ACKS = ("completed", "superseded", "not_fulfilled")
+
+#: Display labels for contract ``recent_commands`` kinds.
+CONTRACT_KIND_LABELS = {
+    "stop": "stop",
+    "stop_after": "stop after",
+    "resume": "resume",
+    "handoff": "handoff",
+    "next_issue": "next issue",
+    "recovery_retry": "recovery retry",
+    "recovery_release": "recovery release",
+    "errors_reset": "errors reset",
+}
+
 #: Optional figures in display order (spec section 7.3 name set): cost,
 #: cache hit rate, context sizes, turns, tool calls, continuations, review
 #: seats, elapsed time. ``native.*`` and unknown names follow, sorted.
@@ -222,6 +240,8 @@ class ContractDetail:
     # ``events_total`` is the full snapshot count for the count line.
     events: tuple[ContractEventView, ...] = ()
     events_total: int = 0
+    # Command timeline entries, newest first, at most COMMANDS_SHOWN.
+    commands: tuple[Any, ...] = ()
 
 
 def _fmt_number(value: int | float) -> str:

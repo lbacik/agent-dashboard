@@ -171,3 +171,85 @@ def required_capability(
         return shared.required_capability(operation, dict(arguments or {}))
     except Exception:
         return None
+
+
+def _as_text(value: Any) -> str | None:
+    """A stripped non-empty string, else none (never raises)."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _as_sequence(value: Any) -> int | None:
+    """An integer sequence >= 0, else none (never raises)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    return None
+
+
+def describe_contract_reply(exit_code: Any, stdout: Any) -> dict[str, Any]:
+    """Parsed fields of one contract reply plus its consumer class.
+
+    Never raises: anything incoherent reads as ``stored: None`` with empty
+    fields and the class from :func:`classify_contract_reply` (usually
+    ``ambiguous``). Keys: ``class``, ``error_code``, ``acknowledgement``,
+    ``replayed``, ``sequence``, ``detail``, ``repository``, ``request_id``,
+    ``stored`` and ``message``. ``stored`` is the ``details.stored`` flag
+    for ``internal`` errors (none otherwise); ``message`` is the error
+    message or the command detail for success.
+    """
+    cls = classify_contract_reply(exit_code, stdout)
+    detail: dict[str, Any] = {
+        "class": cls,
+        "error_code": None,
+        "acknowledgement": None,
+        "replayed": None,
+        "sequence": None,
+        "detail": None,
+        "repository": None,
+        "request_id": None,
+        "stored": None,
+        "message": "",
+    }
+    try:
+        text = _decode(stdout)
+        doc = json.loads(text)
+    except Exception:
+        return detail
+    if not isinstance(doc, dict):
+        return detail
+    if doc.get("ok") is True:
+        result = doc.get("result")
+        if not isinstance(result, dict):
+            return detail
+        replayed = result.get("replayed")
+        detail["replayed"] = replayed if isinstance(replayed, bool) else None
+        command = result.get("command")
+        if not isinstance(command, dict):
+            return detail
+        acknowledgement = command.get("acknowledgement")
+        detail["acknowledgement"] = (
+            acknowledgement if isinstance(acknowledgement, str) else None
+        )
+        detail["sequence"] = _as_sequence(command.get("sequence"))
+        detail["detail"] = _as_text(command.get("detail"))
+        detail["repository"] = _as_text(command.get("repository"))
+        detail["request_id"] = _as_text(command.get("request_id"))
+        detail["message"] = detail["detail"] or ""
+        return detail
+    error = doc.get("error")
+    if not isinstance(error, dict):
+        return detail
+    code = error.get("code")
+    detail["error_code"] = code if isinstance(code, str) else None
+    detail["message"] = _as_text(error.get("message")) or ""
+    detail["request_id"] = _as_text(error.get("request_id"))
+    details = error.get("details")
+    if isinstance(details, dict):
+        stored = details.get("stored")
+        detail["stored"] = stored if isinstance(stored, bool) else None
+        if detail["error_code"] in ("repository_mismatch",):
+            detail["repository"] = _as_text(details.get("repository"))
+    return detail
