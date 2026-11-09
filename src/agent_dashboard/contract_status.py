@@ -357,7 +357,8 @@ def contract_command_timeline(recent_commands: Any) -> tuple[ContractCommandEntr
             created = getattr(record, "created_at", None)
         if not isinstance(request_id, str) or not request_id:
             continue
-        sequence = sequence if isinstance(sequence, int) and not isinstance(sequence, bool) else None
+        if isinstance(sequence, bool) or not isinstance(sequence, int):
+            sequence = None
         kind = kind if isinstance(kind, str) and kind else "unknown"
         acknowledgement = (
             acknowledgement if isinstance(acknowledgement, str) and acknowledgement else None
@@ -427,8 +428,8 @@ def follow_contract_command(
     call-shape parity with the legacy path and is otherwise unused: a
     contract snapshot has no per-action progress section.
     """
-    from .control import GONE_BODY, REACH_REASONS, WAITING_BODY, FollowResult
     from .control import EVICTED_BODY as LEGACY_EVICTED_BODY
+    from .control import GONE_BODY, REACH_REASONS, WAITING_BODY, FollowResult
 
     _ = action
     if not row_exists or row_container_id != card_container_id:

@@ -86,6 +86,24 @@ command, follows it through telemetry until it reaches a terminal state.
 A read-only helper, `agentctl command <id>` behind each card's "Check
 status" button, re-reads an outcome without sending anything.
 
+**Contract instances.** On a live contract instance the Control console
+(`06 // Control console` in the drawer) offers the two core actions,
+`stop` and `resume`, under the same dashboard-wide control mode, request
+protection, LAN-mode Roles and container-ID plus repository check (the
+legacy minimum-version table does not apply). Every request carries a
+`--contract 1` argv of the pinned shape
+(`stop|resume --request-id <dash-…> --expect-repo <owner/name>`,
+`--expect-repo` always sent) with a consumer-generated request ID, and
+the confirmation shows the exact argv, the instance, the Target Repository
+and the request ID. Every reply ends in a feedback card: an accepted command
+is followed through the snapshot's `recent_commands` until its
+Acknowledgement is terminal (`completed`, `superseded`, `not_fulfilled`);
+an ambiguous outcome (agent unreachable, Docker 125–127, a timeout, or an
+unreadable reply) is re-sent once with the same request ID within the 15 s
+mutation budget, then reported as Outcome unknown with Retry (same ID) and
+Check status. The timeline shows the newest 10 `recent_commands` with
+`dashboard`/`CLI` origin chips.
+
 **Switching control off.** Control defaults to on. Pass `--control off`
 (or set `AGENT_DASHBOARD_CONTROL=off`) for read-only mode: every drawer
 shows only "Controls unavailable: control is off

@@ -17,6 +17,7 @@ import sys
 import time
 from urllib.parse import parse_qs, quote, urlencode
 
+from agent_operator_contract.client import MUTATION_TIMEOUT
 from fastapi import Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -81,13 +82,11 @@ from .control_audit import (
     submitted_entry,
 )
 from .gateway import (
-    AGENT_USER,
     CONTRACT_CONTROL_ACTIONS,
     CONTROL_ACTIONS,
     ControlBusyError,
     ControlTimeoutError,
     DockerNotAvailableError,
-    argv_contract_command,
     argv_contract_exec,
     argv_contract_mutation,
     argv_control,
@@ -828,6 +827,812 @@ async def _review_contract(request, name, row, templates, form, action_raw):
     )
 
 
+def _contract_body_oob(request, templates: Jinja2Templates, name: str, row) -> str:
+    """The composer plus timeline summary out of band for contract routes."""
+    context = _composer_context_for(request, name, row)
+    context["slug"] = control_slug(name)
+    return templates.get_template("_control_body_oob.html").render(context)
+
+
+def _contract_retry_fields(
+    *,
+    action: str,
+    container_id: str,
+    repository: str,
+    request_id: str,
+    submit_url: str,
+) -> dict:
+    """Hidden fields for a contract card's Retry form (same request ID)."""
+    return {
+        "action": action,
+        "n_value": None,
+        "issue_value": None,
+        "container_id": container_id,
+        "repository": repository,
+        "request_id": request_id,
+        "submit_url": submit_url,
+    }
+
+
+def _contract_status_fields(
+    *,
+    action: str,
+    container_id: str,
+    repository: str,
+    request_id: str,
+    status_url: str,
+) -> dict:
+    """Hidden fields for a contract card's Check status form."""
+    return {
+        "action": action,
+        "n_value": None,
+        "issue_value": None,
+        "container_id": container_id,
+        "repository": repository,
+        "request_id": request_id,
+        "status_url": status_url,
+    }
+
+
+async def _submit_contract(request, name: str, row, templates, form, gateway):
+    """Send one contract mutation (``stop``/``resume``): one feedback card.
+
+    Request protection already ran. Validates every field including the
+    contract request ID (422, Refused card), then target binding (409: the
+    container ID, live Reach and Target Repository), then the ``submitted``
+    Control audit entry (``protocol="contract"``; a failing write means the
+    command is not sent, 503), then ``gateway.contract_mutation``. An
+    ambiguous outcome (including a timeout) is re-sent once with the same
+    request ID and payload while the 15 s mutation budget allows it; a
+    second ambiguity renders Outcome unknown with Retry and Check status.
+    Every card follows the contract reply table; the composer and the
+    timeline summary come back out of band. No path returns a 500.
+    """
+    values, validation_message = _validate_contract_submit(form)
+    if values is None:
+        assert validation_message is not None
+        try:
+            audit_request: str | None = validate_contract_request_id(
+                form.get("request_id", "")
+            )
+        except ValueError:
+            audit_request = None
+        _write_refused(
+            refused_entry(
+                instance=name,
+                reason="validation",
+                error=validation_message,
+                operator=_operator_name(request),
+                request_id=audit_request,
+                container_id=form.get("container_id", ""),
+                expected_repository=form.get("repository", ""),
+                action=None,
+                params={},
+                command="",
+                agent_version=_agent_version(row),
+                retry=form.get("retry", "") == "1",
+                **_audit_path(row),
+            )
+        )
+        return HTMLResponse(
+            render_card(
+                templates,
+                command=form.get("action", "") or "—",
+                tone="error",
+                title="Refused",
+                body=validation_message,
+                request_id=audit_request,
+            )
+            + _contract_body_oob(request, templates, name, row),
+            status_code=422,
+        )
+
+    action = values["action"]
+    container_id = values["container_id"]
+    repository = values["repository"]
+    request_id = values["request_id"]
+    retry = values["retry"]
+    command = values["command"]
+    submit_url = f"/instances/{quote(name, safe='')}/control/submit"
+    status_url = f"/instances/{quote(name, safe='')}/control/status"
+
+    def refused_card(message: str) -> str:
+        return render_card(
+            templates,
+            command=command,
+            tone="error",
+            title="Refused",
+            body=message,
+            request_id=request_id,
+        )
+
+    # Target binding (spec 5.3, ADR 0006): the fleet still lists the name
+    # with the same container ID, Reach is live recomputed server-side, and
+    # the latest good snapshot's Target Repository equals the form's.
+    if (
+        row.container_id != container_id
+        or row.reach != "live"
+        or _contract_repository(row) != repository
+    ):
+        _write_refused(
+            refused_entry(
+                instance=name,
+                reason="stale_binding",
+                error=STALE_BINDING_MESSAGE,
+                operator=_operator_name(request),
+                request_id=request_id,
+                container_id=container_id,
+                expected_repository=repository,
+                action=action,
+                params={},
+                command=command,
+                agent_version=_agent_version(row),
+                retry=retry,
+                **_audit_path(row),
+            )
+        )
+        return HTMLResponse(
+            refused_card(STALE_BINDING_MESSAGE)
+            + _contract_body_oob(request, templates, name, row),
+            status_code=409,
+        )
+
+    exec_user = _contract_exec_user(row)
+    if exec_user is None:
+        message = (
+            "No exec user: the instance names none, so the command cannot run. "
+            "Nothing was sent."
+        )
+        _write_refused(
+            refused_entry(
+                instance=name,
+                reason="action_unavailable",
+                error=message,
+                operator=_operator_name(request),
+                request_id=request_id,
+                container_id=container_id,
+                expected_repository=repository,
+                action=action,
+                params={},
+                command=command,
+                agent_version=_agent_version(row),
+                retry=retry,
+                **_audit_path(row),
+            )
+        )
+        return HTMLResponse(
+            refused_card(message) + _contract_body_oob(request, templates, name, row),
+            status_code=409,
+        )
+
+    # Fast-path busy check: another control exec already in flight refuses
+    # before the `submitted` entry, so the normal busy path leaves no
+    # `submitted`-without-exec pair.
+    in_flight = getattr(gateway, "control_in_flight", None)
+    if callable(in_flight):
+        try:
+            claimed = bool(in_flight(row.container_id))
+        except Exception:  # noqa: BLE001 - a broken probe never refuses
+            claimed = False
+        if claimed:
+            _write_refused(
+                refused_entry(
+                    instance=name,
+                    reason="busy",
+                    error=BUSY_MESSAGE,
+                    operator=_operator_name(request),
+                    request_id=request_id,
+                    container_id=container_id,
+                    expected_repository=repository,
+                    action=action,
+                    params={},
+                    command=command,
+                    agent_version=_agent_version(row),
+                    expect_repo_guard=True,
+                    retry=retry,
+                    **_audit_path(row),
+                )
+            )
+            return HTMLResponse(
+                refused_card(BUSY_MESSAGE)
+                + _contract_body_oob(request, templates, name, row),
+                status_code=409,
+            )
+
+    backend = getattr(row, "backend", None)
+    common = {
+        "instance": name,
+        "operator": _operator_name(request),
+        "request_id": request_id,
+        "container_id": container_id,
+        "expected_repository": repository,
+        "action": action,
+        "params": {},
+        "command": command,
+        "agent_version": _agent_version(row),
+        "expect_repo_guard": True,
+        "retry": retry,
+        "protocol": "contract",
+        "backend": backend,
+    }
+
+    # The `submitted` entry comes before `docker exec`; a failing write
+    # means the command is not sent (503, Not sent card, no exec).
+    try:
+        append_entry(submitted_entry(**common))
+    except Exception as exc:  # noqa: BLE001 - fail closed, report the card
+        print(f"control-audit submitted write failed: {exc}", file=sys.stderr)
+        oob_path = audit_path().parent
+        return HTMLResponse(
+            render_card(
+                templates,
+                command=command,
+                tone="error",
+                title="Not sent",
+                body=(
+                    "The Control audit could not be written, so the command "
+                    f"was not sent. Check the dashboard's state directory ({oob_path})."
+                ),
+                request_id=request_id,
+            )
+            + _contract_body_oob(request, templates, name, row),
+            status_code=503,
+        )
+
+    async def _run_once():
+        """One contract mutation exec; timeouts read as ambiguous."""
+        try:
+            exec_result = await gateway.contract_mutation(
+                row.container_id,
+                action,
+                request_id=request_id,
+                expect_repo=repository,
+                exec_user=exec_user,
+            )
+        except ControlBusyError:
+            raise
+        except ControlTimeoutError:
+            return None, CONTRACT_AMBIGUOUS, "the agent did not answer in time"
+        except DockerNotAvailableError as exc:
+            return None, "docker_unavailable", str(exc) or "docker is unavailable"
+        except Exception as exc:  # noqa: BLE001 - no path returns a 500
+            return None, CONTRACT_AMBIGUOUS, str(exc)[:2000] or "control exec failed"
+        detail = describe_contract_reply(
+            exec_result.returncode, exec_result.stdout
+        )
+        return exec_result, detail["class"], detail
+
+    started = time.perf_counter()
+    attempts = 1
+    try:
+        exec_result, cls, info = await _run_once()
+    except ControlBusyError:
+        try:
+            append_entry(
+                outcome_entry(
+                    **common, outcome="refused", reason="busy", error=BUSY_MESSAGE
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - the refusal still stands
+            print(
+                f"control-audit outcome write failed (busy): {exc}",
+                file=sys.stderr,
+            )
+        return HTMLResponse(
+            refused_card(BUSY_MESSAGE)
+            + _contract_body_oob(request, templates, name, row),
+            status_code=409,
+        )
+    if cls in (CONTRACT_AMBIGUOUS, CONTRACT_NOT_FOUND):
+        elapsed = time.perf_counter() - started
+        if elapsed < MUTATION_TIMEOUT:
+            # One retry with the same request ID and payload (spec 8.4):
+            # the agent treats it as an identical retry.
+            attempts = 2
+            try:
+                exec_result, cls, info = await _run_once()
+            except ControlBusyError:
+                try:
+                    append_entry(
+                        outcome_entry(
+                            **common,
+                            outcome="refused",
+                            reason="busy",
+                            error=BUSY_MESSAGE,
+                            attempts=attempts,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        f"control-audit outcome write failed (busy): {exc}",
+                        file=sys.stderr,
+                    )
+                return HTMLResponse(
+                    refused_card(BUSY_MESSAGE)
+                    + _contract_body_oob(request, templates, name, row),
+                    status_code=409,
+                )
+
+    if isinstance(info, dict):
+        detail = info
+        error_code = detail["error_code"] or detail["acknowledgement"]
+        replayed = detail["replayed"]
+        sequence = detail["sequence"]
+    else:
+        detail = None
+        error_code = None
+        replayed = None
+        sequence = None
+    if isinstance(info, str):
+        error_text: str | None = info
+    elif isinstance(detail, dict):
+        error_text = detail["message"] or None
+    else:
+        error_text = None
+    exit_code = (
+        exec_result.returncode
+        if exec_result is not None and isinstance(exec_result.returncode, int)
+        else None
+    )
+
+    outcome_note: str | None = None
+
+    def _outcome(outcome: str, error: str | None) -> None:
+        nonlocal outcome_note
+        try:
+            append_entry(
+                outcome_entry(
+                    **common,
+                    outcome=outcome,
+                    exit_code=exit_code,
+                    sequence=sequence,
+                    acknowledgement=(
+                        detail["acknowledgement"] if detail is not None else None
+                    ),
+                    reply_repository=(
+                        detail["repository"] if detail is not None else None
+                    ),
+                    repository_mismatch=None,
+                    error=error,
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                    error_code=error_code,
+                    replayed=replayed,
+                    attempts=attempts,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - the card still stands
+            print(f"control-audit outcome write failed: {exc}", file=sys.stderr)
+            outcome_note = OUTCOME_WRITE_NOTE
+
+    track_url = track_url_for(
+        name,
+        action=action,
+        n_value=None,
+        issue_value=None,
+        container_id=container_id,
+        repository=repository,
+        request_id=request_id,
+        sequence=sequence,
+    )
+
+    if cls == CONTRACT_SUCCESS:
+        assert detail is not None
+        ack = detail["acknowledgement"]
+        body = detail["detail"] or "—"
+        if isinstance(ack, str) and ack in CONTRACT_FOLLOW_TERMINAL:
+            _outcome("accepted", None)
+            feedback = render_card(
+                templates,
+                command=command,
+                tone=CONTRACT_ACK_TONES[ack],
+                title=CONTRACT_ACK_TITLES[ack],
+                body=body,
+                request_id=request_id,
+                sequence=sequence,
+                outcome_note=outcome_note,
+            )
+        else:
+            _outcome("accepted", None)
+            feedback = render_card(
+                templates,
+                command=command,
+                tone="info",
+                title="Accepted",
+                body=body,
+                request_id=request_id,
+                sequence=sequence,
+                outcome_note=outcome_note,
+                track_url=track_url,
+            )
+    elif cls == CONTRACT_REPLAY:
+        _outcome("accepted", None)
+        feedback = render_card(
+            templates,
+            command=command,
+            tone="info",
+            title="Already recorded",
+            body="Already recorded; nothing new happened.",
+            request_id=request_id,
+            sequence=sequence,
+            outcome_note=outcome_note,
+            track_url=track_url,
+        )
+    elif cls == CONTRACT_REJECTION and (error_code == "usage"):
+        _outcome("usage_error", USAGE_ERROR_BODY)
+        feedback = render_card(
+            templates,
+            command=command,
+            tone="error",
+            title="Not sent",
+            body=USAGE_ERROR_BODY,
+            request_id=request_id,
+            sequence=sequence,
+            outcome_note=outcome_note,
+        )
+    elif cls == CONTRACT_REJECTION and error_code == "internal":
+        _outcome("rejected", CONTRACT_NOT_STORED_BODY)
+        feedback = render_card(
+            templates,
+            command=command,
+            tone="error",
+            title="Not stored",
+            body=CONTRACT_NOT_STORED_BODY,
+            request_id=request_id,
+            sequence=sequence,
+            outcome_note=outcome_note,
+            retry_fields=_contract_retry_fields(
+                action=action,
+                container_id=container_id,
+                repository=repository,
+                request_id=request_id,
+                submit_url=submit_url,
+            ),
+        )
+    elif cls == CONTRACT_REJECTION:
+        error = f"Rejected: {error_text or error_code or 'no reason given'}. Nothing was stored."
+        _outcome("rejected", error)
+        feedback = render_card(
+            templates,
+            command=command,
+            tone="error",
+            title="Rejected",
+            body=error,
+            request_id=request_id,
+            sequence=sequence,
+            outcome_note=outcome_note,
+        )
+    elif cls == CONTRACT_UNSUPPORTED:
+        error = (
+            f"Not supported: {error_text or 'the instance does not support this action'}. "
+            "Nothing was stored."
+        )
+        _outcome("rejected", error)
+        feedback = render_card(
+            templates,
+            command=command,
+            tone="error",
+            title="Not supported",
+            body=error,
+            request_id=request_id,
+            sequence=sequence,
+            outcome_note=outcome_note,
+        )
+    elif cls == CONTRACT_REPLY_MISMATCH:
+        error = (
+            "Contract mismatch: the instance speaks another contract major; "
+            "nothing was sent."
+        )
+        _outcome("usage_error", error)
+        feedback = render_card(
+            templates,
+            command=command,
+            tone="error",
+            title="Not sent",
+            body=error,
+            request_id=request_id,
+            sequence=sequence,
+            outcome_note=outcome_note,
+        )
+    elif cls == "docker_unavailable":
+        error = (
+            f"Docker could not run agentctl: {error_text}"
+            if error_text
+            else "Docker could not run agentctl."
+        )
+        _outcome("failed", error)
+        feedback = render_card(
+            templates,
+            command=command,
+            tone="error",
+            title="Not sent",
+            body=error,
+            request_id=request_id,
+            sequence=sequence,
+            outcome_note=outcome_note,
+        )
+    else:
+        # Still ambiguous after the retry (or not_found): outcome unknown
+        # with Retry (same ID) and Check status.
+        _outcome("unknown", error_text or "no reply from the agent")
+        feedback = render_card(
+            templates,
+            command=command,
+            tone="error",
+            title="Outcome unknown",
+            body=CONTRACT_UNKNOWN_BODY,
+            request_id=request_id,
+            sequence=sequence,
+            outcome_note=outcome_note,
+            retry_fields=_contract_retry_fields(
+                action=action,
+                container_id=container_id,
+                repository=repository,
+                request_id=request_id,
+                submit_url=submit_url,
+            ),
+            status_fields=_contract_status_fields(
+                action=action,
+                container_id=container_id,
+                repository=repository,
+                request_id=request_id,
+                status_url=status_url,
+            ),
+        )
+    return HTMLResponse(
+        feedback + _contract_body_oob(request, templates, name, row), status_code=200
+    )
+
+
+async def _track_contract(request, name: str, row, templates):
+    """Re-read one accepted contract card from the latest good snapshot.
+
+    No Docker call and no Control audit entry. The card's values travel as
+    query parameters; the record is located in the snapshot's
+    ``recent_commands`` by request ID. Terminal acknowledgements stop the
+    card; an evicted record stops and offers Check status.
+    """
+    query = dict(request.query_params)
+    values, message = _validate_contract_track(query)
+    if values is None:
+        assert message is not None
+        return HTMLResponse(f'<p class="ctl-error">{message}</p>', status_code=422)
+    status_url = f"/instances/{quote(name, safe='')}/control/status"
+    contract = getattr(row, "contract", None)
+    recent = getattr(contract, "commands", None)
+    result = follow_contract_command(
+        action=values["action"],
+        request_id=values["request_id"],
+        sequence=values["sequence"],
+        card_container_id=values["container_id"],
+        recent_commands=recent,
+        reach=row.reach,
+        row_container_id=row.container_id,
+        row_exists=True,
+    )
+    return HTMLResponse(
+        follow_card(templates, name, values, result, status_url=status_url),
+        status_code=200,
+    )
+
+
+async def _status_contract(request, name: str, row, templates, form, gateway):
+    """Ask the agent directly: ``agentctl command <id>`` for one card.
+
+    Request protection already ran. Validates the card's fields (422,
+    Refused card), then the container binding (a replaced container stops
+    with the /data volume message), then the read-only contract ``command``
+    exec in the per-instance control slot (409 when busy). Success
+    re-renders the card from the record (terminal acknowledgements stop,
+    anything else keeps following from the snapshot); ``not_found`` says
+    the command was not recorded with a same-ID Retry; anything else says
+    the check failed with both buttons. It writes no Control audit entry.
+    No path returns a 500.
+    """
+    values, validation_message = _validate_contract_submit(form)
+    if values is None:
+        assert validation_message is not None
+        try:
+            shown_request: str | None = validate_contract_request_id(
+                form.get("request_id", "")
+            )
+        except ValueError:
+            shown_request = None
+        return HTMLResponse(
+            render_card(
+                templates,
+                command=form.get("action", "") or "—",
+                tone="error",
+                title="Refused",
+                body=validation_message,
+                request_id=shown_request,
+            ),
+            status_code=422,
+        )
+
+    action = values["action"]
+    container_id = values["container_id"]
+    repository = values["repository"]
+    request_id = values["request_id"]
+    command = values["command"]
+    submit_url = f"/instances/{quote(name, safe='')}/control/submit"
+    status_url = f"/instances/{quote(name, safe='')}/control/status"
+
+    def check_card(reason: str) -> str:
+        """A "could not check" card with both Retry and Check status."""
+        return render_card(
+            templates,
+            command=command,
+            tone="error",
+            title="Outcome unknown",
+            body=f"Could not check: {reason}",
+            request_id=request_id,
+            sequence=None,
+            retry_fields=_contract_retry_fields(
+                action=action,
+                container_id=container_id,
+                repository=repository,
+                request_id=request_id,
+                submit_url=submit_url,
+            ),
+            status_fields=_contract_status_fields(
+                action=action,
+                container_id=container_id,
+                repository=repository,
+                request_id=request_id,
+                status_url=status_url,
+            ),
+        )
+
+    # The card's container must still be the fleet's: otherwise the agent's
+    # record of this command is on its /data volume.
+    if row.container_id != container_id:
+        return HTMLResponse(
+            render_card(
+                templates,
+                command=command,
+                tone="info",
+                title="Accepted",
+                body=GONE_BODY,
+                request_id=request_id,
+                sequence=None,
+            ),
+            status_code=200,
+        )
+
+    exec_user = _contract_exec_user(row)
+    if exec_user is None:
+        return HTMLResponse(check_card("the instance names no exec user"), status_code=409)
+
+    # The per-instance busy check refuses before the exec (409), like
+    # submit but without any audit entry.
+    in_flight = getattr(gateway, "control_in_flight", None)
+    if callable(in_flight):
+        try:
+            claimed = bool(in_flight(row.container_id))
+        except Exception:  # noqa: BLE001 - a broken probe never refuses
+            claimed = False
+        if claimed:
+            return HTMLResponse(check_card(BUSY_MESSAGE), status_code=409)
+
+    try:
+        exec_result = await gateway.contract_command(
+            row.container_id, request_id, exec_user=exec_user
+        )
+    except ControlBusyError:
+        return HTMLResponse(check_card(BUSY_MESSAGE), status_code=409)
+    except (ControlTimeoutError, DockerNotAvailableError) as exc:
+        return HTMLResponse(check_card(str(exc) or "no reply from the agent"), status_code=200)
+    except Exception as exc:  # noqa: BLE001 - no path returns a 500
+        return HTMLResponse(
+            check_card(str(exc)[:2000] or "command status exec failed"),
+            status_code=200,
+        )
+
+    detail = describe_contract_reply(exec_result.returncode, exec_result.stdout)
+    cls = detail["class"]
+    if cls == CONTRACT_SUCCESS:
+        acknowledgement = detail["acknowledgement"]
+        record_text = detail["detail"] or None
+        if isinstance(acknowledgement, str) and (
+            acknowledgement in CONTRACT_FOLLOW_TERMINAL
+        ):
+            return HTMLResponse(
+                render_card(
+                    templates,
+                    command=command,
+                    tone=CONTRACT_ACK_TONES[acknowledgement],
+                    title=CONTRACT_ACK_TITLES[acknowledgement],
+                    body=record_text or "—",
+                    request_id=request_id,
+                    sequence=detail["sequence"],
+                ),
+                status_code=200,
+            )
+        # A non-terminal record keeps following from the snapshot: the
+        # record's own text is fresher than the snapshot's, the progress
+        # line still comes from the snapshot's related section.
+        contract = getattr(row, "contract", None)
+        recent = getattr(contract, "commands", None)
+        result = follow_contract_command(
+            action=action,
+            request_id=request_id,
+            sequence=detail["sequence"],
+            card_container_id=container_id,
+            recent_commands=recent,
+            reach=row.reach,
+            row_container_id=row.container_id,
+            row_exists=True,
+        )
+        if result.outcome == "terminal":
+            return HTMLResponse(
+                render_card(
+                    templates,
+                    command=command,
+                    tone=result.tone,
+                    title=result.title,
+                    body=result.body,
+                    request_id=request_id,
+                    sequence=detail["sequence"],
+                ),
+                status_code=200,
+            )
+        status_values = {
+            "action": action,
+            "n_value": None,
+            "issue_value": None,
+            "container_id": container_id,
+            "repository": repository,
+            "request_id": request_id,
+            "sequence": detail["sequence"],
+        }
+        if result.outcome in ("following", "paused", "waiting"):
+            outcome = result.outcome
+        else:
+            outcome = "following"
+        body = record_text or result.body
+        return HTMLResponse(
+            follow_card(
+                templates,
+                name,
+                status_values,
+                FollowResult(
+                    outcome=outcome,
+                    acknowledgement=acknowledgement,
+                    title="Accepted",
+                    tone="info",
+                    body=body,
+                    progress=result.progress,
+                    following=True,
+                ),
+                status_url=status_url,
+            ),
+            status_code=200,
+        )
+    if cls == CONTRACT_NOT_FOUND:
+        return HTMLResponse(
+            render_card(
+                templates,
+                command=command,
+                tone="error",
+                title="Not recorded",
+                body=CONTRACT_CHECK_NOT_RECORDED_BODY,
+                request_id=request_id,
+                sequence=None,
+                retry_fields=_contract_retry_fields(
+                    action=action,
+                    container_id=container_id,
+                    repository=repository,
+                    request_id=request_id,
+                    submit_url=submit_url,
+                ),
+            ),
+            status_code=200,
+        )
+    return HTMLResponse(
+        check_card(detail["message"] or "no reply from the agent"), status_code=200
+    )
+
+
 def _composer_context_for(request, name: str, row) -> dict:
     """The shared template context for every composer render (any path)."""
     availability = _row_availability(row, request)
@@ -1034,6 +1839,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     params={},
                     command=candidate_action or "",
                     agent_version=_agent_version(row) if row is not None else None,
+                    **_audit_path(row),
                 )
             )
             if reason in ("controls_unavailable", "not_permitted"):
@@ -1139,7 +1945,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
         # The action enabled (409: the composer with the disabled reason).
         selected = next((a for a in availability.actions if a.key == action), None)
         if selected is not None and not selected.enabled:
-            label = ACTIONACTION_LABELS.get(action, action)
+            label = ACTION_LABELS.get(action, action)
             error = f"{label} is unavailable: {selected.reason}"
             _write_refused(
                 refused_entry(
@@ -1188,7 +1994,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                 "name": name,
                 "slug": control_slug(name),
                 "action": action,
-                "action_label": ACTIONACTION_LABELS.get(action, action),
+                "action_label": ACTION_LABELS.get(action, action),
                 "display_command": command,
                 "argv_text": " ".join(argv),
                 "request_id": request_id,
@@ -1300,6 +2106,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     params={},
                     command=candidate_action or "",
                     agent_version=_agent_version(row) if row is not None else None,
+                    **_audit_path(row),
                 )
             )
             oob = body_oob() if row is not None else ""
@@ -1320,6 +2127,9 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                 {"name": name, "slug": control_slug(name), "error": "instance not found"},
                 status_code=404,
             )
+
+        if getattr(row, "path", "legacy") == "contract":
+            return await _submit_contract(request, name, row, templates, form, gateway)
 
         values, validation_message = _validate_submit(form)
         if values is None:
@@ -1705,6 +2515,9 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
         rows, _ = await fleet.snapshot(poll_interval=poll_interval)
         row = next((r for r in rows if r.name == name), None)
 
+        if row is not None and getattr(row, "path", "legacy") == "contract":
+            return await _track_contract(request, name, row, templates)
+
         query = dict(request.query_params)
         values, message = _validate_track(query)
         if values is None:
@@ -1781,6 +2594,9 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                 {"name": name, "slug": control_slug(name), "error": "instance not found"},
                 status_code=404,
             )
+
+        if getattr(row, "path", "legacy") == "contract":
+            return await _status_contract(request, name, row, templates, form, gateway)
 
         values, validation_message = _validate_submit(form)
         if values is None:
