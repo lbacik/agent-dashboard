@@ -25,6 +25,20 @@ Contract instances appear in the same Fleet view: a container carrying the
 Reach, Status headline, Attention rank and backend. Control, activity,
 statistics and history widgets stay unavailable on those rows.
 
+A stopped contract instance is never started to read it. The dashboard
+re-inspects the stopped container (`docker inspect`) and runs its image as a
+throwaway Offline Read helper (`docker run --rm --network none --user
+<exec-user> --mount type=volume,src=<v>,dst=<p>,readonly … --entrypoint
+/usr/local/bin/agentctl <image-id> --contract 1 --offline status`) with a
+dashboard-generated helper name and the marker label discovery skips, so the
+helper is never mistaken for a managed instance. Every `type=volume` mount is
+re-mounted read-only at the same destination; bind mounts are skipped. The
+read runs once per stop (keyed by container ID plus finish time) through the
+poll loop's shared exec semaphore. An invalid image digest, volume name or
+mount destination makes the read unavailable with its reason instead of
+running; on a helper timeout the gateway removes the helper (`docker rm -f`)
+and retries the next cycle.
+
 ## Attempt log view
 
 Each Managed instance's drawer links to its **Attempt history**

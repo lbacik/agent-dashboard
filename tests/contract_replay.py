@@ -59,10 +59,24 @@ class ReplayProcessRunner:
         return len(self._fixtures)
 
     def _agentctl_argv(self, argv: list[str]) -> list[str] | None:
-        """The agentctl args of a ``docker exec`` argv, or none without one."""
+        """The agentctl args of a ``docker exec`` or offline ``docker run`` argv.
+
+        An offline helper runs as ``docker run ... --entrypoint agentctl
+        <sha256:image> --contract 1 --offline status``: the image digest right
+        after the entrypoint is not part of the agent call, so a leading
+        ``sha256:<hex>`` token is skipped for the fixture match.
+        """
         if AGENTCTL_PATH not in argv:
             return None
-        return argv[argv.index(AGENTCTL_PATH) + 1 :]
+        tail = argv[argv.index(AGENTCTL_PATH) + 1 :]
+        if (
+            tail
+            and isinstance(tail[0], str)
+            and tail[0].startswith("sha256:")
+            and len(tail) > 1
+        ):
+            tail = tail[1:]
+        return tail
 
     async def run(
         self, argv: list[str], *, timeout: float, timeout_error: Exception

@@ -358,15 +358,23 @@ class FleetState:
         Legacy view models (drawer, live link, control chips) do not apply
         to contract snapshots, so they stay empty; the contract detail
         carries what the Fleet view and the drawer show. Section staleness
-        never changes reach: it only suffixes the Status headline.
+        never changes reach: it only suffixes the Status headline. A stopped
+        row never shows a live-era snapshot: only an offline-sourced
+        snapshot renders, so a stop keeps no stale running headline.
         """
-        reach = reach_for_snapshot(
-            entry.container_state, entry.outcome_kind, entry.snapshot
+        is_stopped = entry.container_state != "running"
+        effective_snapshot = (
+            entry.snapshot
+            if (entry.snapshot is not None and (not is_stopped or entry.snapshot_offline))
+            else None
         )
-        has_snapshot = entry.snapshot is not None
+        reach = reach_for_snapshot(
+            entry.container_state, entry.outcome_kind, effective_snapshot
+        )
+        has_snapshot = effective_snapshot is not None
         detail = (
             read_contract_snapshot(
-                entry.snapshot, now=now, poll_interval=poll_interval
+                effective_snapshot, now=now, poll_interval=poll_interval
             )
             if has_snapshot
             else None
@@ -381,6 +389,21 @@ class FleetState:
             age_text = format_age(age)
         if entry.outcome_kind == CONTRACT_MISMATCH:
             headline = entry.outcome_reason
+        elif is_stopped:
+            if entry.outcome_kind == INSTANCE_STARTED:
+                headline = entry.outcome_reason or "instance started, refresh"
+            elif detail.has_snapshot:
+                derived = contract_headline(detail)
+                if derived is not None:
+                    headline = derived
+                else:
+                    headline = build_headline(
+                        LIVE, reason="", age_text=None, has_snapshot=True
+                    )
+            elif entry.outcome_reason:
+                headline = entry.outcome_reason
+            else:
+                headline = "Not running"
         elif reach == UNREACHABLE:
             headline = f"Unreachable: {entry.outcome_reason}"
         elif reach == NOT_RUNNING:
@@ -406,6 +429,12 @@ class FleetState:
             headline += stale_suffix(detail)
         if reach == UNREACHABLE:
             rank = RANK_UNREACHABLE
+        elif is_stopped:
+            rank = (
+                RANK_UNREACHABLE
+                if (detail.has_snapshot and needs_operator(detail))
+                else RANK_OFFLINE
+            )
         elif detail.has_snapshot and needs_operator(detail):
             rank = RANK_UNREACHABLE
         elif detail.has_snapshot:

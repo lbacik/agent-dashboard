@@ -663,3 +663,140 @@ def test_contract_status_against_real_docker(tmp_path):
     finally:
         _run("docker", "rm", "-f", name)
         _run("docker", "rmi", "-f", tag)
+
+
+OFFLINE_AGENTCTL_STUB = """\
+#!/bin/sh
+# Stub agentctl for the Offline Read integration test: diagnostics on stderr
+# (the invoking user, the visible network interfaces, the mounted volume
+# content and whether the mount is writable), then the canned snapshot on
+# stdout like a real offline helper.
+echo "user=$(id -un)" >&2
+echo "net=$(ls /sys/class/net | tr '\\n' ',' )" >&2
+echo "content=$(cat /data/greeting.txt 2>&1)" >&2
+if touch /data/write-probe 2>/dev/null; then
+  echo "writable=yes" >&2
+else
+  echo "writable=no" >&2
+fi
+cat /snapshot.json
+"""
+
+OFFLINE_DOCKERFILE = """\
+FROM busybox:stable
+COPY agentctl /usr/local/bin/agentctl
+COPY snapshot.json /snapshot.json
+RUN chmod +x /usr/local/bin/agentctl && adduser -D contractor
+CMD ["sh", "-c", "while true; do sleep 3600; done"]
+"""
+
+
+@docker
+def test_offline_read_against_real_docker(tmp_path):
+    """A stopped contract container is read without ever starting it.
+
+    A named volume holding one file is mounted into a created (never
+    started) contract container; the dashboard re-inspects the container and
+    runs its image as a throwaway helper with no network, the volume mounted
+    read-only and the instance's exec user. The helper sees the volume
+    content, cannot write to it, sees only ``lo`` and runs as the exec user,
+    and its stdout classifies to a good snapshot.
+    """
+    from agent_dashboard.collector import classify_offline_status
+
+    tag = f"agent-dashboard-offline:{uuid.uuid4().hex[:12]}"
+    name = f"e2e-offline-{uuid.uuid4().hex[:8]}"
+    instance = f"e2e-o-{uuid.uuid4().hex[:8]}"
+    volume = f"e2e-offline-vol-{uuid.uuid4().hex[:8]}"
+    try:
+        from agent_operator_contract import documents
+
+        (tmp_path / "agentctl").write_text(OFFLINE_AGENTCTL_STUB)
+        (tmp_path / "snapshot.json").write_text(
+            documents.load_fixture("offline-status-halted")["stdout"]
+        )
+        (tmp_path / "Dockerfile").write_text(OFFLINE_DOCKERFILE)
+        build = _run("docker", "build", "-q", "-t", tag, str(tmp_path))
+        assert build.returncode == 0, build.stderr
+
+        created_vol = _run("docker", "volume", "create", volume)
+        assert created_vol.returncode == 0, created_vol.stderr
+        seeded = _run(
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{volume}:/data",
+            tag,
+            "sh",
+            "-c",
+            "echo hello-offline > /data/greeting.txt",
+        )
+        assert seeded.returncode == 0, seeded.stderr
+
+        created = _run(
+            "docker",
+            "create",
+            "--name",
+            name,
+            "--label",
+            f"{CONTRACT_LABEL}=1",
+            "--label",
+            f"{INSTANCE_LABEL}={instance}",
+            "--label",
+            f"{EXEC_USER_LABEL}=contractor",
+            "--label",
+            f"{BACKEND_LABEL}=coding-agent",
+            "-v",
+            f"{volume}:/data",
+            tag,
+        )
+        assert created.returncode == 0, created.stderr
+
+        import time
+
+        deadline = time.time() + 30
+        container_id = None
+        found = None
+        while time.time() < deadline:
+            discovered = asyncio.run(DockerGateway(timeout=10.0).list_instances())
+            matches = [inst for inst in discovered if inst.name == instance]
+            if matches:
+                (found,) = matches
+                container_id = found.container_id
+                break
+            time.sleep(1)
+        assert container_id is not None
+        assert found.path == "contract"
+        assert found.exec_user == "contractor"
+
+        gateway = DockerGateway(timeout=10.0)
+        info = asyncio.run(gateway.inspect_offline(container_id))
+        assert info.running is False
+        assert info.image.startswith("sha256:")
+        assert [(m.source, m.destination) for m in info.mounts] == [
+            (volume, "/data")
+        ]
+
+        exec_result = asyncio.run(
+            gateway.offline_status(info.image, info.mounts, found.exec_user)
+        )
+        assert exec_result.returncode == 0
+        stderr = exec_result.stderr.decode()
+        assert "user=contractor" in stderr
+        assert "content=hello-offline" in stderr
+        assert "writable=no" in stderr
+        assert "net=" in stderr
+        assert "lo" in stderr
+        assert "eth0" not in stderr
+
+        outcome, snapshot = classify_offline_status(
+            exec_result.stdout, exec_result.returncode, now=NOW
+        )
+        assert outcome.kind == GOOD
+        assert snapshot is not None
+        assert snapshot["instance"]["state"] == "stopped"
+    finally:
+        _run("docker", "rm", "-f", name)
+        _run("docker", "rmi", "-f", tag)
+        _run("docker", "volume", "rm", "-f", volume)

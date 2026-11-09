@@ -105,7 +105,7 @@
     <ul class="vc-rail-list">
       {% for row in stopped %}
       {% set d = row.drawer %}
-      {{ rail_item(row, (("#" ~ d.last_issue ~ " · ") if d and d.last_present and d.last_issue is not none else "") ~ ((d.last_outcome or "n/a") if d and d.last_present else "n/a")) }}
+      {% if row.path == "contract" and row.contract is not none and (row.contract.halt is not none or row.contract.last_finished is not none) %}{% if row.contract.halt is not none %}{{ rail_item(row, "Halted (" ~ row.contract.halt.reason ~ ")") }}{% elif row.contract.last_finished.issue_number is not none %}{{ rail_item(row, "#" ~ row.contract.last_finished.issue_number ~ " · " ~ (row.contract.last_finished.outcome_label or "n/a")) }}{% else %}{{ rail_item(row, row.contract.last_finished.outcome_label or "n/a") }}{% endif %}{% else %}{{ rail_item(row, (("#" ~ d.last_issue ~ " · ") if d and d.last_present and d.last_issue is not none else "") ~ ((d.last_outcome or "n/a") if d and d.last_present else "n/a")) }}{% endif %}
       {% endfor %}
     </ul>
   </details>
@@ -209,8 +209,8 @@
       <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{% if row.path == "contract" %}{% if row.backend %}{{ row.backend }}{% else %}<span class="hint">n/a</span>{% endif %}{% else %}{{ row.detail.repository_display }}{% endif %}</div></td>
       <td class="headline">{{ row.headline }}</td>
       <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.age_text %} <span class="age">last seen {{ row.age_text }} ago</span>{% endif %}</td>
-      <td><span class="hint">n/a</span></td>
-      <td>{% if d and d.last_present %}{% if d.last_issue is not none %}#{{ d.last_issue }} · {% endif %}{{ d.last_outcome or "n/a" }}{% if d.last_finished_at %} <span class="age">{{ d.last_finished_at }}</span>{% endif %}{% else %}<span class="hint">n/a</span>{% endif %}</td>
+      <td>{% if row.path == "contract" and row.contract is not none %}{% if row.contract.intake_state %}{{ row.contract.intake_state }}{% else %}<span class="hint">n/a</span>{% endif %}{% if row.contract.stop_plan_remaining is not none %} · Stop planned ({{ row.contract.stop_plan_remaining }} remaining){% endif %}{% if row.contract.pending_stop %} · Stop requested{% endif %}{% else %}<span class="hint">n/a</span>{% endif %}</td>
+      <td>{% if row.path == "contract" and row.contract is not none and (row.contract.halt is not none or row.contract.last_finished is not none) %}{% if row.contract.halt is not none %}Halted ({{ row.contract.halt.reason }}){% endif %}{% if row.contract.halt is not none and row.contract.last_finished is not none %} · {% endif %}{% if row.contract.last_finished is not none %}{% if row.contract.last_finished.issue_number is not none %}#{{ row.contract.last_finished.issue_number }} · {% endif %}{{ row.contract.last_finished.outcome_label or "n/a" }}{% endif %}{% elif d and d.last_present %}{% if d.last_issue is not none %}#{{ d.last_issue }} · {% endif %}{{ d.last_outcome or "n/a" }}{% if d.last_finished_at %} <span class="age">{{ d.last_finished_at }}</span>{% endif %}{% else %}<span class="hint">n/a</span>{% endif %}</td>
       <td><div class="figure"><span class="hint">n/a</span></div></td>
       <td><div class="figure"><span class="hint">n/a</span></div></td>
       <td><div class="figure"><span class="hint">n/a</span></div></td>
