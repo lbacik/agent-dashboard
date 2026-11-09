@@ -495,6 +495,21 @@ def test_submit_still_ambiguous_renders_outcome_unknown():
     assert entries[1]["attempts"] == 2
 
 
+def test_submit_not_found_is_not_retried():
+    client, _, gateway = make_contract_client()
+    gateway.set_contract_mutation(
+        CID, _err_envelope("not_found", "no such command"), returncode=5
+    )
+    response = submit(client, submit_form())
+    assert response.status_code == 200
+    assert "Outcome unknown" in response.text
+    # A status-path reply on a mutation is not an ambiguity: no re-send.
+    assert len(gateway.contract_mutation_calls) == 1
+    entries = audit_entries()
+    assert entries[1]["outcome"] == "unknown"
+    assert entries[1]["attempts"] == 1
+
+
 # --- check status ------------------------------------------------------------------
 
 

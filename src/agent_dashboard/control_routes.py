@@ -54,7 +54,11 @@ from .contract_reply import (
     describe_contract_reply,
     validate_contract_request_id,
 )
-from .contract_status import contract_timeline_summary, follow_contract_command
+from .contract_status import (
+    CONTRACT_TERMINAL_ACKS,
+    contract_timeline_summary,
+    follow_contract_command,
+)
 from .control import (
     ACTION_COMMANDS,
     ACTION_LABELS,
@@ -493,11 +497,6 @@ def _row_commands(row) -> tuple:
     return command_timeline(control)
 
 
-#: Contract reply classes that are definitive refusals: nothing was stored.
-CONTRACT_REJECTED_CODES = frozenset(
-    {"rejected", "repository_mismatch", "payload_mismatch", "invalid_argument"}
-)
-
 #: Card titles and tones per contract Command Record Acknowledgement.
 CONTRACT_ACK_TITLES = {
     "accepted": "Accepted",
@@ -513,7 +512,9 @@ CONTRACT_ACK_TONES = {
 }
 
 #: Contract command timeline cards keep following until one of these acks.
-CONTRACT_FOLLOW_TERMINAL = frozenset({"completed", "superseded", "not_fulfilled"})
+#: This is the same terminal set the snapshot follower uses
+#: (:data:`contract_status.CONTRACT_TERMINAL_ACKS`).
+CONTRACT_FOLLOW_TERMINAL = frozenset(CONTRACT_TERMINAL_ACKS)
 
 #: Outcome unknown card body for a contract mutation (spec: contract path).
 CONTRACT_UNKNOWN_BODY = (
@@ -1123,7 +1124,7 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
             + _contract_body_oob(request, templates, name, row),
             status_code=409,
         )
-    if cls in (CONTRACT_AMBIGUOUS, CONTRACT_NOT_FOUND):
+    if cls == CONTRACT_AMBIGUOUS:
         elapsed = time.perf_counter() - started
         if elapsed < MUTATION_TIMEOUT:
             # One retry with the same request ID and payload (spec 8.4):
@@ -1351,8 +1352,8 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
             outcome_note=outcome_note,
         )
     else:
-        # Still ambiguous after the retry (or not_found): outcome unknown
-        # with Retry (same ID) and Check status.
+        # Still ambiguous after the retry: outcome unknown with Retry
+        # (same ID) and Check status.
         _outcome("unknown", error_text or "no reply from the agent")
         feedback = render_card(
             templates,
