@@ -16,6 +16,7 @@ import json
 import tarfile
 
 from agent_dashboard.gateway import (
+    AGENT_USER,
     EVIDENCE_PREVIEW_CAP,
     ControlBusyError,
     ControlExec,
@@ -27,6 +28,9 @@ from agent_dashboard.gateway import (
     TelemetryExec,
     TelemetryTimeoutError,
     argv_command_status,
+    argv_contract_command,
+    argv_contract_exec,
+    argv_contract_mutation,
     argv_control,
     argv_offline_status,
 )
@@ -91,6 +95,11 @@ class FakeGateway:
         self.control_calls: list[dict] = []
         self.command_status_calls: list[tuple[str, str]] = []
         self.control_argvs: list[list[str]] = []
+        self._contract_scripts: dict[str, ControlExec | Exception] = {}
+        self._contract_command_scripts: dict[str, ControlExec | Exception] = {}
+        self.contract_mutation_calls: list[dict] = []
+        self.contract_command_calls: list[dict] = []
+        self.contract_argvs: list[list[str]] = []
         self.file_calls: list[tuple[str, str, str, str]] = []
         self.logs_tree_calls: list[str] = []
         self.run_tree_calls: list[tuple[str, str, str]] = []
@@ -425,6 +434,74 @@ class FakeGateway:
         self.control_argvs.append(argv)
         self.command_status_calls.append((container_id, request_id))
         return await self._run_scripted_control(container_id, self._status_scripts)
+
+    def set_contract_mutation(
+        self, container_id: str, stdout: bytes, stderr: bytes = b"", returncode: int = 0
+    ) -> None:
+        """Script one contract mutation reply: reported, never raised."""
+        self._contract_scripts[container_id] = ControlExec(
+            stdout=stdout, stderr=stderr, returncode=returncode
+        )
+
+    def set_contract_mutation_error(self, container_id: str, error: Exception) -> None:
+        """Script one contract mutation error (busy, timeout, ...)."""
+        self._contract_scripts[container_id] = error
+
+    def set_contract_command(
+        self, container_id: str, stdout: bytes, stderr: bytes = b"", returncode: int = 0
+    ) -> None:
+        """Script one contract ``command <id>`` reply: reported, never raised."""
+        self._contract_command_scripts[container_id] = ControlExec(
+            stdout=stdout, stderr=stderr, returncode=returncode
+        )
+
+    def set_contract_command_error(self, container_id: str, error: Exception) -> None:
+        """Script one contract ``command <id>`` error (busy, timeout, ...)."""
+        self._contract_command_scripts[container_id] = error
+
+    async def contract_mutation(
+        self,
+        container_id: str,
+        action: str,
+        *,
+        request_id: str,
+        expect_repo: str,
+        exec_user: str = AGENT_USER,
+    ) -> ControlExec:
+        """One scripted contract mutation exec, validated like the real gateway."""
+        agentctl_argv = argv_contract_mutation(action, request_id, expect_repo)
+        argv = argv_contract_exec(container_id, agentctl_argv, exec_user=exec_user)
+        if self.control_in_flight(container_id):
+            raise ControlBusyError(
+                f"another control exec for container {container_id} is already in flight"
+            )
+        self.contract_argvs.append(argv)
+        self.contract_mutation_calls.append(
+            {
+                "container_id": container_id,
+                "action": action,
+                "request_id": request_id,
+                "expect_repo": expect_repo,
+                "exec_user": exec_user,
+            }
+        )
+        return await self._run_scripted_control(container_id, self._contract_scripts)
+
+    async def contract_command(
+        self, container_id: str, request_id: str, *, exec_user: str = AGENT_USER
+    ) -> ControlExec:
+        """One scripted contract ``command <id>`` exec, validated like the real one."""
+        agentctl_argv = argv_contract_command(request_id)
+        argv = argv_contract_exec(container_id, agentctl_argv, exec_user=exec_user)
+        if self.control_in_flight(container_id):
+            raise ControlBusyError(
+                f"another control exec for container {container_id} is already in flight"
+            )
+        self.contract_argvs.append(argv)
+        self.contract_command_calls.append(
+            {"container_id": container_id, "request_id": request_id, "exec_user": exec_user}
+        )
+        return await self._run_scripted_control(container_id, self._contract_command_scripts)
 
     async def attempt_history(self, container_id: str) -> TelemetryExec:
         """One scripted history exec; unscripted IDs report an empty log."""

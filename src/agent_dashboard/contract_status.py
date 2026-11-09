@@ -42,6 +42,24 @@ STALE_AFTER_INTERVALS = 3
 #: allows up to 50; the drawer keeps the latest 20 like the legacy path).
 EVENTS_SHOWN = 20
 
+#: Command timeline entries shown, newest first (like the legacy path).
+COMMANDS_SHOWN = 10
+
+#: Terminal acknowledgements for a contract CommandRecord (spec 7.5).
+CONTRACT_TERMINAL_ACKS = ("completed", "superseded", "not_fulfilled")
+
+#: Display labels for contract ``recent_commands`` kinds.
+CONTRACT_KIND_LABELS = {
+    "stop": "stop",
+    "stop_after": "stop after",
+    "resume": "resume",
+    "handoff": "handoff",
+    "next_issue": "next issue",
+    "recovery_retry": "recovery retry",
+    "recovery_release": "recovery release",
+    "errors_reset": "errors reset",
+}
+
 #: Optional figures in display order (spec section 7.3 name set): cost,
 #: cache hit rate, context sizes, turns, tool calls, continuations, review
 #: seats, elapsed time. ``native.*`` and unknown names follow, sorted.
@@ -222,6 +240,271 @@ class ContractDetail:
     # ``events_total`` is the full snapshot count for the count line.
     events: tuple[ContractEventView, ...] = ()
     events_total: int = 0
+    # Command timeline entries, newest first, at most COMMANDS_SHOWN.
+    commands: tuple[ContractCommandEntry, ...] = ()
+
+
+@dataclass(frozen=True)
+class ContractCommandStep:
+    """One lifecycle stepper stage: its label and done/current/todo state."""
+
+    label: str
+    state: str  # "done" | "current" | "todo"
+
+
+@dataclass(frozen=True)
+class ContractCommandEntry:
+    """One contract ``recent_commands`` record for the timeline.
+
+    Mirrors :class:`control.CommandEntry` with the contract acknowledgement
+    set (``accepted`` plus ``completed``/``superseded``/``not_fulfilled``):
+    the terminal stepper stage reads the acknowledgement verbatim, so an
+    unknown value renders as its own stage rather than a wrong one.
+    """
+
+    request_id: str
+    sequence: int | None
+    kind: str
+    kind_label: str
+    acknowledgement: str | None
+    detail: str
+    updated_at: str | None
+    short_time: str
+    origin: str  # "dashboard" | "CLI"
+    steps: tuple[ContractCommandStep, ...] = ()
+    current_step: str = "submitted"
+
+    @property
+    def ack_class(self) -> str:
+        """Tone class for the stepper: ``ack-<acknowledgement>``, else ``""``."""
+        if isinstance(self.acknowledgement, str) and self.acknowledgement in (
+            "accepted",
+            *CONTRACT_TERMINAL_ACKS,
+        ):
+            return "ack-" + self.acknowledgement.replace(" ", "-")
+        return ""
+
+
+def _contract_steps(
+    acknowledgement: str | None,
+) -> tuple[tuple[ContractCommandStep, ...], str]:
+    """Lifecycle stepper plus the current step's label for one record.
+
+    Base stepper: submitted → accepted → the Command Record's
+    Acknowledgement (terminal or otherwise). A terminal acknowledgement
+    marks every stage done; ``accepted`` sits on the middle stage; anything
+    else (including none) sits on "submitted".
+    """
+    if isinstance(acknowledgement, str) and acknowledgement:
+        terminal_label = acknowledgement
+    else:
+        terminal_label = "completed"
+    labels = ["submitted", "accepted", terminal_label]
+    if isinstance(acknowledgement, str) and acknowledgement in CONTRACT_TERMINAL_ACKS:
+        current = len(labels) - 1
+    elif acknowledgement == "accepted":
+        current = 1
+    else:
+        current = 0
+    steps = tuple(
+        ContractCommandStep(
+            label=label,
+            state=(
+                "done"
+                if index < current
+                else "current"
+                if index == current
+                else "todo"
+            ),
+        )
+        for index, label in enumerate(labels)
+    )
+    return steps, labels[current]
+
+
+def contract_command_timeline(recent_commands: Any) -> tuple[ContractCommandEntry, ...]:
+    """The ``recent_commands`` timeline, newest first by sequence.
+
+    Reads the parsed snapshot's ``recent_commands`` (or the raw list);
+    records without an integer sequence sort last. At most
+    ``COMMANDS_SHOWN`` entries are returned; anything unreadable yields no
+    entries. The origin chip reads ``dashboard`` for a ``dash-`` request ID
+    and ``CLI`` otherwise.
+    """
+    if isinstance(recent_commands, dict):
+        records = list(recent_commands.values())
+    elif isinstance(recent_commands, (list, tuple)):
+        records = list(recent_commands)
+    else:
+        return ()
+    parsed: list[tuple[int, int, ContractCommandEntry]] = []
+    for order, record in enumerate(records):
+        if isinstance(record, dict):
+            request_id = record.get("request_id")
+            sequence = record.get("sequence")
+            kind = record.get("kind")
+            acknowledgement = record.get("acknowledgement")
+            detail = record.get("detail")
+            updated = record.get("updated_at")
+            created = record.get("created_at")
+        else:
+            request_id = getattr(record, "request_id", None)
+            sequence = getattr(record, "sequence", None)
+            kind = getattr(record, "kind", None)
+            acknowledgement = getattr(record, "acknowledgement", None)
+            detail = getattr(record, "detail", None)
+            updated = getattr(record, "updated_at", None)
+            created = getattr(record, "created_at", None)
+        if not isinstance(request_id, str) or not request_id:
+            continue
+        if isinstance(sequence, bool) or not isinstance(sequence, int):
+            sequence = None
+        kind = kind if isinstance(kind, str) and kind else "unknown"
+        acknowledgement = (
+            acknowledgement if isinstance(acknowledgement, str) and acknowledgement else None
+        )
+        detail = detail if isinstance(detail, str) else ""
+        updated = updated if isinstance(updated, str) and updated else None
+        created = created if isinstance(created, str) and created else None
+        clock_source = updated or created
+        steps, current_step = _contract_steps(acknowledgement)
+        parsed.append(
+            (
+                sequence if sequence is not None else -1,
+                order,
+                ContractCommandEntry(
+                    request_id=request_id,
+                    sequence=sequence,
+                    kind=kind,
+                    kind_label=CONTRACT_KIND_LABELS.get(kind, kind),
+                    acknowledgement=acknowledgement,
+                    detail=detail,
+                    updated_at=updated,
+                    short_time=_short_time(clock_source) if clock_source else "—",
+                    origin="dashboard" if request_id.startswith("dash-") else "CLI",
+                    steps=steps,
+                    current_step=current_step,
+                ),
+            )
+        )
+    parsed.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+    return tuple(entry for _, _, entry in parsed[:COMMANDS_SHOWN])
+
+
+def contract_timeline_summary(
+    entries: tuple[ContractCommandEntry, ...] | list[ContractCommandEntry],
+) -> str:
+    """Collapsed-summary text: the count plus the latest command and its ack."""
+    items = list(entries)
+    if not items:
+        return "0 commands"
+    latest = items[0]
+    if latest.sequence is not None:
+        head = f"#{latest.sequence} {latest.kind_label}"
+    else:
+        head = f"{latest.kind_label} {latest.request_id}"
+    ack = latest.acknowledgement or "submitted"
+    return f"{len(items)} commands · latest {head} ({ack})"
+
+
+def follow_contract_command(
+    *,
+    action: str,
+    request_id: str,
+    sequence: int | None,
+    card_container_id: str,
+    recent_commands: Any,
+    reach: str,
+    row_container_id: str | None,
+    row_exists: bool,
+) -> Any:
+    """Locate one accepted contract command in the latest good snapshot (pure).
+
+    Reads only the snapshot's ``recent_commands`` and the row's Reach and
+    container ID: never Docker, never the Control audit. The outcome set
+    mirrors :func:`control.follow_command` (``following``, ``terminal``,
+    ``paused``, ``waiting``, ``evicted``, ``gone``); the terminal set is
+    :data:`CONTRACT_TERMINAL_ACKS`. The ``action`` argument is accepted for
+    call-shape parity with the legacy path and is otherwise unused: a
+    contract snapshot has no per-action progress section.
+    """
+    from .control import EVICTED_BODY as LEGACY_EVICTED_BODY
+    from .control import GONE_BODY, REACH_REASONS, WAITING_BODY, FollowResult
+
+    _ = action
+    if not row_exists or row_container_id != card_container_id:
+        return FollowResult(
+            outcome="gone",
+            title="Accepted",
+            tone="info",
+            body=GONE_BODY,
+            following=False,
+        )
+    records = contract_command_timeline(recent_commands)
+    record = next((entry for entry in records if entry.request_id == request_id), None)
+    if reach != "live":
+        reason = REACH_REASONS.get(reach, f"the snapshot is {reach}")
+        body = record.detail if record is not None and record.detail else WAITING_BODY
+        return FollowResult(
+            outcome="paused",
+            acknowledgement=record.acknowledgement if record is not None else None,
+            title="Accepted",
+            tone="info",
+            body=body,
+            progress=f"following paused: {reason}",
+            following=True,
+        )
+    if record is not None:
+        body = record.detail or "—"
+        if (
+            isinstance(record.acknowledgement, str)
+            and record.acknowledgement in CONTRACT_TERMINAL_ACKS
+        ):
+            titles = {
+                "completed": "Completed",
+                "superseded": "Superseded",
+                "not_fulfilled": "Not fulfilled",
+            }
+            tones = {
+                "completed": "ok",
+                "superseded": "muted",
+                "not_fulfilled": "warn",
+            }
+            return FollowResult(
+                outcome="terminal",
+                acknowledgement=record.acknowledgement,
+                title=titles[record.acknowledgement],
+                tone=tones[record.acknowledgement],
+                body=body,
+                progress=None,
+                following=False,
+            )
+        return FollowResult(
+            outcome="following",
+            acknowledgement=record.acknowledgement,
+            title="Accepted",
+            tone="info",
+            body=body,
+            progress=None,
+            following=True,
+        )
+    sequences = [entry.sequence for entry in records if entry.sequence is not None]
+    if sequence is not None and sequences and all(card_seq > sequence for card_seq in sequences):
+        return FollowResult(
+            outcome="evicted",
+            title="Accepted",
+            tone="info",
+            body=LEGACY_EVICTED_BODY,
+            following=False,
+            check_status=True,
+        )
+    return FollowResult(
+        outcome="waiting",
+        title="Accepted",
+        tone="info",
+        body=WAITING_BODY,
+        following=True,
+    )
 
 
 def _fmt_number(value: int | float) -> str:
@@ -506,6 +789,11 @@ def read_contract_snapshot(
     events_total = len(ordered_events)
     events = tuple(reversed(ordered_events[-EVENTS_SHOWN:]))
 
+    recent_commands: Any = getattr(snapshot, "recent_commands", None)
+    if recent_commands is None and isinstance(result, dict):
+        recent_commands = result.get("recent_commands")
+    commands = contract_command_timeline(recent_commands)
+
     stale_since: str | None = None
     if now is not None:
         candidates = [instance_fresh, intake_fresh]
@@ -551,6 +839,7 @@ def read_contract_snapshot(
         last_finished=last_view,
         events=events,
         events_total=events_total,
+        commands=commands,
     )
 
 

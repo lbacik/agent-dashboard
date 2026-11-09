@@ -283,22 +283,23 @@ async def _poll_one(
 ) -> tuple[str, InstancePoll] | None:
     """One exec for one running instance, bounded by the shared semaphore.
 
-    A running instance with a control exec in flight gets no exec this
-    cycle; a misconfigured or duplicated row never gets one either:
+    A running legacy instance with a control exec in flight gets no exec
+    this cycle; a misconfigured or duplicated row never gets one either:
     ``None`` stands for "skipped", so ``apply_cycle`` keeps its previous
     poll outcome and snapshot. The skip is not counted as a failure. The
     control-slot check runs right before the exec, after taking the poll
-    semaphore. Contract-path instances poll with ``agentctl --contract 1
-    status`` as their labelled user; legacy ones keep telemetry v1.
+    semaphore. Contract-path instances keep being polled while a Control
+    action is in flight (their ``status`` poll never takes the control
+    slot); legacy ones keep telemetry v1.
     """
     if instance.note is not None:
         return None
     async with semaphore:
+        if instance.path == CONTRACT_PATH:
+            return await _poll_contract_one(gateway, instance, now)
         in_flight = getattr(gateway, "control_in_flight", None)
         if in_flight is not None and in_flight(instance.container_id):
             return None
-        if instance.path == CONTRACT_PATH:
-            return await _poll_contract_one(gateway, instance, now)
         try:
             exec_result: TelemetryExec = await gateway.telemetry(instance.container_id)
         except TelemetryTimeoutError as exc:

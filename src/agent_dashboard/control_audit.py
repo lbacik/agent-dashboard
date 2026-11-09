@@ -64,13 +64,20 @@ def refused_entry(
     agent_version: str | None = None,
     expect_repo_guard: bool = False,
     retry: bool = False,
+    protocol: str = "legacy",
+    backend: str | None = None,
+    error_code: str | None = None,
+    replayed: bool | None = None,
+    attempts: int = 1,
 ) -> dict[str, Any]:
     """Build a ``refused`` audit entry (spec section 7).
 
     ``request_id`` is null for a refusal before one exists (review, or a
     malformed submit). ``container_id`` is the form's value, even when the
     binding check refused it; ``expected_repository`` is the repository the
-    form carried. ``retry`` is always false on review refusals.
+    form carried. ``retry`` is always false on review refusals. ``protocol``
+    names the path that refused (``legacy`` or ``contract``); ``backend``
+    is the contract instance's backend, else none.
     """
     return {
         "at": utc_now_ms(),
@@ -94,6 +101,11 @@ def refused_entry(
         "reason": reason,
         "error": error,
         "duration_ms": None,
+        "protocol": protocol,
+        "backend": backend,
+        "error_code": error_code,
+        "replayed": replayed,
+        "attempts": attempts,
     }
 
 
@@ -110,12 +122,19 @@ def submitted_entry(
     agent_version: str | None = None,
     expect_repo_guard: bool = False,
     retry: bool = False,
+    protocol: str = "legacy",
+    backend: str | None = None,
+    error_code: str | None = None,
+    replayed: bool | None = None,
+    attempts: int = 1,
 ) -> dict[str, Any]:
     """Build a ``submitted`` audit entry (spec section 7).
 
     Written before ``docker exec`` runs; a failing write means the command
     is not sent. ``container_id`` is the form's value, ``retry`` is true
-    when the card's Retry sent it.
+    when the card's Retry sent it. ``protocol`` names the path that sent
+    it (``legacy`` or ``contract``); ``backend`` is the contract
+    instance's backend, else none.
     """
     return {
         "at": utc_now_ms(),
@@ -139,6 +158,11 @@ def submitted_entry(
         "reason": None,
         "error": None,
         "duration_ms": None,
+        "protocol": protocol,
+        "backend": backend,
+        "error_code": error_code,
+        "replayed": replayed,
+        "attempts": attempts,
     }
 
 
@@ -164,6 +188,11 @@ def outcome_entry(
     reason: str | None = None,
     error: str | None = None,
     duration_ms: int | None = None,
+    protocol: str = "legacy",
+    backend: str | None = None,
+    error_code: str | None = None,
+    replayed: bool | None = None,
+    attempts: int = 1,
 ) -> dict[str, Any]:
     """Build an outcome audit entry for one Control exec result.
 
@@ -171,7 +200,11 @@ def outcome_entry(
     ``usage_error``, ``failed``, or ``refused`` (``busy``). The entry is
     written after the exec; a failing write does not change the card
     shown. ``error`` is the human text and ``duration_ms`` the exec
-    duration.
+    duration. ``protocol`` names the path that sent it (``legacy`` or
+    ``contract``); ``backend`` is the contract instance's backend, else
+    none; ``error_code`` is the contract ``error.code`` (or the
+    Acknowledgement on success), ``replayed`` the reply's flag, and
+    ``attempts`` the number of same-ID execs this submit ran.
     """
     return {
         "at": utc_now_ms(),
@@ -195,6 +228,11 @@ def outcome_entry(
         "reason": reason,
         "error": error,
         "duration_ms": duration_ms,
+        "protocol": protocol,
+        "backend": backend,
+        "error_code": error_code,
+        "replayed": replayed,
+        "attempts": attempts,
     }
 
 

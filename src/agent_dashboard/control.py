@@ -186,6 +186,55 @@ def control_slug(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9-]", "-", name)
 
 
+#: Control actions the dashboard offers on live contract instances: the
+#: core mutations (spec "Control actions (contract path)"). Legacy-only
+#: actions (``stop_after``, ``handoff``, ``next_issue``) stay on the legacy
+#: path; the legacy minimum-version table does not apply.
+CONTRACT_ACTION_ORDER = ("stop", "resume")
+
+#: Exact ``agentctl`` preview per contract action (no parameters).
+CONTRACT_ACTION_COMMANDS = {
+    "stop": "stop",
+    "resume": "resume",
+}
+
+
+def contract_availability(
+    *,
+    reach: str,
+    mode: ControlMode | None = None,
+) -> ControlAvailability:
+    """Build the console view model for one live contract instance.
+
+    The dashboard-wide control mode and request protection still apply;
+    Reach gates the composer like the legacy path. On a live instance both
+    core mutations are enabled with no repository or version precondition:
+    the target binding (container ID plus Target Repository, ADR 0006)
+    is checked server-side at submit time, and the agent remains the
+    authority for anything the snapshot does not say.
+    """
+    active_mode = mode if mode is not None else ControlMode(available=True)
+    if not active_mode.available:
+        return ControlAvailability(unavailable=active_mode.reason or "unavailable")
+    if reach != "live":
+        return ControlAvailability(
+            unavailable=REACH_REASONS.get(reach, f"the snapshot is {reach}")
+        )
+    actions = tuple(
+        ControlAction(
+            key=key,
+            label=ACTION_LABELS[key],
+            enabled=True,
+            reason=None,
+            note=None,
+            checked=key == "stop",
+            command=CONTRACT_ACTION_COMMANDS[key],
+        )
+        for key in CONTRACT_ACTION_ORDER
+    )
+    return ControlAvailability(unavailable=None, actions=actions)
+
+
 def _preview(action: str, *, n: Any = None, issue: Any = None) -> str:
     template = ACTION_COMMANDS[action]
     n_text = str(n) if n is not None and str(n) != "" else "N"
@@ -843,6 +892,7 @@ __all__ = [
     "FollowResult",
     "command_timeline",
     "compute_control_mode",
+    "contract_availability",
     "control_availability",
     "control_slug",
     "request_control_mode",
