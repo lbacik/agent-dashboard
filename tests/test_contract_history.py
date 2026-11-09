@@ -662,7 +662,10 @@ def test_history_page_lists_contract_rows_with_every_field():
         "Attention",
         "Sealed",
         "Cost",
-        "Tokens",
+        "Input",
+        "Cache read",
+        "Cache creation",
+        "Output",
     ):
         assert header in body
     # Newest first.
@@ -680,6 +683,8 @@ def test_history_page_lists_contract_rows_with_every_field():
     assert "open" in body
     # Contract major 1 carries no per-Attempt usage: never zero, never a value.
     assert "not reported" in body
+    # Two rows × (cost + four token columns) cells reading "not reported".
+    assert tbody.count("not reported") >= 10
     assert "$0.00" not in tbody
 
 

@@ -93,7 +93,6 @@
   <p class="hint">{{ error }}</p>
   {% elif contract %}
   <p class="stats-line"><strong>Not reported</strong> · contract major 1 carries no per-Attempt usage data.</p>
-  <p class="hint">The current attempt's cost appears once it finishes.</p>
   {% elif cost is none %}
   <p class="hint">Cost unavailable.</p>
   {% elif cost.total_attempts == 0 %}
