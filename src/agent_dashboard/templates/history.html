@@ -40,7 +40,7 @@
   <tbody>
     {% for attempt in result.summaries %}
     <tr>
-      <td><div class="inst-name">#{{ attempt.issue }}</div>{% if attempt.issue_title %}<div class="inst-repo">{{ attempt.issue_title }}</div>{% endif %}</td>
+      <td><div class="inst-name"><a href="{{ contract_attempt_url(name, attempt.attempt_id) }}">#{{ attempt.issue }}</a></div>{% if attempt.issue_title %}<div class="inst-repo">{{ attempt.issue_title }}</div>{% endif %}</td>
       <td>{{ attempt.started_at }}</td>
       <td>{{ attempt.finished_at or "—" }}</td>
       <td>{{ attempt.duration_text }}</td>

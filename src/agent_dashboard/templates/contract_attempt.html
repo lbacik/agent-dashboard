@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block topbar_actions %}
+<div class="topbar-actions">
+  <span class="on-demand">data is read on demand</span>
+  <a class="refresh" href="{{ refresh_url }}">Refresh</a>
+</div>
+{% endblock %}
+{% block content %}
+<div class="history-head">
+  <h2>Contract attempt</h2>
+  <p class="subtitle">Managed instance {{ name }}</p>
+</div>
+{% if error %}
+<div class="banner" role="alert">{{ error }}</div>
+{% else %}
+<h3 class="attempt-title">Attempt {{ attempt_id }}</h3>
+<dl class="facts">
+  <div><dt>Issue</dt><dd>#{{ summary.issue }}{% if summary.issue_title %} · {{ summary.issue_title }}{% endif %}</dd></div>
+  <div><dt>Started</dt><dd>{{ summary.started_at }}</dd></div>
+  <div><dt>Finished</dt><dd>{{ summary.finished_at or "—" }}</dd></div>
+  <div><dt>Duration</dt><dd>{{ summary.duration_text }}</dd></div>
+  <div><dt>Lifecycle</dt><dd>{{ summary.lifecycle_state }}</dd></div>
+  <div><dt>Outcome</dt><dd>{{ summary.outcome_label }}{% if summary.outcome_native %} (native: {{ summary.outcome_native }}){% endif %}{% if summary.outcome_reason %} · {{ summary.outcome_reason }}{% endif %}</dd></div>
+  <div><dt>Delivery</dt><dd>{% if summary.delivery_url and summary.delivery_number is not none %}<a href="{{ summary.delivery_url }}">#{{ summary.delivery_number }}</a>{% elif summary.delivery_number is not none %}#{{ summary.delivery_number }}{% else %}—{% endif %}</dd></div>
+  <div><dt>Attention</dt><dd>{% if summary.attention_required %}yes{% else %}—{% endif %}</dd></div>
+  <div><dt>Sealed</dt><dd>{{ summary.sealed_text }}</dd></div>
+</dl>
+{% if show.still_changing %}
+<p class="hint">still changing: this Attempt is not sealed yet.</p>
+{% endif %}
+<h3>Archive manifest</h3>
+<table class="fleet history">
+  <thead>
+    <tr><th>Kind</th><th>Path</th><th>Size</th><th>Media type</th></tr>
+  </thead>
+  <tbody>
+    {% for entry in manifest %}
+    <tr>
+      <td>{{ entry.kind }}</td>
+      <td>{{ entry.path }}</td>
+      <td>{{ entry.size_text }}</td>
+      <td>{{ entry.media_type }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if events_error %}
+<div class="banner" role="alert">{{ events_error }}</div>
+{% else %}
+<h3>Contract events</h3>
+{% if unreadable %}
+<p class="hint">{{ unreadable }} event line(s) could not be read.</p>
+{% endif %}
+<form method="get" action="{{ attempt_url }}" class="history-filters log-filters">
+  <label>Level
+    <select name="level">
+      <option value=""{% if not level_value %} selected{% endif %}>All</option>
+      {% for lv in level_option_values %}{% if lv %}
+      <option value="{{ lv }}"{% if lv == level_value %} selected{% endif %}>{{ lv }}</option>
+      {% endif %}{% endfor %}
+    </select>
+  </label>
+  <label>Event
+    <select name="event">
+      <option value=""{% if not event_value %} selected{% endif %}>All</option>
+      {% for nm in event_name_options %}
+      <option value="{{ nm }}"{% if nm == event_value %} selected{% endif %}>{{ nm }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Detail contains <input type="text" name="q" value="{{ q_value }}"></label>
+  <button type="submit">Filter</button>
+  <a href="{{ reset_url }}">Reset</a>
+</form>
+{% if has_filters %}
+<p class="hint">Showing {{ filtered_total }} of {{ total_events }} events matching the current filters.</p>
+{% endif %}
+<div class="paging"><span>page {{ page_num }}/{{ pages }}, {{ filtered_total }} events</span>{% if prev_url %} <a href="{{ prev_url }}">&larr; prev</a>{% endif %}{% if next_url %} <a href="{{ next_url }}">next &rarr;</a>{% endif %}</div>
+{% if page_events %}
+<table class="fleet history">
+  <thead>
+    <tr><th>#</th><th>Time</th><th>Level</th><th>Event</th><th>Detail</th></tr>
+  </thead>
+  <tbody>
+    {% for ev in page_events %}
+    <tr>
+      <td>{{ ev.seq }}</td>
+      <td>{{ ev.time_text }}</td>
+      <td>{% if ev.level_known %}<span class="ev-level lvl-{{ ev.level|upper }}">{{ ev.level }}</span>{% else %}<span class="ev-level">{{ ev.level }}</span>{% endif %}</td>
+      <td>{{ ev.event }}{% if ev.is_native %} <span class="native-tag">native</span>{% endif %}</td>
+      <td>{{ ev.detail }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No events match the current filters. <a href="{{ reset_url }}">Reset</a> to show the full stream.</p>
+{% endif %}
+<div class="paging"><span>page {{ page_num }}/{{ pages }}, {{ filtered_total }} events</span>{% if prev_url %} <a href="{{ prev_url }}">&larr; prev</a>{% endif %}{% if next_url %} <a href="{{ next_url }}">next &rarr;</a>{% endif %}</div>
+{% endif %}
+{% endif %}
+{% endblock %}

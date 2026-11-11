@@ -634,3 +634,14 @@ async def collect_contract_history(
         cap=cap,
         next_cursor=last_cursor,
     )
+
+
+def read_attempt_summary(entry: Any, now: float | None = None) -> ContractAttempt | None:
+    """Parse one Attempt summary mapping, or None when it does not parse.
+
+    The public entry point to the shared summary reader: ``attempts list``
+    pages and ``attempts show`` replies carry the same Attempt summary
+    shape, so both readers parse through here. Never raises.
+    """
+    at = time.time() if now is None else now
+    return _read_attempt(entry, at)
