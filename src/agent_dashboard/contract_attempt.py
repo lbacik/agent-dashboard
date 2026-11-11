@@ -273,6 +273,10 @@ def parse_contract_attempts_show(
         return ContractAttemptShow(ok=False, error="Attempt not recognised")
     problems = documents.validate_attempts_show(result)
     if problems != []:
+        if "manifest" in " ".join(problems).lower():
+            return ContractAttemptShow(
+                ok=False, error="Attempt manifest not recognised"
+            )
         return ContractAttemptShow(ok=False, error="Attempt not recognised")
     summary = read_attempt_summary(result.get("attempt"))
     if summary is None:

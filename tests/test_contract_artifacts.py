@@ -185,12 +185,19 @@ def _replay_client(
     export_fixtures: list[dict],
     *,
     sealed: bool = True,
+    num_show_fixtures: int = 1,
 ) -> tuple[TestClient, ReplayProcessRunner]:
-    """A client whose contract ops replay show plus export tars in order."""
+    """A client whose contract ops replay show plus export tars in order.
+
+    Each recording answers once, so pass ``num_show_fixtures`` equal to the
+    number of HTTP requests the test makes: every preview/download re-reads
+    the header with ``attempts show`` before its ``attempts export`` read.
+    """
     from agent_operator_contract import documents
 
-    fixtures = [documents.load_fixture("status-idle"),
-                _show_fixture(show_entries, sealed=sealed)]
+    fixtures = [documents.load_fixture("status-idle")]
+    fixtures += [_show_fixture(show_entries, sealed=sealed)
+                 for _ in range(num_show_fixtures)]
     fixtures += list(export_fixtures)
     runner = ReplayProcessRunner(fixtures)
     gateway = DockerGateway(process_runner=runner)
@@ -568,7 +575,12 @@ def test_preview_json_formatted_and_raw_toggle():
     entries = _page_entries([_manifest_entry("other", "report.json", data,
                                              "application/json")])
     tar = _export_tar([entries[1]], {"report.json": data})
-    client, runner = _replay_client(entries, [_export_fixture("report.json", tar)])
+    client, runner = _replay_client(
+        entries,
+        [_export_fixture("report.json", tar),
+         _export_fixture("report.json", tar)],
+        num_show_fixtures=2,
+    )
     body = client.get(_preview_url("report.json")).text
     assert html.unescape(body).find('"a": 2') != -1
     assert "raw" in body
@@ -612,11 +624,11 @@ def test_preview_binary_is_download_only_without_export():
     entries = _page_entries([_manifest_entry("other", "shot.png", data,
                                              "application/octet-stream")])
     client, runner = _replay_client(entries, [])
-    before = len(runner.calls)
+    before = len(_export_calls(runner))
     body = client.get(_preview_url("shot.png")).text
     assert "No inline preview" in body
     assert "download" in body
-    assert len(runner.calls) == before
+    assert len(_export_calls(runner)) == before
 
 
 def test_preview_truncation_marker_and_true_size():
@@ -822,8 +834,8 @@ def test_lan_viewer_can_preview_and_download(tmp_path, monkeypatch):
 
     from agent_operator_contract import documents
 
-    fixtures = [documents.load_fixture("status-idle"),
-                _show_fixture(entries)]
+    fixtures = [documents.load_fixture("status-idle")]
+    fixtures += [_show_fixture(entries) for _ in range(2)]
     fixtures += [_export_fixture("note.txt", tar),
                  _export_fixture("note.txt", tar)]
     runner = ReplayProcessRunner(fixtures)
