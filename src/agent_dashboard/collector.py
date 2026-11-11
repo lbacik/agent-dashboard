@@ -371,37 +371,59 @@ async def _poll_offline_one(
     ):
         return None
     async with semaphore:
-        try:
-            info = await gateway.inspect_offline(instance.container_id)
-        except GatewayError:
-            return None
-        if info.running:
-            return instance.container_id, InstancePoll(
-                _outcome(INSTANCE_STARTED, INSTANCE_STARTED_REASON, now), None
+        get_lock = getattr(gateway, "offline_lock", None)
+        lock = None
+        if callable(get_lock):
+            try:
+                lock = get_lock(instance.container_id)
+            except ValueError:
+                return None
+        if lock is None:
+            return await _poll_offline_guarded(
+                gateway, state, instance, now
             )
-        if await state.is_offline_done(instance.container_id, info.finished_at):
-            return None
-        key = info.finished_at
-        try:
-            exec_result = await gateway.offline_status(
-                info.image, info.mounts, instance.exec_user
+        async with lock:
+            return await _poll_offline_guarded(
+                gateway, state, instance, now
             )
-        except ValueError as exc:
-            return instance.container_id, InstancePoll(
-                _outcome(
-                    SNAPSHOT_FAILED, f"{OFFLINE_UNAVAILABLE_PREFIX}{exc}", now
-                ),
-                None,
-                offline_key=key,
-            )
-        except GatewayError:
-            return None
-        outcome, snapshot = classify_offline_status(
-            exec_result.stdout, exec_result.returncode, now=now
+
+
+async def _poll_offline_guarded(
+    gateway,
+    state,
+    instance: ManagedInstance,
+    now: float,
+) -> tuple[str, InstancePoll] | None:
+    """Inspect plus one Offline Read ``status``; caller holds the lock."""
+    try:
+        info = await gateway.inspect_offline(instance.container_id)
+    except GatewayError:
+        return None
+    if info.running:
+        return instance.container_id, InstancePoll(
+            _outcome(INSTANCE_STARTED, INSTANCE_STARTED_REASON, now), None
         )
-        if outcome.kind == INSTANCE_STARTED:
-            return instance.container_id, InstancePoll(outcome, None)
-        return instance.container_id, InstancePoll(outcome, snapshot, offline_key=key)
+    if await state.is_offline_done(instance.container_id, info.finished_at):
+        return None
+    key = info.finished_at
+    try:
+        exec_result = await gateway.offline_status(
+            info.image, info.mounts, instance.exec_user
+        )
+    except ValueError as exc:
+        return instance.container_id, InstancePoll(
+            _outcome(SNAPSHOT_FAILED, f"{OFFLINE_UNAVAILABLE_PREFIX}{exc}", now),
+            None,
+            offline_key=key,
+        )
+    except GatewayError:
+        return None
+    outcome, snapshot = classify_offline_status(
+        exec_result.stdout, exec_result.returncode, now=now
+    )
+    if outcome.kind == INSTANCE_STARTED:
+        return instance.container_id, InstancePoll(outcome, None)
+    return instance.container_id, InstancePoll(outcome, snapshot, offline_key=key)
 
 
 async def run_cycle(

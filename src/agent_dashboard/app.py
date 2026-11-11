@@ -92,11 +92,14 @@ from .contract_attempt import (
     validate_export_path,
 )
 from .contract_history import (
+    OFFLINE_STARTED_MESSAGE,
     apply_contract_range,
     collect_contract_history,
+    collect_contract_history_offline,
     contract_day_strip,
     contract_legend,
     counts_by_label,
+    is_instance_running_rejection,
     known_attempt_ids,
 )
 from .control import compute_control_mode, control_slug
@@ -107,6 +110,7 @@ from .gateway import (
     COMMAND_LOG_RE,
     CONTRACT_PATH,
     EVIDENCE_PREVIEW_CAP,
+    ControlTimeoutError,
     DockerGateway,
     GatewayError,
     validate_attempt_ref,
@@ -453,6 +457,149 @@ def create_app(
         if not isinstance(attempt, dict) or not isinstance(manifest, list):
             return None
         return attempt, manifest
+
+    def _offline_lock_for(container_id: str):
+        get_lock = getattr(gw, "offline_lock", None)
+        if not callable(get_lock):
+            return None
+        try:
+            return get_lock(container_id)
+        except ValueError:
+            return None
+
+    async def _offline_inspect(row):
+        """Inspect a stopped row: ``(info, error)`` with a display message."""
+        try:
+            info = await gw.inspect_offline(row.container_id)
+        except FileNotFoundError:
+            return None, (
+                "Attempt logs are unavailable for this instance: "
+                "its volume is gone or it holds no logs."
+            )
+        except GatewayError as exc:
+            lowered = str(exc).lower()
+            if "no such" in lowered or "not found" in lowered:
+                return None, (
+                    "Attempt logs are unavailable for this instance: "
+                    "its volume is gone or it holds no logs."
+                )
+            return None, f"Could not read the Attempt list: {exc}"
+        except (ValueError, Exception) as exc:
+            return None, f"Could not read the Attempt list: {exc}"
+        if info.running:
+            return None, OFFLINE_STARTED_MESSAGE
+        return info, None
+
+    async def _offline_history(row, spec, now_ts):
+        """Offline ``attempts list`` paging for a stopped row."""
+        info, error = await _offline_inspect(row)
+        if error is not None:
+            return None, error
+        assert info is not None
+        lock = _offline_lock_for(row.container_id)
+        try:
+            if lock is not None:
+                async with lock:
+                    result = await collect_contract_history_offline(
+                        gw,
+                        info.image,
+                        info.mounts,
+                        row.exec_user,
+                        spec,
+                        now=now_ts,
+                        cap=cfg.contract_history_cap,
+                        instance_name=row.name,
+                    )
+            else:
+                result = await collect_contract_history_offline(
+                    gw,
+                    info.image,
+                    info.mounts,
+                    row.exec_user,
+                    spec,
+                    now=now_ts,
+                    cap=cfg.contract_history_cap,
+                    instance_name=row.name,
+                )
+        except FileNotFoundError:
+            return None, (
+                "Attempt logs are unavailable for this instance: "
+                "its volume is gone or it holds no logs."
+            )
+        except ControlTimeoutError as exc:
+            return None, f"Could not read the Attempt list: {exc}"
+        except Exception as exc:
+            return None, f"Could not read the Attempt list: {exc}"
+        if not result.ok:
+            return None, result.error or "Attempt list not recognised"
+        return result, None
+
+    async def _offline_show(row, attempt_id: str):
+        """Offline ``attempts show`` for a stopped row: ``(exec, error)``."""
+        info, error = await _offline_inspect(row)
+        if error is not None:
+            if error == OFFLINE_STARTED_MESSAGE:
+                return None, (
+                    f"Attempt {attempt_id!r} is unavailable for this instance: "
+                    "the instance started while reading: refresh the view."
+                )
+            if error.startswith("Attempt logs are unavailable"):
+                return None, (
+                    f"Attempt {attempt_id!r} is unavailable for this instance: "
+                    "its volume is gone or it holds no logs."
+                )
+            return None, f"Could not read the Attempt: {error}"
+        assert info is not None
+        lock = _offline_lock_for(row.container_id)
+        try:
+            if lock is not None:
+                async with lock:
+                    exec_result = await gw.offline_attempt_show(
+                        info.image, info.mounts, row.exec_user, attempt_id
+                    )
+            else:
+                exec_result = await gw.offline_attempt_show(
+                    info.image, info.mounts, row.exec_user, attempt_id
+                )
+        except ValueError as exc:
+            return None, f"Could not read the Attempt: offline read unavailable: {exc}"
+        except ControlTimeoutError as exc:
+            return None, f"Could not read the Attempt: {exc}"
+        except (GatewayError, Exception) as exc:
+            lowered = str(exc).lower()
+            if "no such" in lowered or "not found" in lowered:
+                return None, (
+                    f"Attempt {attempt_id!r} is unavailable for this instance: "
+                    "its volume is gone or it holds no logs."
+                )
+            return None, f"Could not read the Attempt: {exc}"
+        try:
+            if is_instance_running_rejection(
+                exec_result.stdout, exec_result.returncode
+            ):
+                return None, (
+                    f"Attempt {attempt_id!r} is unavailable for this instance: "
+                    "the instance started while reading: refresh the view."
+                )
+        except Exception:
+            pass
+        return exec_result, None
+
+    def _offline_export_once(row, info, attempt_id: str, path: str):
+        """One offline ``attempts export`` call under the instance lock."""
+
+        async def _once():
+            lock = _offline_lock_for(row.container_id)
+            if lock is not None:
+                async with lock:
+                    return await gw.offline_attempt_export(
+                        info.image, info.mounts, row.exec_user, attempt_id, path
+                    )
+            return await gw.offline_attempt_export(
+                info.image, info.mounts, row.exec_user, attempt_id, path
+            )
+
+        return _once
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> Response:
@@ -826,37 +973,42 @@ def create_app(
             )
             return page()
         if is_contract_row(row):
-            # Contract instances page the online ``attempts list``
-            # (newest first) through the shared contract history reader:
-            # paging stops at the first Attempt starting before the
+            # Contract instances page ``attempts list`` (newest first)
+            # through the shared contract history reader: online while
+            # running, offline through the helper while stopped, so the
+            # statistics card shows the same Attempts that explain a Halt.
+            # Paging stops at the first Attempt starting before the
             # selected range; outcome charts group by ``outcome.label``
             # (display only) and every Attempt counts as missing cost
             # data, never zero.
             now_ts = time.time()
-            if row.state != "running":
-                ctx["error"] = (
-                    "Attempt list is unavailable for this instance: "
-                    "it is not running."
-                )
-                return page()
             if not row.exec_user:
                 ctx["error"] = (
                     "Attempt list is unavailable for this instance: "
                     "its exec user is missing."
                 )
                 return page()
-            full_contract = await collect_contract_history(
-                gw,
-                row.container_id,
-                row.exec_user,
-                spec,
-                now=now_ts,
-                cap=cfg.contract_history_cap,
-                instance_name=name,
-            )
-            if not full_contract.ok:
-                ctx["error"] = full_contract.error
-                return page()
+            if row.state != "running":
+                full_contract, error = await _offline_history(
+                    row, spec, now_ts
+                )
+                if error is not None:
+                    ctx["error"] = error
+                    return page()
+                assert full_contract is not None
+            else:
+                full_contract = await collect_contract_history(
+                    gw,
+                    row.container_id,
+                    row.exec_user,
+                    spec,
+                    now=now_ts,
+                    cap=cfg.contract_history_cap,
+                    instance_name=name,
+                )
+                if not full_contract.ok:
+                    ctx["error"] = full_contract.error
+                    return page()
             cut = apply_contract_range(
                 tuple(full_contract.summaries), spec, now_ts
             )
@@ -972,19 +1124,13 @@ def create_app(
                 f"Unknown Managed instance {name!r}: it is unknown or was removed.",
             )
         if is_contract_row(row):
-            # Contract instances page the online ``attempts list``
-            # (newest first) through the shared contract history reader.
-            # Paging stops at the first Attempt starting before the
-            # selected range; ``All`` stops at the configured cap with a
-            # visible "showing newest N" note. Malformed or unknown replies
+            # Contract instances page ``attempts list`` (newest first)
+            # through the shared history reader: online while running,
+            # offline through the helper while stopped. Paging stops at
+            # the first Attempt starting before the selected range;
+            # ``All`` stops at the configured cap with a visible
+            # "showing newest N" note. Malformed or unknown replies
             # render a clear message with status 200, never an error.
-            if row.state != "running":
-                return history_page(
-                    row,
-                    None,
-                    "Attempt list is unavailable for this instance: "
-                    "it is not running.",
-                )
             if not row.exec_user:
                 return history_page(
                     row,
@@ -993,17 +1139,26 @@ def create_app(
                     "its exec user is missing.",
                 )
             now_ts = time.time()
-            contracted = await collect_contract_history(
-                gw,
-                row.container_id,
-                row.exec_user,
-                spec,
-                now=now_ts,
-                cap=cfg.contract_history_cap,
-                instance_name=name,
-            )
-            if not contracted.ok:
-                return history_page(row, None, contracted.error)
+            if row.state != "running":
+                offline_result, offline_error = await _offline_history(
+                    row, spec, now_ts
+                )
+                if offline_error is not None:
+                    return history_page(row, None, offline_error)
+                assert offline_result is not None
+                contracted = offline_result
+            else:
+                contracted = await collect_contract_history(
+                    gw,
+                    row.container_id,
+                    row.exec_user,
+                    spec,
+                    now=now_ts,
+                    cap=cfg.contract_history_cap,
+                    instance_name=name,
+                )
+                if not contracted.ok:
+                    return history_page(row, None, contracted.error)
             return history_page(
                 row,
                 contracted,
@@ -1637,17 +1792,6 @@ def create_app(
             )
         if not is_contract_row(row):
             return (row, None, None, False, LEGACY_ATTEMPT_MESSAGE, 404, None)
-        if row.state != "running":
-            return (
-                row,
-                None,
-                None,
-                False,
-                f"Attempt {attempt_id!r} is unavailable for this instance: "
-                "it is not running.",
-                200,
-                None,
-            )
         if not row.exec_user:
             return (
                 row,
@@ -1689,6 +1833,8 @@ def create_app(
                 404,
                 None,
             )
+        # The Sealed cache serves cached Attempts without starting a
+        # helper: running and stopped rows reach the cache first.
         key = sealed_cache_key(row, attempt_id)
         if key is not None:
             assert sealed_archive_cache is not None
@@ -1718,20 +1864,27 @@ def create_app(
                     return (row, hit, cached_entry, True, None, 200, None)
                 # A failed read verification dropped the entry: fall through
                 # and fetch again below.
-        try:
-            show_exec = await gw.contract_attempt_show(
-                row.container_id, row.exec_user, attempt_id
-            )
-        except (GatewayError, ValueError) as exc:
-            return (
-                row,
-                None,
-                None,
-                False,
-                f"Could not read the Attempt: {exc}",
-                200,
-                None,
-            )
+        stopped = row.state != "running"
+        if stopped:
+            show_exec, show_error = await _offline_show(row, attempt_id)
+            if show_error is not None:
+                return (row, None, None, False, show_error, 200, None)
+            assert show_exec is not None
+        else:
+            try:
+                show_exec = await gw.contract_attempt_show(
+                    row.container_id, row.exec_user, attempt_id
+                )
+            except (GatewayError, ValueError) as exc:
+                return (
+                    row,
+                    None,
+                    None,
+                    False,
+                    f"Could not read the Attempt: {exc}",
+                    200,
+                    None,
+                )
         show = parse_contract_attempts_show(
             show_exec.stdout, show_exec.returncode, attempt_id=attempt_id
         )
@@ -1828,6 +1981,40 @@ def create_app(
 
         if cached_data is not None:
             verified_data = cached_data
+        elif row.state != "running":
+            info, inspect_error = await _offline_inspect(row)
+            if inspect_error is not None:
+                return fragment(
+                    f"Could not export the Attempt archive: {inspect_error}"
+                )
+            assert info is not None
+            lock = _offline_lock_for(row.container_id)
+
+            async def _once():
+                return await gw.offline_attempt_export(
+                    info.image, info.mounts, row.exec_user, attempt_id, entry.path
+                )
+
+            try:
+                if lock is not None:
+                    async with lock:
+                        verified = await fetch_verified_artifact(
+                            _once, entry, sealed=sealed, attempt_id=attempt_id
+                        )
+                else:
+                    verified = await fetch_verified_artifact(
+                        _once, entry, sealed=sealed, attempt_id=attempt_id
+                    )
+            except (GatewayError, ValueError) as exc:
+                return fragment(f"Could not export the Attempt archive: {exc}")
+            if not verified.ok:
+                return fragment(verified.error)
+            assert verified.data is not None
+            verified_data = verified.data
+            if sealed_archive_cache is not None and sealed:
+                key = sealed_cache_key(row, attempt_id)
+                if key is not None:
+                    sealed_archive_cache.store_artifact(key, entry.path, verified_data)
         else:
 
             async def _once():
@@ -1919,6 +2106,44 @@ def create_app(
 
         if cached_data is not None:
             content = cached_data
+        elif row.state != "running":
+            info, inspect_error = await _offline_inspect(row)
+            if inspect_error is not None:
+                return PlainTextResponse(
+                    f"Could not export the Attempt archive: {inspect_error}"
+                )
+            assert info is not None
+            lock = _offline_lock_for(row.container_id)
+
+            async def _once():
+                return await gw.offline_attempt_export(
+                    info.image, info.mounts, row.exec_user, attempt_id, entry.path
+                )
+
+            try:
+                if lock is not None:
+                    async with lock:
+                        verified = await fetch_verified_artifact(
+                            _once, entry, sealed=sealed, attempt_id=attempt_id
+                        )
+                else:
+                    verified = await fetch_verified_artifact(
+                        _once, entry, sealed=sealed, attempt_id=attempt_id
+                    )
+            except (GatewayError, ValueError) as exc:
+                return PlainTextResponse(
+                    f"Could not export the Attempt archive: {exc}"
+                )
+            if not verified.ok:
+                return PlainTextResponse(
+                    verified.error or "Could not read the artifact."
+                )
+            assert verified.data is not None
+            content = verified.data
+            if sealed_archive_cache is not None and sealed:
+                key = sealed_cache_key(row, attempt_id)
+                if key is not None:
+                    sealed_archive_cache.store_artifact(key, entry.path, content)
         else:
 
             async def _once():
@@ -2067,15 +2292,6 @@ def create_app(
                 reset_url=base,
                 refresh_url=base,
             )
-        if row.state != "running":
-            return page(
-                row,
-                f"Attempt {attempt_id!r} is unavailable for this instance: "
-                "it is not running.",
-                attempt_url=base,
-                reset_url=base,
-                refresh_url=base,
-            )
         if not row.exec_user:
             return page(
                 row,
@@ -2114,36 +2330,66 @@ def create_app(
         if key is not None:
             assert sealed_archive_cache is not None
             show = cached_attempt_show(key, attempt_id)
-        if show is None:
+
+        async def _read_show_exec():
+            if row.state != "running":
+                exec_result, show_error = await _offline_show(row, attempt_id)
+                if show_error is not None:
+                    raise _ShowReadError(show_error)
+                assert exec_result is not None
+                return exec_result
+            return await gw.contract_attempt_show(
+                row.container_id, row.exec_user, attempt_id
+            )
+
+        class _ShowReadError(Exception):
+            pass
+
+        async def _load_show():
             try:
-                show_exec = await gw.contract_attempt_show(
-                    row.container_id, row.exec_user, attempt_id
-                )
+                show_exec = await _read_show_exec()
+            except _ShowReadError as exc:
+                return None, str(exc)
             except (GatewayError, ValueError) as exc:
-                return page(
-                    row,
-                    f"Could not read the Attempt: {exc}",
-                    attempt_url=base,
-                    reset_url=base,
-                    refresh_url=base,
-                )
-            show = parse_contract_attempts_show(
+                return None, f"Could not read the Attempt: {exc}"
+            parsed = parse_contract_attempts_show(
                 show_exec.stdout, show_exec.returncode, attempt_id=attempt_id
             )
-            if not show.ok:
-                return page(
-                    row,
-                    show.error,
-                    status=404 if show.not_found else 200,
-                    attempt_url=base,
-                    reset_url=base,
-                    refresh_url=base,
-                )
-            if key is not None and show.summary is not None and show.summary.sealed:
+            if not parsed.ok:
+                return None, (parsed.error, parsed.not_found)
+            if (
+                key is not None
+                and parsed.summary is not None
+                and parsed.summary.sealed
+            ):
                 assert sealed_archive_cache is not None
                 raw = raw_show_result(show_exec.stdout)
                 if raw is not None:
                     sealed_archive_cache.store_show(key, raw[0], raw[1])
+            return parsed, None
+
+        if show is None:
+            loaded, load_error = await _load_show()
+            if loaded is None:
+                assert load_error is not None
+                if isinstance(load_error, tuple):
+                    message, not_found = load_error
+                    return page(
+                        row,
+                        message,
+                        status=404 if not_found else 200,
+                        attempt_url=base,
+                        reset_url=base,
+                        refresh_url=base,
+                    )
+                return page(
+                    row,
+                    load_error,
+                    attempt_url=base,
+                    reset_url=base,
+                    refresh_url=base,
+                )
+            show = loaded
         else:
             assert sealed_archive_cache is not None and key is not None
             cached_entry = next(
@@ -2153,38 +2399,30 @@ def create_app(
             cached_events = sealed_archive_cache.load_artifact(key, cached_entry.path)
             if cached_events is None and sealed_archive_cache.load_show(key) is None:
                 # A failed read verification dropped the entry: fall back to
-                # a live read below.
+                # a read below (online or offline, like above).
                 show = None
         if show is None:
-            try:
-                show_exec = await gw.contract_attempt_show(
-                    row.container_id, row.exec_user, attempt_id
-                )
-            except (GatewayError, ValueError) as exc:
+            loaded, load_error = await _load_show()
+            if loaded is None:
+                assert load_error is not None
+                if isinstance(load_error, tuple):
+                    message, not_found = load_error
+                    return page(
+                        row,
+                        message,
+                        status=404 if not_found else 200,
+                        attempt_url=base,
+                        reset_url=base,
+                        refresh_url=base,
+                    )
                 return page(
                     row,
-                    f"Could not read the Attempt: {exc}",
+                    load_error,
                     attempt_url=base,
                     reset_url=base,
                     refresh_url=base,
                 )
-            show = parse_contract_attempts_show(
-                show_exec.stdout, show_exec.returncode, attempt_id=attempt_id
-            )
-            if not show.ok:
-                return page(
-                    row,
-                    show.error,
-                    status=404 if show.not_found else 200,
-                    attempt_url=base,
-                    reset_url=base,
-                    refresh_url=base,
-                )
-            if key is not None and show.summary is not None and show.summary.sealed:
-                assert sealed_archive_cache is not None
-                raw = raw_show_result(show_exec.stdout)
-                if raw is not None:
-                    sealed_archive_cache.store_show(key, raw[0], raw[1])
+            show = loaded
         events_entry = next(
             (entry for entry in show.manifest if entry.kind == "events"), None
         )
@@ -2201,9 +2439,45 @@ def create_app(
                 unreadable = parsed.unreadable
         else:
             try:
-                export_exec = await gw.contract_attempt_export(
-                    row.container_id, row.exec_user, attempt_id, events_entry.path
-                )
+                if row.state != "running":
+                    info, inspect_error = await _offline_inspect(row)
+                    if inspect_error is not None:
+                        raise GatewayError(inspect_error)
+                    assert info is not None
+                    lock = _offline_lock_for(row.container_id)
+                    if lock is not None:
+                        async with lock:
+                            export_exec = await gw.offline_attempt_export(
+                                info.image,
+                                info.mounts,
+                                row.exec_user,
+                                attempt_id,
+                                events_entry.path,
+                            )
+                    else:
+                        export_exec = await gw.offline_attempt_export(
+                            info.image,
+                            info.mounts,
+                            row.exec_user,
+                            attempt_id,
+                            events_entry.path,
+                        )
+                    try:
+                        if is_instance_running_rejection(
+                            export_exec.stdout, export_exec.returncode
+                        ):
+                            raise GatewayError(
+                                "the instance started while reading: "
+                                "refresh the view."
+                            )
+                    except GatewayError:
+                        raise
+                    except Exception:
+                        pass
+                else:
+                    export_exec = await gw.contract_attempt_export(
+                        row.container_id, row.exec_user, attempt_id, events_entry.path
+                    )
             except (GatewayError, ValueError) as exc:
                 events_error = f"Could not export the Attempt archive: {exc}"
             else:

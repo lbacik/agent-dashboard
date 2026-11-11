@@ -750,10 +750,15 @@ async def collect_contract_history_offline(
             is_race=_is_race,
         )
     except _OfflineUnavailable as exc:
+        safe_cap = (
+            cap
+            if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 1
+            else HISTORY_CAP_DEFAULT
+        )
         return ContractHistoryResult(
             ok=False,
             error=f"{OFFLINE_UNAVAILABLE_MESSAGE}{exc}",
-            cap=cap if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 1 else HISTORY_CAP_DEFAULT,
+            cap=safe_cap,
         )
 
 
