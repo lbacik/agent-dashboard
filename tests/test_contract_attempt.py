@@ -896,13 +896,34 @@ def test_attempt_page_unknown_instance_answers_404():
 
 
 def test_attempt_page_not_running_or_missing_user_is_a_banner():
+    from agent_dashboard.gateway import OfflineInspect, OfflineMount
+
     show, export = _scripted_page()
-    client, _ = make_attempt_client(
+    client, gateway = make_attempt_client(
         instance="down-1", state="exited", show=show, export=export
     )
+    image = "sha256:" + "ab" * 32
+    gateway.set_inspect(
+        "abc123",
+        OfflineInspect(
+            running=False,
+            finished_at="2026-11-06T09:58:12.123456789Z",
+            image=image,
+            mounts=(OfflineMount("data-vol", "/data"),),
+        ),
+    )
+    gateway.set_offline_attempt_show(image, "#41/1", show)
+    gateway.set_offline_attempt_export(image, "#41/1", "events.jsonl", export)
     response = client.get("/instances/down-1/attempt/%2341%2F1")
     assert response.status_code == 200
-    assert "not running" in response.text
+    body = response.text
+    assert "Attempt #41/1" in body
+    assert "Delivered" in body
+    assert "claim_opened" in body
+    assert gateway.offline_show_calls != []
+    assert gateway.offline_export_calls != []
+    assert gateway.contract_show_calls == []
+    assert gateway.contract_export_calls == []
     client, _ = make_attempt_client(
         instance="nouser-1", exec_user="", show=show, export=export
     )

@@ -585,22 +585,6 @@ def create_app(
             pass
         return exec_result, None
 
-    def _offline_export_once(row, info, attempt_id: str, path: str):
-        """One offline ``attempts export`` call under the instance lock."""
-
-        async def _once():
-            lock = _offline_lock_for(row.container_id)
-            if lock is not None:
-                async with lock:
-                    return await gw.offline_attempt_export(
-                        info.image, info.mounts, row.exec_user, attempt_id, path
-                    )
-            return await gw.offline_attempt_export(
-                info.image, info.mounts, row.exec_user, attempt_id, path
-            )
-
-        return _once
-
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> Response:
         """Fleet table plus the instance drawer.

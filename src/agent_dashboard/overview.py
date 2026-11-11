@@ -42,8 +42,8 @@ from .contract_history import (
     contract_outcome_text,
     counts_by_label,
 )
-from .gateway import ControlTimeoutError, GatewayError
 from .fleet import FleetRow
+from .gateway import ControlTimeoutError, GatewayError
 from .history import (
     DEFAULT_WINDOW,
     NOT_APPLICABLE,
