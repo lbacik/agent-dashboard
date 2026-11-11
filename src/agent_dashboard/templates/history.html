@@ -24,6 +24,40 @@
 <div class="banner" role="alert">{{ error }}</div>
 {% elif result is not none and result.total == 0 %}
 <p class="empty">No attempts recorded yet for this Managed instance.</p>
+{% elif contract %}
+<p class="hint">Showing newest {{ result.summaries|length }} of {{ result.total }} attempts{% if result.capped %} · capped at {{ result.cap }}{% endif %}{% if result.unreadable %} · {{ result.unreadable }} attempt(s) could not be read{% endif %}.</p>
+{% if clegend %}
+<ul class="chart-legend" aria-label="Attempt outcome legend">
+  {% for entry in clegend %}
+  <li><span class="glyph outcome-{{ entry.key }}" aria-hidden="true">{{ shape_glyphs[entry.shape] }}</span> {{ entry.label }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+<table class="fleet history">
+  <thead>
+    <tr><th>Issue</th><th>Started</th><th>Finished</th><th>Duration</th><th>Lifecycle</th><th>Outcome</th><th>Delivery</th><th>Attention</th><th>Sealed</th><th>Cost</th><th>Input</th><th>Cache read</th><th>Cache creation</th><th>Output</th></tr>
+  </thead>
+  <tbody>
+    {% for attempt in result.summaries %}
+    <tr>
+      <td><div class="inst-name">#{{ attempt.issue }}</div>{% if attempt.issue_title %}<div class="inst-repo">{{ attempt.issue_title }}</div>{% endif %}</td>
+      <td>{{ attempt.started_at }}</td>
+      <td>{{ attempt.finished_at or "—" }}</td>
+      <td>{{ attempt.duration_text }}</td>
+      <td>{{ attempt.lifecycle_state }}</td>
+      <td>{{ attempt.outcome_label }}</td>
+      <td>{% if attempt.delivery_url and attempt.delivery_number is not none %}<a href="{{ attempt.delivery_url }}">#{{ attempt.delivery_number }}</a>{% elif attempt.delivery_number is not none %}#{{ attempt.delivery_number }}{% else %}—{% endif %}</td>
+      <td>{% if attempt.attention_required %}yes{% else %}—{% endif %}</td>
+      <td>{{ attempt.sealed_text }}</td>
+      <td>{{ attempt.cost_text }}</td>
+      <td>{{ attempt.input_text }}</td>
+      <td>{{ attempt.cache_read_text }}</td>
+      <td>{{ attempt.cache_creation_text }}</td>
+      <td>{{ attempt.output_text }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
 {% elif result is not none %}
 <p class="hint">Showing {{ result.summaries|length }} of {{ result.total }} attempts{% if result.unreadable %} · {{ result.unreadable }} attempt file(s) could not be read{% endif %}.</p>
 {% if legend %}

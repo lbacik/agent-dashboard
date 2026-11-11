@@ -422,11 +422,14 @@ def test_drawer_states_headlines_and_modules():
             "03 // Activity",
             "04 // Last halt",
             "05 // Recent events",
+            "05 // Attempt statistics",
         ):
             assert module in body, (name, module)
         assert "Contract status" in body
-        assert "/instances/web-0/history" not in body
-        assert "Logs" not in body
+        # #181: attempt history and statistics are available on the contract
+        # path; only the control console stays unavailable.
+        assert "/instances/web-0/history" in body
+        assert "Logs" in body
         assert "Live #" not in body
 
 
@@ -442,7 +445,7 @@ def test_drawer_unknown_state_still_renders():
     body = client.get("/instances/web-0").text
     assert "01 // Contract status" in body
     assert "unknown" in body
-    assert "/instances/web-0/history" not in body
+    assert "/instances/web-0/history" in body
 
 
 def test_drawer_budget_enforced_and_limits():

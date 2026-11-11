@@ -63,9 +63,18 @@
     {% set ns.x = ns.x + w %}{% endif %}{% endfor %}
   </svg>
   {% endif %}
+  {% if contract %}
+  <p class="stats-line">
+    <strong>{{ inst.shown }}</strong> of {{ inst.total }} attempts · <strong>{{ inst.cost_text }}</strong>{% if inst.unreadable %} · {{ inst.unreadable }} unreadable{% endif %}
+  </p>
+  {% if capped %}
+  <p class="hint">Showing newest {{ inst.total }} attempts · capped at {{ cap }}.</p>
+  {% endif %}
+  {% else %}
   <p class="stats-line">
     <strong>{{ inst.shown }}</strong> of {{ inst.total }} attempts · <strong>{{ inst.cost_text }}</strong>{% if inst.cost_missing %} ({{ inst.cost_missing }} w/o usage){% endif %}{% if inst.unreadable %} · {{ inst.unreadable }} unreadable{% endif %}
   </p>
+  {% endif %}
   {% if inst.shown and legend %}
   <ul class="chart-legend stats-legend" aria-label="Attempt outcome legend">
     {% for entry in legend %}
@@ -82,6 +91,8 @@
   </div>
   {% if error %}
   <p class="hint">{{ error }}</p>
+  {% elif contract %}
+  <p class="stats-line"><strong>Not reported</strong> · contract major 1 carries no per-Attempt usage data.</p>
   {% elif cost is none %}
   <p class="hint">Cost unavailable.</p>
   {% elif cost.total_attempts == 0 %}

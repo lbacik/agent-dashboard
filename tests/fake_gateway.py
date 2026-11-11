@@ -67,6 +67,12 @@ class FakeGateway:
         self.offline_calls: list[dict] = []
         self.offline_argvs: list[list[str]] = []
         self._scripts: dict[str, TelemetryExec | Exception] = {}
+        self._contract_attempts_pages: dict[
+            tuple[str, str | None], object
+        ] = {}
+        self.contract_attempts_calls: list[
+            tuple[str, str, int, str | None]
+        ] = []
         self._histories: dict[str, TelemetryExec | Exception] = {}
         self._events: dict[str, TelemetryExec | Exception] = {}
         self._logs: dict[str, TelemetryExec | Exception] = {}
@@ -246,6 +252,19 @@ class FakeGateway:
             raise scripted
         assert isinstance(scripted, TelemetryExec)
         return scripted
+
+    def set_contract_attempts(
+        self, container_id: str, pages: dict
+    ) -> None:
+        """Script ``attempts list`` pages keyed by the ``before`` cursor.
+
+        ``pages`` maps each request cursor (``None`` for the first page) to
+        a payload dict, a ``(payload_or_stdout, returncode)`` pair, raw
+        stdout bytes, or an exception the exec raises. Unscripted
+        (container, cursor) pairs report an empty attempt list.
+        """
+        for cursor, scripted in pages.items():
+            self._contract_attempts_pages[(container_id, cursor)] = scripted
 
     def set_history(
         self, container_id: str, payload: dict, returncode: int = 0
@@ -502,6 +521,54 @@ class FakeGateway:
             {"container_id": container_id, "request_id": request_id, "exec_user": exec_user}
         )
         return await self._run_scripted_control(container_id, self._contract_command_scripts)
+
+    async def contract_attempts_list(
+        self,
+        container_id: str,
+        exec_user: str,
+        *,
+        limit: int = 100,
+        before: str | None = None,
+        timeout: float | None = None,
+    ) -> TelemetryExec:
+        """One scripted ``attempts list`` page for a contract instance.
+
+        Calls are recorded with their page size and cursor; unscripted
+        (container, cursor) pairs report an empty attempt list, newest
+        first, with no next cursor.
+        """
+        _ = timeout
+        self.contract_attempts_calls.append(
+            (container_id, exec_user, limit, before)
+        )
+        scripted = self._contract_attempts_pages.get((container_id, before))
+        if scripted is None:
+            return TelemetryExec(
+                stdout=json.dumps(
+                    {
+                        "contract": "1.0",
+                        "ok": True,
+                        "result": {"attempts": [], "next_cursor": None},
+                    }
+                ).encode(),
+                returncode=0,
+            )
+        if isinstance(scripted, Exception):
+            raise scripted
+        if isinstance(scripted, TelemetryExec):
+            return scripted
+        if isinstance(scripted, bytes):
+            return TelemetryExec(stdout=scripted, returncode=0)
+        if isinstance(scripted, tuple):
+            payload, returncode = scripted
+            if isinstance(payload, bytes):
+                return TelemetryExec(stdout=payload, returncode=returncode)
+            return TelemetryExec(
+                stdout=json.dumps(payload).encode(), returncode=returncode
+            )
+        return TelemetryExec(
+            stdout=json.dumps(scripted).encode(), returncode=0
+        )
 
     async def attempt_history(self, container_id: str) -> TelemetryExec:
         """One scripted history exec; unscripted IDs report an empty log."""
