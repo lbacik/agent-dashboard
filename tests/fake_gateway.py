@@ -34,6 +34,9 @@ from agent_dashboard.gateway import (
     argv_contract_exec,
     argv_contract_mutation,
     argv_control,
+    argv_offline_attempts_export,
+    argv_offline_attempts_list,
+    argv_offline_attempts_show,
     argv_offline_status,
 )
 
@@ -71,6 +74,16 @@ class FakeGateway:
         self.inspect_calls: list[str] = []
         self.offline_calls: list[dict] = []
         self.offline_argvs: list[list[str]] = []
+        self._offline_locks: dict[str, asyncio.Lock] = {}
+        self._offline_attempts_pages: dict[tuple[str, str | None], object] = {}
+        self.offline_attempts_calls: list[tuple[str, str, int, str | None]] = []
+        self._offline_show: dict[tuple[str, str], ControlExec | Exception] = {}
+        self._offline_export: dict[tuple[str, str, str], ControlExec | Exception] = {}
+        self._offline_export_queues: dict[
+            tuple[str, str, str], list[ControlExec | Exception]
+        ] = {}
+        self.offline_show_calls: list[tuple[str, str, str]] = []
+        self.offline_export_calls: list[tuple[str, str, str, str]] = []
         self._scripts: dict[str, TelemetryExec | Exception] = {}
         self._contract_attempts_pages: dict[
             tuple[str, str | None], object

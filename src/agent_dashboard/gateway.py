@@ -1627,6 +1627,118 @@ def argv_offline_status(
     return argv
 
 
+def _argv_offline(
+    image: str,
+    mounts: Sequence[OfflineMount],
+    exec_user: str,
+    helper_name: str,
+    agentctl_argv: Sequence[str],
+) -> list[str]:
+    """Argv for one Offline Read through a throwaway helper.
+
+    Shared builder behind the pinned ``argv_offline_*`` helpers: the
+    stopped image runs removed with no network as the instance's exec
+    user, every volume re-mounted read-only, and ``agentctl --contract 1
+    --offline`` plus the validated agent call as the entrypoint command.
+    """
+    validate_offline_image(image)
+    validate_exec_user(exec_user)
+    validate_offline_helper_name(helper_name)
+    if isinstance(mounts, (str, bytes)) or not isinstance(mounts, Sequence):
+        raise ValueError(f"invalid offline mounts: {mounts!r}")
+    checked = list(mounts)
+    for mount in checked:
+        if not isinstance(mount, OfflineMount):
+            raise ValueError(f"invalid offline mount: {mount!r}")
+        validate_offline_volume_name(mount.source)
+        validate_offline_destination(mount.destination)
+    if isinstance(agentctl_argv, (str, bytes)) or not isinstance(
+        agentctl_argv, Sequence
+    ):
+        raise ValueError(f"invalid offline agentctl argv: {agentctl_argv!r}")
+    parts = list(agentctl_argv)
+    if not parts or any(not isinstance(part, str) or not part for part in parts):
+        raise ValueError(f"invalid offline agentctl argv: {agentctl_argv!r}")
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--user",
+        exec_user,
+        "--name",
+        helper_name,
+        "--label",
+        f"{OFFLINE_READ_MARKER_LABEL}=1",
+        *[
+            part
+            for mount in checked
+            for part in (
+                "--mount",
+                f"type=volume,src={mount.source},dst={mount.destination},readonly",
+            )
+        ],
+        "--entrypoint",
+        AGENTCTL_PATH,
+        image,
+        "--contract",
+        str(CONTRACT_MAJOR),
+        "--offline",
+        *parts,
+    ]
+
+
+def argv_offline_attempts_list(
+    image: str,
+    mounts: Sequence[OfflineMount],
+    exec_user: str,
+    helper_name: str,
+    limit: int = 100,
+    before: str | None = None,
+) -> list[str]:
+    """Argv for one Offline Read ``attempts list`` page through a helper.
+
+    The agent call is the pinned ``attempts list --limit 100 [--before
+    <cursor>]`` shape (validated exactly like the online call); the helper
+    runs it offline with no network and read-only volumes.
+    """
+    agentctl_argv = argv_contract_attempts_list(limit=limit, before=before)
+    return _argv_offline(image, mounts, exec_user, helper_name, agentctl_argv)
+
+
+def argv_offline_attempts_show(
+    image: str,
+    mounts: Sequence[OfflineMount],
+    exec_user: str,
+    helper_name: str,
+    attempt_id: str,
+) -> list[str]:
+    """Argv for one Offline Read ``attempts show`` header through a helper.
+
+    The agent call is the pinned ``attempts show <attempt-id>`` shape.
+    """
+    agentctl_argv = argv_contract_attempts_show(attempt_id)
+    return _argv_offline(image, mounts, exec_user, helper_name, agentctl_argv)
+
+
+def argv_offline_attempts_export(
+    image: str,
+    mounts: Sequence[OfflineMount],
+    exec_user: str,
+    helper_name: str,
+    attempt_id: str,
+    path: str,
+) -> list[str]:
+    """Argv for one Offline Read ``attempts export`` member through a helper.
+
+    The agent call is the pinned ``attempts export <attempt-id> --path
+    <path>`` shape.
+    """
+    agentctl_argv = argv_contract_attempts_export(attempt_id, path)
+    return _argv_offline(image, mounts, exec_user, helper_name, agentctl_argv)
+
+
 def argv_offline_cleanup(helper_name: str) -> list[str]:
     """Argv for the best-effort removal of a timed-out Offline Read helper.
 
@@ -2027,9 +2139,27 @@ class DockerGateway:
         self.contract_export_timeout = contract_export_timeout
         self._log_semaphore = asyncio.Semaphore(LOG_MAX_CONCURRENT)
         self._control_in_flight: set[str] = set()
+        self._offline_locks: dict[str, asyncio.Lock] = {}
         self._process_runner = (
             process_runner if process_runner is not None else AsyncSubprocessRunner()
         )
+
+    def offline_lock(self, container_id: str) -> asyncio.Lock:
+        """One lock per stopped instance: at most one Offline Read runs at a time.
+
+        Callers hold this across the inspect plus every helper run of one
+        read (history paging holds it across pages; a torn export holds it
+        across the retry), so two concurrent reads for the same container
+        serialize while different containers never block each other. The
+        gateway never acquires it itself: every Offline Read method runs
+        lock-free and trusts its caller to hold it.
+        """
+        validate_container_id(container_id)
+        existing = self._offline_locks.get(container_id)
+        if existing is None:
+            existing = asyncio.Lock()
+            self._offline_locks[container_id] = existing
+        return existing
 
     def argv(self) -> list[str]:
         return argv_list_instances()
@@ -2222,6 +2352,140 @@ class DockerGateway:
             except Exception:
                 pass
             raise
+
+    async def _run_offline(
+        self,
+        image: str,
+        mounts: Sequence[OfflineMount],
+        exec_user: str,
+        agentctl_argv: Sequence[str],
+        operation: str,
+        *,
+        helper_name: str | None = None,
+        timeout: float | None = None,
+    ) -> ControlExec:
+        """Run one Offline Read helper for an arbitrary agent call.
+
+        The argv is the pinned offline ``docker run`` shape (see
+        :func:`_argv_offline`); the bound is the contract's timeout policy
+        for ``operation``. Exit codes are reported, never raised. A bad
+        value raises :class:`ValueError` before anything is spawned. On a
+        lapsed bound the helper is removed best-effort and
+        :class:`ControlTimeoutError` raises. Callers hold
+        :meth:`offline_lock` across the read; this method never acquires it.
+        """
+        name = (
+            make_offline_helper_name()
+            if helper_name is None
+            else validate_offline_helper_name(helper_name)
+        )
+        argv = _argv_offline(image, mounts, exec_user, name, agentctl_argv)
+        effective = contract_client.timeout_for(operation, timeout)
+        try:
+            return await self._process_runner.run(
+                argv,
+                timeout=effective,
+                timeout_error=ControlTimeoutError(
+                    f"docker run timed out after {effective:g} s"
+                ),
+            )
+        except ControlTimeoutError:
+            cleanup = argv_offline_cleanup(name)
+            try:
+                await self._process_runner.run(
+                    cleanup,
+                    timeout=OFFLINE_CLEANUP_TIMEOUT,
+                    timeout_error=ControlTimeoutError(
+                        "docker rm timed out "
+                        f"after {OFFLINE_CLEANUP_TIMEOUT:g} s"
+                    ),
+                )
+            except Exception:
+                pass
+            raise
+
+    async def offline_attempts_list(
+        self,
+        image: str,
+        mounts: Sequence[OfflineMount],
+        exec_user: str,
+        *,
+        limit: int = 100,
+        before: str | None = None,
+        helper_name: str | None = None,
+        timeout: float | None = None,
+    ) -> ControlExec:
+        """Run one Offline Read ``attempts list`` page through a helper.
+
+        The agent call is the pinned ``attempts list --limit 100 [--before
+        <cursor>]`` shape run offline (same view models as the online
+        read); the bound is the contract's ``attempts-list`` policy (15 s).
+        """
+        agentctl_argv = argv_contract_attempts_list(limit=limit, before=before)
+        return await self._run_offline(
+            image,
+            mounts,
+            exec_user,
+            agentctl_argv,
+            "attempts-list",
+            helper_name=helper_name,
+            timeout=timeout,
+        )
+
+    async def offline_attempt_show(
+        self,
+        image: str,
+        mounts: Sequence[OfflineMount],
+        exec_user: str,
+        attempt_id: str,
+        *,
+        helper_name: str | None = None,
+        timeout: float | None = None,
+    ) -> ControlExec:
+        """Run one Offline Read ``attempts show`` header through a helper.
+
+        The agent call is the pinned ``attempts show <attempt-id>`` shape
+        run offline; the bound is the contract's ``attempts-show`` policy
+        (15 s).
+        """
+        agentctl_argv = argv_contract_attempts_show(attempt_id)
+        return await self._run_offline(
+            image,
+            mounts,
+            exec_user,
+            agentctl_argv,
+            "attempts-show",
+            helper_name=helper_name,
+            timeout=timeout,
+        )
+
+    async def offline_attempt_export(
+        self,
+        image: str,
+        mounts: Sequence[OfflineMount],
+        exec_user: str,
+        attempt_id: str,
+        path: str,
+        *,
+        helper_name: str | None = None,
+        timeout: float | None = None,
+    ) -> ControlExec:
+        """Run one Offline Read ``attempts export`` member through a helper.
+
+        The agent call is the pinned ``attempts export <attempt-id> --path
+        <path>`` shape run offline; the bound is the contract's
+        ``attempts-export`` progress policy (30 s).
+        """
+        agentctl_argv = argv_contract_attempts_export(attempt_id, path)
+        return await self._run_offline(
+            image,
+            mounts,
+            exec_user,
+            agentctl_argv,
+            "attempts-export",
+            helper_name=helper_name,
+            timeout=timeout,
+        )
 
     async def contract_attempts_list(
         self,
