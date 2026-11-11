@@ -117,6 +117,17 @@ is killed and reaped. Configure it with `--contract-export-timeout`
 (seconds, must be positive) or `AGENT_DASHBOARD_CONTRACT_EXPORT_TIMEOUT`;
 the flag beats the env var.
 
+Sealed archives are cached on the host under the XDG cache home (`~/.cache`
+fallback, directory mode 0700, file mode 0600), keyed by instance, backend,
+repository and Attempt ID. Re-reading a sealed Attempt — page, preview or
+download — makes no Docker call. Unsealed archives are never cached, a cached
+manifest is never updated, every stored file is verified by sha256 on write
+and on read (a failed read verification drops the entry and fetches again),
+and the total size is bounded with least-recently-used eviction. Configure
+the bound with `--sealed-archive-cache-max-bytes` or
+`AGENT_DASHBOARD_SEALED_ARCHIVE_CACHE_MAX_BYTES` and the location with
+`--sealed-archive-cache-dir` or `AGENT_DASHBOARD_SEALED_ARCHIVE_CACHE_DIR`.
+
 ## Control actions
 
 On a live managed instance, the drawer offers a **Control console** with
