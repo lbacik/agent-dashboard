@@ -1889,7 +1889,7 @@ def create_app(
             filename=entry.path,
             kind=kind,
             media_type=entry.media_type,
-            size_text=f"{len(verified.data)} B",
+            size_text=f"{len(verified_data)} B",
             cap_text=f"{ARTIFACT_PREVIEW_CAP // 1024} KB",
             total_size=entry.size,
             truncated=truncated,

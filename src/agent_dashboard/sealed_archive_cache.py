@@ -201,6 +201,17 @@ class SealedArchiveCache:
         """Delete one entry directory, ignoring errors (a failed read drops it)."""
         shutil.rmtree(self._entry_dir(key), ignore_errors=True)
 
+    def _drop_when_unreadable(self, key: SealedArchiveKey) -> bool:
+        """Drop the entry when ``meta.json`` exists but does not parse.
+
+        Returns True when the entry was dropped. A missing ``meta.json``
+        reads as a clean miss and drops nothing.
+        """
+        if self._meta_path(key).exists() and self._read_meta(key) is None:
+            self._drop_entry(key)
+            return True
+        return False
+
     def _touch(self, key: SealedArchiveKey) -> None:
         """Mark one entry as most recently used (LRU clock)."""
         try:
@@ -224,7 +235,10 @@ class SealedArchiveCache:
             return False
         entry_dir = self._entry_dir(key)
         if self._meta_path(key).exists():
-            return True
+            if self._drop_when_unreadable(key):
+                entry_dir = self._entry_dir(key)
+            else:
+                return True
         self._ensure_dir(entry_dir)
         meta = {
             "version": CACHE_VERSION,
@@ -255,9 +269,11 @@ class SealedArchiveCache:
         the entry as most recently used.
         """
         meta = self._read_meta(key)
-        if meta is None or meta.get("version") != CACHE_VERSION:
-            if meta is not None:
-                self._drop_entry(key)
+        if meta is None:
+            self._drop_when_unreadable(key)
+            return None
+        if meta.get("version") != CACHE_VERSION:
+            self._drop_entry(key)
             return None
         stored_key = meta.get("key")
         if (
@@ -290,9 +306,11 @@ class SealedArchiveCache:
         if not isinstance(path, str) or not path or not isinstance(data, bytes):
             return False
         meta = self._read_meta(key)
-        if meta is None or meta.get("version") != CACHE_VERSION:
-            if meta is not None:
-                self._drop_entry(key)
+        if meta is None:
+            self._drop_when_unreadable(key)
+            return False
+        if meta.get("version") != CACHE_VERSION:
+            self._drop_entry(key)
             return False
         if not _attempt_sealed(meta.get("attempt")) or not _manifest_ok(
             meta.get("manifest")
@@ -339,9 +357,11 @@ class SealedArchiveCache:
         most recently used.
         """
         meta = self._read_meta(key)
-        if meta is None or meta.get("version") != CACHE_VERSION:
-            if meta is not None:
-                self._drop_entry(key)
+        if meta is None:
+            self._drop_when_unreadable(key)
+            return None
+        if meta.get("version") != CACHE_VERSION:
+            self._drop_entry(key)
             return None
         if not _attempt_sealed(meta.get("attempt")) or not _manifest_ok(
             meta.get("manifest")

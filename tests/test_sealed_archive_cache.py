@@ -352,9 +352,12 @@ def test_total_size_is_bounded_with_lru_eviction(tmp_path):
 def test_oversize_single_entry_still_evicts(tmp_path):
     cache = SealedArchiveCache(tmp_path / "cache", max_bytes=100)
     attempt, manifest, data = _sized_entry(1, size=500)
+    # The show alone already exceeds the bound, so it is evicted at once:
+    # the later artifact write refuses and the header reads as a miss.
     assert cache.store_show(_key(), attempt, manifest)
-    assert cache.store_artifact(_key(), "events.jsonl", data)
-    assert cache.total_bytes() <= 100 or cache.load_show(_key()) is None
+    assert cache.store_artifact(_key(), "events.jsonl", data) is False
+    assert cache.load_show(_key()) is None
+    assert cache.total_bytes() <= 100
 
 
 # --- configuration ------------------------------------------------------------------
@@ -523,8 +526,14 @@ def test_attempt_preview_second_hit_makes_no_docker_call(tmp_path):
     asyncio.run(run_cycle(fleet_state, gateway, now=1000.0))
     remember_attempt_ids(INST, [ATTEMPT])
     gateway.set_contract_attempt_show(CID, ATTEMPT, show)
-    gateway.set_contract_attempt_export(CID, ATTEMPT, "events.jsonl", events_tar)
-    gateway.set_contract_attempt_export(CID, ATTEMPT, "note.txt", note_tar)
+    gateway.set_contract_attempt_export(
+        CID, ATTEMPT, "events.jsonl",
+        ControlExec(stdout=events_tar, stderr=b"", returncode=0),
+    )
+    gateway.set_contract_attempt_export(
+        CID, ATTEMPT, "note.txt",
+        ControlExec(stdout=note_tar, stderr=b"", returncode=0),
+    )
     app = create_app(
         state=fleet_state,
         settings=Settings(poll_interval=5.0),
@@ -645,12 +654,14 @@ def test_replay_cached_reads_make_no_docker_call(tmp_path):
     ]
     events_tar = _export_tar([entries[0]], {"events.jsonl": data})
     note_tar = _export_tar([entries[1]], {"note.txt": note})
+    # First round: the page reads show plus the events export; the preview
+    # reuses the cached header (no second show) and fetches only its member;
+    # the download is then fully cached. Each recording answers once.
     fixtures = (
         [documents.load_fixture("status-idle")]
-        + [_replay_show(entries) for _ in range(3)]
+        + [_replay_show(entries)]
         + [
             _replay_export("events.jsonl", events_tar),
-            _replay_export("note.txt", note_tar),
             _replay_export("note.txt", note_tar),
         ]
     )
