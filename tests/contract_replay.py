@@ -22,9 +22,30 @@ class UnexpectedArgvError(AssertionError):
 
 
 def _check_fixture(fixture: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Return the recording, validating its consumer-suite shape first."""
+    """Return the recording, validating its consumer-suite shape first.
+
+    Package recordings keep the full fixture validation; synthetic tar
+    recordings built in-test carry the tar bytes as ``stdout`` and pass a
+    light shape check instead, so artifact tests can replay binary
+    ``attempts export`` streams through this runner.
+    """
     from agent_operator_contract import documents
 
+    if isinstance(fixture.get("stdout"), bytes):
+        keys = set(fixture.keys())
+        if keys != {"argv", "exit_code", "stdout", "stderr"}:
+            raise ValueError(f"invalid synthetic recording: {sorted(keys)!r}")
+        argv = fixture["argv"]
+        if not isinstance(argv, list) or not argv or not all(
+            isinstance(arg, str) for arg in argv
+        ):
+            raise ValueError("invalid synthetic recording: bad argv")
+        if type(fixture["exit_code"]) is not int:
+            raise ValueError("invalid synthetic recording: bad exit_code")
+        stderr = fixture["stderr"]
+        if not isinstance(stderr, (str, bytes)):
+            raise ValueError("invalid synthetic recording: bad stderr")
+        return fixture
     problems = documents.validate_fixture(fixture)
     if problems:
         raise ValueError(f"invalid contract fixture: {problems!r}")
@@ -85,7 +106,8 @@ class ReplayProcessRunner:
 
         The timeout is accepted and ignored: replays answer at once. An argv
         with no ``agentctl`` call or no matching recording raises
-        :class:`UnexpectedArgvError`.
+        :class:`UnexpectedArgvError`. A synthetic recording carries the tar
+        bytes as ``stdout`` and replays them unchanged.
         """
         _ = (timeout, timeout_error)
         self.calls.append(list(argv))
@@ -96,8 +118,12 @@ class ReplayProcessRunner:
                 stdout = recording["stdout"]
                 stderr = recording["stderr"]
                 return ControlExec(
-                    stdout=stdout.encode("utf-8"),
-                    stderr=stderr.encode("utf-8"),
+                    stdout=(
+                        stdout if isinstance(stdout, bytes) else stdout.encode("utf-8")
+                    ),
+                    stderr=(
+                        stderr if isinstance(stderr, bytes) else stderr.encode("utf-8")
+                    ),
                     returncode=recording["exit_code"],
                 )
         raise UnexpectedArgvError(f"no contract recording answers argv: {argv!r}")

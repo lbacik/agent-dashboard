@@ -1,4 +1,5 @@
-"""Contract Attempt page: header, archive events and manifest (contract major 1).
+"""Contract Attempt page: header, archive events, manifest and artifact
+previews/downloads (contract major 1).
 
 One contract Attempt has its own page, reached from the Attempt history
 row and addressed by its opaque Attempt ID (URL-encoded). The header comes
@@ -8,6 +9,15 @@ come from the ``events.jsonl`` member (kind ``events``) of its archive,
 fetched with ``attempts export <attempt-id> --path <path>``; the archive
 manifest is listed by kind with size and media type.
 
+Every manifest entry carries the member's ``sha256``: an export is verified
+(size and ``sha256``) before it is trusted, and a torn read of an unsealed
+archive is fetched once more before the page reports "changing, try
+again". Artifact previews fetch one member with ``attempts export
+--path`` and render it by its ``media_type`` (JSON with a formatted/raw
+toggle, NDJSON as rows, ``text/*`` as text, anything else download only);
+previews stop after 256 KiB and name the manifest's true size, while
+downloads serve the whole verified file.
+
 Tolerance: malformed or unknown replies become a clear message, never an
 exception; unknown fields are ignored; archive event lines that do not
 parse are skipped and counted as unreadable.
@@ -15,6 +25,7 @@ parse are skipped and counted as unreadable.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import tarfile
@@ -110,13 +121,27 @@ def validate_export_path(path: Any) -> str:
 
 @dataclass(frozen=True)
 class ContractManifestEntry:
-    """One archive manifest entry: kind, path, size and media type."""
+    """One archive manifest entry: kind, path, size, media type and sha256."""
 
     kind: str
     path: str
     size: int
     media_type: str
+    sha256: str
     size_text: str
+
+
+#: Preview bound for one artifact member: previews stop reading after this
+#: many bytes and name the manifest's true size (mirrors the legacy
+#: Evidence preview cap).
+ARTIFACT_PREVIEW_CAP = 256 * 1024
+
+#: Shown when two consecutive reads of an unsealed archive both disagree
+#: with the manifest: the archive is still moving, so nothing is final.
+CHANGING_MESSAGE = (
+    "The archive is still changing, try again: "
+    "the artifact did not match its manifest on two reads."
+)
 
 
 @dataclass(frozen=True)
@@ -168,6 +193,7 @@ def _read_manifest_entry(entry: Any) -> ContractManifestEntry | None:
     path = entry.get("path")
     size = entry.get("size")
     media_type = entry.get("media_type")
+    sha256 = entry.get("sha256")
     if (
         not isinstance(kind, str)
         or not isinstance(path, str)
@@ -175,6 +201,9 @@ def _read_manifest_entry(entry: Any) -> ContractManifestEntry | None:
         or isinstance(size, bool)
         or size < 0
         or not isinstance(media_type, str)
+        or not media_type
+        or not isinstance(sha256, str)
+        or not sha256
     ):
         return None
     return ContractManifestEntry(
@@ -182,6 +211,7 @@ def _read_manifest_entry(entry: Any) -> ContractManifestEntry | None:
         path=path,
         size=size,
         media_type=media_type,
+        sha256=sha256,
         size_text=format_manifest_size(size),
     )
 
@@ -526,3 +556,143 @@ def parse_contract_events(data: bytes) -> ContractEventsResult:
     if not events:
         return ContractEventsResult(ok=False, error="Contract events not recognised")
     return ContractEventsResult(ok=True, events=tuple(events), unreadable=unreadable)
+
+
+def artifact_render_kind(media_type: Any) -> str:
+    """Rendering for one artifact member: ``json``, ``ndjson``, ``text`` or ``binary``.
+
+    ``application/json`` gets the formatted/raw toggle, ``application/x-ndjson``
+    renders as rows, ``text/*`` renders as text, and anything else is download
+    only. Never raises: an unknown value reads as ``binary``.
+    """
+    if not isinstance(media_type, str):
+        return "binary"
+    lowered = media_type.strip().lower()
+    if lowered in ("application/json", "application/problem+json"):
+        return "json"
+    if lowered == "application/x-ndjson":
+        return "ndjson"
+    if lowered == "text/plain" or lowered.startswith("text/"):
+        return "text"
+    return "binary"
+
+
+def format_artifact_json(data: bytes, truncated: bool) -> str:
+    """Display text for one ``application/json`` artifact: pretty when possible.
+
+    Formatted means pretty-printed JSON; a truncated member or invalid JSON
+    falls back to the raw text, like the legacy Evidence preview. Never
+    raises on garbage input.
+    """
+    try:
+        text = data.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    if truncated:
+        return text
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return text
+    try:
+        return json.dumps(parsed, indent=2)
+    except (ValueError, TypeError):
+        return text
+
+
+def split_ndjson_rows(data: bytes) -> list[str]:
+    """One row per line of an ``application/x-ndjson`` artifact, as read.
+
+    Never raises: undecodable bytes read with replacement characters.
+    """
+    if not isinstance(data, bytes):
+        return []
+    return data.decode("utf-8", errors="replace").splitlines()
+
+
+def verify_artifact_member(data: bytes, entry: ContractManifestEntry) -> str | None:
+    """Check one exported member against its manifest entry, else describe why.
+
+    Both the size and the ``sha256`` must match: a mismatch is a torn read
+    of an archive that is still moving, never a final answer. Returns
+    ``None`` when the member verifies.
+    """
+    if not isinstance(data, bytes) or len(data) != entry.size:
+        return (
+            f"export file {entry.path!r} does not match its manifest size "
+            f"({len(data) if isinstance(data, bytes) else 'no'} B read, "
+            f"{entry.size} B listed)"
+        )
+    if hashlib.sha256(data).hexdigest() != entry.sha256:
+        return f"export file {entry.path!r} does not match its manifest sha256"
+    return None
+
+
+@dataclass(frozen=True)
+class VerifiedArtifact:
+    """One verified ``attempts export`` member: its bytes or why they wait."""
+
+    ok: bool
+    error: str | None = None
+    changing: bool = False
+    data: bytes | None = None
+
+
+async def fetch_verified_artifact(
+    fetch: Any,
+    entry: ContractManifestEntry,
+    *,
+    sealed: bool,
+    attempt_id: str = "?",
+) -> VerifiedArtifact:
+    """Fetch one member through ``attempts export`` and verify it, with one retry.
+
+    ``fetch`` is awaited for one ``attempts export --path`` exec and returns
+    its stdout and return code; gateway failures propagate to the caller.
+    The member is verified (size and ``sha256``) against its manifest entry.
+    A mismatch on an unsealed archive is fetched once more: a second mismatch
+    reports the archive as still changing (``changing`` is set), never as
+    final. A mismatch on a sealed archive is an error. Never raises except
+    for the gateway failures ``fetch`` itself raises.
+    """
+    wanted = entry.path
+    first = await fetch()
+    export = parse_contract_attempt_export(
+        first.stdout, first.returncode, attempt_id=attempt_id, wanted=wanted
+    )
+    if not export.ok:
+        return VerifiedArtifact(ok=False, error=export.error)
+    assert export.data is not None
+    if verify_artifact_member(export.data, entry) is None:
+        return VerifiedArtifact(ok=True, data=export.data)
+    if sealed:
+        return VerifiedArtifact(
+            ok=False,
+            error=(
+                f"Could not verify the artifact against its manifest sha256: "
+                f"export file {wanted!r} does not match the sealed archive."
+            ),
+        )
+    second = await fetch()
+    retry = parse_contract_attempt_export(
+        second.stdout, second.returncode, attempt_id=attempt_id, wanted=wanted
+    )
+    if not retry.ok:
+        return VerifiedArtifact(ok=False, error=retry.error)
+    assert retry.data is not None
+    if verify_artifact_member(retry.data, entry) is None:
+        return VerifiedArtifact(ok=True, data=retry.data)
+    return VerifiedArtifact(ok=False, changing=True, error=CHANGING_MESSAGE)
+
+
+def slice_artifact_preview(data: bytes) -> tuple[bytes, bool]:
+    """Preview bytes for one verified member: at most the preview cap.
+
+    Previews stop reading after 256 KiB; the caller names the manifest's true
+    size beside the truncation marker.
+    """
+    if not isinstance(data, bytes):
+        return b"", False
+    if len(data) <= ARTIFACT_PREVIEW_CAP:
+        return data, False
+    return data[:ARTIFACT_PREVIEW_CAP], True

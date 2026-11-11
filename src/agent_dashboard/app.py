@@ -77,11 +77,18 @@ from .charts import (
 )
 from .config import Settings
 from .contract_attempt import (
+    ARTIFACT_PREVIEW_CAP,
+    artifact_render_kind,
+    fetch_verified_artifact,
+    format_artifact_json,
     parse_contract_attempt_export,
     parse_contract_attempts_show,
     parse_contract_events,
+    slice_artifact_preview,
+    split_ndjson_rows,
     validate_attempt_id_shape,
     validate_contract_attempt_id,
+    validate_export_path,
 )
 from .contract_history import (
     apply_contract_range,
@@ -273,6 +280,7 @@ def create_app(
             timeout=cfg.exec_timeout,
             log_timeout=cfg.log_exec_timeout,
             control_exec_timeout=cfg.control_exec_timeout,
+            contract_export_timeout=cfg.contract_export_timeout,
         )
 
     @asynccontextmanager
@@ -1573,6 +1581,7 @@ def create_app(
                         show.summary if show is not None and show.ok else None
                     ),
                     "manifest": manifest,
+                    "artifact_urls": contract_artifact_urls,
                     "events_error": events_error,
                     "page_events": page_events,
                     "page_num": page_num,
@@ -1787,6 +1796,293 @@ def create_app(
             refresh_url=page_url(page_num if page_num > 1 else None),
             prev_url=page_url(page_num - 1) if page_num > 1 else None,
             next_url=page_url(page_num + 1) if page_num < pages else None,
+        )
+
+    async def contract_artifact_source(
+        name: str, attempt_id: str, path: str
+    ) -> tuple:
+        """Shared guards, header and manifest lookup for the artifact routes.
+
+        Returns ``(row, show, entry, sealed, message, status)``: ``message``
+        is not None when the route should render it instead of the artifact
+        (a banner in the preview fragment, plain text for the download).
+        ``status`` is 404 for an unknown instance, a legacy instance, an
+        invalid reference, an unknown Attempt or an unlisted path; anything
+        else renders with status 200, never an error. No Docker call runs
+        before the path passes the read allow-list.
+        """
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        row = find_row(rows, name)
+        if row is None:
+            return (
+                None,
+                None,
+                None,
+                False,
+                f"Unknown Managed instance {name!r}: it is unknown or was removed.",
+                404,
+            )
+        if not is_contract_row(row):
+            return (row, None, None, False, LEGACY_ATTEMPT_MESSAGE, 404)
+        if row.state != "running":
+            return (
+                row,
+                None,
+                None,
+                False,
+                f"Attempt {attempt_id!r} is unavailable for this instance: "
+                "it is not running.",
+                200,
+            )
+        if not row.exec_user:
+            return (
+                row,
+                None,
+                None,
+                False,
+                f"Attempt {attempt_id!r} is unavailable for this instance: "
+                "its exec user is missing.",
+                200,
+            )
+        try:
+            validate_attempt_id_shape(attempt_id)
+        except ValueError as exc:
+            return (row, None, None, False, f"Invalid attempt ID: {exc}", 404)
+        try:
+            validate_contract_attempt_id(attempt_id, known_attempt_ids(name))
+        except ValueError:
+            return (
+                row,
+                None,
+                None,
+                False,
+                f"Unknown Attempt {attempt_id!r} for instance {name!r}: "
+                "the instance did not list it. Open the Attempt history first.",
+                404,
+            )
+        try:
+            validate_export_path(path)
+        except ValueError:
+            return (
+                row,
+                None,
+                None,
+                False,
+                f"Unknown artifact {path!r} for attempt {attempt_id!r}: "
+                "the archive manifest does not list it.",
+                404,
+            )
+        try:
+            show_exec = await gw.contract_attempt_show(
+                row.container_id, row.exec_user, attempt_id
+            )
+        except (GatewayError, ValueError) as exc:
+            return (
+                row,
+                None,
+                None,
+                False,
+                f"Could not read the Attempt: {exc}",
+                200,
+            )
+        show = parse_contract_attempts_show(
+            show_exec.stdout, show_exec.returncode, attempt_id=attempt_id
+        )
+        if not show.ok:
+            return (
+                row,
+                None,
+                None,
+                False,
+                show.error,
+                404 if show.not_found else 200,
+            )
+        entry = next((item for item in show.manifest if item.path == path), None)
+        if entry is None:
+            return (
+                row,
+                show,
+                None,
+                False,
+                f"Unknown artifact {path!r} for attempt {attempt_id!r}: "
+                "the archive manifest does not list it.",
+                404,
+            )
+        sealed = show.summary.sealed if show.summary is not None else False
+        return (row, show, entry, sealed, None, 200)
+
+    def contract_artifact_urls(
+        instance: str, attempt_id: str, path: str
+    ) -> tuple[str, str]:
+        """Preview and download URLs for one manifest path (query-addressed)."""
+        base = contract_attempt_url(instance, attempt_id)
+        query = urlencode({"path": path})
+        return f"{base}/artifact?{query}", f"{base}/artifact/download?{query}"
+
+    @app.get(
+        "/instances/{name}/attempt/{attempt_id:path}/artifact",
+        response_class=HTMLResponse,
+    )
+    async def contract_artifact_preview(
+        request: Request, name: str, attempt_id: str
+    ) -> Response:
+        """One artifact preview fragment, rendered inline by its media type.
+
+        The member arrives via ``attempts export <attempt-id> --path
+        <path>`` and is verified (size and ``sha256``) against the archive
+        manifest before anything renders; a torn read of an unsealed archive
+        is fetched once more, then reported as still changing. Previews stop
+        after 256 KiB and name the manifest's true size. ``application/json``
+        renders with a formatted/raw toggle, ``application/x-ndjson`` as
+        rows, ``text/*`` as text, and anything else as download only. All
+        artifact text is untrusted agent output and renders through
+        autoescape only.
+        """
+
+        def fragment(error: str | None, status: int = 200, **extra) -> Response:
+            return templates.TemplateResponse(
+                request,
+                "_contract_artifact.html",
+                {
+                    "request": request,
+                    "name": name,
+                    "attempt_id": attempt_id,
+                    "error": error,
+                    **extra,
+                },
+                status_code=status,
+            )
+
+        path = request.query_params.get("path", "")
+        raw = request.query_params.get("raw") == "1"
+        row, _show, entry, sealed, message, status = (
+            await contract_artifact_source(name, attempt_id, path)
+        )
+        if message is not None:
+            return fragment(message, status)
+        assert row is not None and entry is not None
+        preview_url, download_url = contract_artifact_urls(name, attempt_id, path)
+        kind = artifact_render_kind(entry.media_type)
+        if kind == "binary":
+            return fragment(
+                None,
+                filename=entry.path,
+                kind=kind,
+                media_type=entry.media_type,
+                download_url=download_url,
+            )
+
+        async def _once():
+            return await gw.contract_attempt_export(
+                row.container_id, row.exec_user, attempt_id, entry.path
+            )
+
+        try:
+            verified = await fetch_verified_artifact(
+                _once, entry, sealed=sealed, attempt_id=attempt_id
+            )
+        except (GatewayError, ValueError) as exc:
+            return fragment(f"Could not export the Attempt archive: {exc}")
+        if not verified.ok:
+            return fragment(verified.error)
+        assert verified.data is not None
+        preview_bytes, truncated = slice_artifact_preview(verified.data)
+        if kind == "json":
+            text = (
+                preview_bytes.decode("utf-8", errors="replace")
+                if raw
+                else format_artifact_json(preview_bytes, truncated)
+            )
+            return fragment(
+                None,
+                filename=entry.path,
+                kind=kind,
+                media_type=entry.media_type,
+                size_text=f"{len(verified.data)} B",
+                cap_text=f"{ARTIFACT_PREVIEW_CAP // 1024} KB",
+                total_size=entry.size,
+                truncated=truncated,
+                raw=raw,
+                text=text,
+                raw_url=preview_url + "&raw=1",
+                formatted_url=preview_url,
+                download_url=download_url,
+            )
+        if kind == "ndjson":
+            return fragment(
+                None,
+                filename=entry.path,
+                kind=kind,
+                media_type=entry.media_type,
+                size_text=f"{len(verified.data)} B",
+                cap_text=f"{ARTIFACT_PREVIEW_CAP // 1024} KB",
+                total_size=entry.size,
+                truncated=truncated,
+                rows=split_ndjson_rows(preview_bytes),
+                download_url=download_url,
+            )
+        return fragment(
+            None,
+            filename=entry.path,
+            kind=kind,
+            media_type=entry.media_type,
+            size_text=f"{len(verified.data)} B",
+            cap_text=f"{ARTIFACT_PREVIEW_CAP // 1024} KB",
+            total_size=entry.size,
+            truncated=truncated,
+            text=preview_bytes.decode("utf-8", errors="replace"),
+            download_url=download_url,
+        )
+
+    @app.get("/instances/{name}/attempt/{attempt_id:path}/artifact/download")
+    async def contract_artifact_download(
+        request: Request, name: str, attempt_id: str
+    ) -> Response:
+        """Download one archive member in full, verified, as an attachment.
+
+        The same ``attempts export --path`` read as the inline preview, but
+        uncapped; the bytes are verified (size and ``sha256``) against the
+        archive manifest before they are served, with the same torn-read
+        retry. The file name passes the read allow-list first: a failure
+        returns 404 without any Docker call.
+        """
+        path = request.query_params.get("path", "")
+        row, _show, entry, sealed, message, status = (
+            await contract_artifact_source(name, attempt_id, path)
+        )
+        if message is not None:
+            return PlainTextResponse(message, status_code=status)
+        assert row is not None and entry is not None
+
+        async def _once():
+            return await gw.contract_attempt_export(
+                row.container_id, row.exec_user, attempt_id, entry.path
+            )
+
+        try:
+            verified = await fetch_verified_artifact(
+                _once, entry, sealed=sealed, attempt_id=attempt_id
+            )
+        except (GatewayError, ValueError) as exc:
+            return PlainTextResponse(f"Could not export the Attempt archive: {exc}")
+        if not verified.ok:
+            return PlainTextResponse(verified.error or "Could not read the artifact.")
+        assert verified.data is not None
+        content = verified.data
+        filename = entry.path.rsplit("/", 1)[-1] or entry.path
+
+        def chunks():
+            """Yield the verified file chunk by chunk to the client."""
+            for offset in range(0, len(content), 65536):
+                yield content[offset : offset + 65536]
+
+        return StreamingResponse(
+            chunks(),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     @app.get(

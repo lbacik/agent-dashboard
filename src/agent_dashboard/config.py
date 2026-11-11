@@ -15,6 +15,7 @@ DEFAULT_EXEC_TIMEOUT = 5.0
 DEFAULT_LOG_EXEC_TIMEOUT = 15.0
 DEFAULT_CONTROL_EXEC_TIMEOUT = 15.0
 MIN_CONTROL_EXEC_TIMEOUT = 10.0
+DEFAULT_CONTRACT_EXPORT_TIMEOUT = 30.0
 DEFAULT_MAX_CONCURRENT_EXECS = 4
 DEFAULT_CONTRACT_HISTORY_CAP = 2000
 DEFAULT_SIGN_IN_IDLE_TIMEOUT = 1800.0
@@ -39,6 +40,7 @@ class Settings:
     exec_timeout: float = DEFAULT_EXEC_TIMEOUT
     log_exec_timeout: float = DEFAULT_LOG_EXEC_TIMEOUT
     control_exec_timeout: float = DEFAULT_CONTROL_EXEC_TIMEOUT
+    contract_export_timeout: float = DEFAULT_CONTRACT_EXPORT_TIMEOUT
     max_concurrent_execs: int = DEFAULT_MAX_CONCURRENT_EXECS
     contract_history_cap: int = DEFAULT_CONTRACT_HISTORY_CAP
     allow_non_loopback: bool = False
@@ -204,6 +206,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--contract-export-timeout",
+        type=float,
+        default=None,
+        help=(
+            "Attempt archive export timeout in seconds without progress "
+            "(default 30 s)."
+        ),
+    )
+    parser.add_argument(
         "--max-concurrent-execs", type=int, default=None, help="Max concurrent execs."
     )
     parser.add_argument(
@@ -280,6 +291,11 @@ def load_settings(argv: list[str] | None = None) -> Settings:
         if args.control_exec_timeout is not None
         else float(_env("CONTROL_EXEC_TIMEOUT") or DEFAULT_CONTROL_EXEC_TIMEOUT)
     )
+    contract_export_timeout = (
+        args.contract_export_timeout
+        if args.contract_export_timeout is not None
+        else float(_env("CONTRACT_EXPORT_TIMEOUT") or DEFAULT_CONTRACT_EXPORT_TIMEOUT)
+    )
     max_execs = (
         args.max_concurrent_execs
         if args.max_concurrent_execs is not None
@@ -304,6 +320,10 @@ def load_settings(argv: list[str] | None = None) -> Settings:
         raise ValueError(
             "control exec timeout must be greater than "
             f"{MIN_CONTROL_EXEC_TIMEOUT:g} s: {control_exec_timeout}"
+        )
+    if not contract_export_timeout > 0:
+        raise ValueError(
+            f"contract export timeout must be positive: {contract_export_timeout}"
         )
     if max_execs < 1:
         raise ValueError(f"max concurrent execs must be >= 1: {max_execs}")
@@ -376,6 +396,7 @@ def load_settings(argv: list[str] | None = None) -> Settings:
         exec_timeout=exec_timeout,
         log_exec_timeout=log_exec_timeout,
         control_exec_timeout=control_exec_timeout,
+        contract_export_timeout=contract_export_timeout,
         max_concurrent_execs=max_execs,
         contract_history_cap=contract_history_cap,
         allow_non_loopback=allow_non_loopback,
