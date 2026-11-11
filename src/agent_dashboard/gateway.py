@@ -1900,6 +1900,36 @@ class AsyncSubprocessRunner:
         propagating.
         """
         proc = await _spawn_docker_cli(argv)
+        out_stream = getattr(proc, "stdout", None)
+        err_stream = getattr(proc, "stderr", None)
+        can_stream = callable(getattr(out_stream, "read", None)) or callable(
+            getattr(err_stream, "read", None)
+        )
+        if not can_stream and hasattr(proc, "communicate"):
+            # Test doubles (and any proc without pipe streams) speak only
+            # ``communicate``: bound the whole run, then kill and reap.
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout
+                )
+            except TimeoutError as exc:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await proc.wait()
+                except ProcessLookupError:
+                    pass
+                raise timeout_error from exc
+            except BaseException:
+                await _kill_and_reap(proc)
+                raise
+            return ControlExec(
+                stdout=stdout,
+                stderr=stderr,
+                returncode=proc.returncode,
+            )
         stdout_chunks: list[bytes] = []
         stderr_chunks: list[bytes] = []
 
@@ -1911,10 +1941,10 @@ class AsyncSubprocessRunner:
                 chunks.append(data)
 
         readers = []
-        if proc.stdout is not None:
-            readers.append(asyncio.create_task(_drain(proc.stdout, stdout_chunks)))
-        if proc.stderr is not None:
-            readers.append(asyncio.create_task(_drain(proc.stderr, stderr_chunks)))
+        if out_stream is not None and callable(getattr(out_stream, "read", None)):
+            readers.append(asyncio.create_task(_drain(out_stream, stdout_chunks)))
+        if err_stream is not None and callable(getattr(err_stream, "read", None)):
+            readers.append(asyncio.create_task(_drain(err_stream, stderr_chunks)))
         try:
             loop = asyncio.get_running_loop()
             seen = 0
