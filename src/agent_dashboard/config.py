@@ -18,6 +18,8 @@ MIN_CONTROL_EXEC_TIMEOUT = 10.0
 DEFAULT_CONTRACT_EXPORT_TIMEOUT = 30.0
 DEFAULT_MAX_CONCURRENT_EXECS = 4
 DEFAULT_CONTRACT_HISTORY_CAP = 2000
+#: Default bound for the Sealed Attempt Archive cache (256 MiB).
+DEFAULT_SEALED_ARCHIVE_CACHE_MAX_BYTES = 256 * 1024 * 1024
 DEFAULT_SIGN_IN_IDLE_TIMEOUT = 1800.0
 MIN_SIGN_IN_IDLE_TIMEOUT = 300.0
 DEFAULT_SIGN_IN_MAX_AGE = 43200.0
@@ -43,6 +45,8 @@ class Settings:
     contract_export_timeout: float = DEFAULT_CONTRACT_EXPORT_TIMEOUT
     max_concurrent_execs: int = DEFAULT_MAX_CONCURRENT_EXECS
     contract_history_cap: int = DEFAULT_CONTRACT_HISTORY_CAP
+    sealed_archive_cache_max_bytes: int = DEFAULT_SEALED_ARCHIVE_CACHE_MAX_BYTES
+    sealed_archive_cache_dir: str | None = None
     allow_non_loopback: bool = False
     allowed_hosts: frozenset[str] = field(default_factory=frozenset)
     control: bool = True
@@ -224,6 +228,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max contract Attempts kept for the All range (default 2000).",
     )
     parser.add_argument(
+        "--sealed-archive-cache-max-bytes",
+        type=int,
+        default=None,
+        help=(
+            "Total size bound in bytes for the Sealed Attempt Archive cache "
+            "(default 256 MiB)."
+        ),
+    )
+    parser.add_argument(
+        "--sealed-archive-cache-dir",
+        default=None,
+        help=(
+            "Directory for the Sealed Attempt Archive cache "
+            "(default: $XDG_CACHE_HOME/agent-dashboard/sealed-attempts, "
+            "~/.cache fallback)."
+        ),
+    )
+    parser.add_argument(
         "--allow-non-loopback",
         action="store_true",
         default=False,
@@ -306,6 +328,19 @@ def load_settings(argv: list[str] | None = None) -> Settings:
         if args.contract_history_cap is not None
         else int(_env("CONTRACT_HISTORY_CAP") or DEFAULT_CONTRACT_HISTORY_CAP)
     )
+    sealed_archive_cache_max_bytes = (
+        args.sealed_archive_cache_max_bytes
+        if args.sealed_archive_cache_max_bytes is not None
+        else int(
+            _env("SEALED_ARCHIVE_CACHE_MAX_BYTES")
+            or DEFAULT_SEALED_ARCHIVE_CACHE_MAX_BYTES
+        )
+    )
+    sealed_archive_cache_dir = (
+        args.sealed_archive_cache_dir
+        if args.sealed_archive_cache_dir is not None
+        else _env("SEALED_ARCHIVE_CACHE_DIR")
+    )
 
     poll_interval = max(poll, MIN_POLL_INTERVAL)
     if not 1 <= port <= 65535:
@@ -330,6 +365,14 @@ def load_settings(argv: list[str] | None = None) -> Settings:
     if isinstance(contract_history_cap, bool) or contract_history_cap < 1:
         raise ValueError(
             f"contract history cap must be >= 1: {contract_history_cap}"
+        )
+    if (
+        isinstance(sealed_archive_cache_max_bytes, bool)
+        or sealed_archive_cache_max_bytes < 1
+    ):
+        raise ValueError(
+            "sealed archive cache bound must be >= 1 byte: "
+            f"{sealed_archive_cache_max_bytes}"
         )
 
     control = parse_control(
@@ -399,6 +442,8 @@ def load_settings(argv: list[str] | None = None) -> Settings:
         contract_export_timeout=contract_export_timeout,
         max_concurrent_execs=max_execs,
         contract_history_cap=contract_history_cap,
+        sealed_archive_cache_max_bytes=sealed_archive_cache_max_bytes,
+        sealed_archive_cache_dir=sealed_archive_cache_dir,
         allow_non_loopback=allow_non_loopback,
         allowed_hosts=allowed_hosts,
         control=control,

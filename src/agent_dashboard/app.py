@@ -10,6 +10,7 @@ summaries on load.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -142,6 +143,7 @@ from .range_stats import (
 from .range_stats import (
     PRESETS as RANGE_PRESETS,
 )
+from .sealed_archive_cache import SealedArchiveCache, SealedArchiveKey
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -264,7 +266,15 @@ def create_app(
     start_poller: bool = True,
     clock=None,
     password_hasher=None,
+    sealed_archive_cache: SealedArchiveCache | None = None,
 ) -> FastAPI:
+    """Build the dashboard app.
+
+    ``sealed_archive_cache`` is the host-side Sealed Attempt Archive cache;
+    ``None`` disables it (tests). Production passes one built from
+    ``Settings`` (see ``cli.main``), so Attempt pages, previews and
+    downloads of a cached Sealed Attempt make no Docker call.
+    """
     fleet = state if state is not None else FleetState()
     cfg = settings if settings is not None else Settings()
     lan_mode = bool(getattr(cfg, "lan_mode", False))
@@ -371,6 +381,78 @@ def create_app(
         "Unavailable for legacy instances: this instance reports "
         "Attempt logs, not contract Attempt archives."
     )
+
+    def sealed_cache_key(row, attempt_id: str) -> SealedArchiveKey | None:
+        """Cache key for one contract Attempt, or None when the cache is off.
+
+        Entries are keyed by (instance name, backend, repository, Attempt
+        ID); the backend prefers the discovery label with the snapshot
+        identity as fallback, and the repository comes from the snapshot.
+        """
+        if sealed_archive_cache is None:
+            return None
+        contract = getattr(row, "contract", None)
+        backend = (
+            getattr(row, "backend", None)
+            or getattr(contract, "backend", None)
+            or ""
+        )
+        repository = getattr(contract, "repository", None) or ""
+        return SealedArchiveKey(
+            instance=row.name,
+            backend=backend,
+            repository=repository,
+            attempt_id=attempt_id,
+        )
+
+    def cached_attempt_show(key: SealedArchiveKey, attempt_id: str):
+        """One cached show, parsed through the same validators as live.
+
+        A corrupt, foreign or unsealed entry reads as a miss (the cache
+        drops it); anything else re-parses exactly like an ``attempts show``
+        reply, so an outcome without ``sealed`` is never treated as final.
+        """
+        assert sealed_archive_cache is not None
+        raw = sealed_archive_cache.load_show(key)
+        if raw is None:
+            return None
+        attempt_dict, manifest_list = raw
+        try:
+            text = json.dumps(
+                {
+                    "contract": "1.0",
+                    "ok": True,
+                    "result": {"attempt": attempt_dict, "manifest": manifest_list},
+                }
+            )
+        except (ValueError, TypeError):
+            return None
+        show = parse_contract_attempts_show(
+            text.encode("utf-8"), 0, attempt_id=attempt_id
+        )
+        return show if show.ok else None
+
+    def raw_show_result(stdout: bytes) -> tuple[dict, list] | None:
+        """Raw ``(attempt, manifest)`` behind one ``attempts show`` reply.
+
+        The parsed view models lose the raw JSON shape the cache stores, so
+        the envelope is read once more here; anything unrecognised reads as
+        None and simply skips the cache write.
+        """
+        try:
+            envelope = json.loads(stdout.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return None
+        if not isinstance(envelope, dict):
+            return None
+        result = envelope.get("result")
+        if not isinstance(result, dict):
+            return None
+        attempt = result.get("attempt")
+        manifest = result.get("manifest")
+        if not isinstance(attempt, dict) or not isinstance(manifest, list):
+            return None
+        return attempt, manifest
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> Response:
@@ -1530,13 +1612,16 @@ def create_app(
     ) -> tuple:
         """Shared guards, header and manifest lookup for the artifact routes.
 
-        Returns ``(row, show, entry, sealed, message, status)``: ``message``
-        is not None when the route should render it instead of the artifact
-        (a banner in the preview fragment, plain text for the download).
-        ``status`` is 404 for an unknown instance, a legacy instance, an
-        invalid reference, an unknown Attempt or an unlisted path; anything
-        else renders with status 200, never an error. No Docker call runs
-        before the path passes the read allow-list.
+        Returns ``(row, show, entry, sealed, message, status, cached_data)``:
+        ``message`` is not None when the route should render it instead of
+        the artifact (a banner in the preview fragment, plain text for the
+        download). ``status`` is 404 for an unknown instance, a legacy
+        instance, an invalid reference, an unknown Attempt or an unlisted
+        path; anything else renders with status 200, never an error.
+        ``cached_data`` carries the verified artifact bytes when the Sealed
+        Attempt Archive cache already holds them (no Docker call ran), else
+        None. No Docker call runs before the path passes the read
+        allow-list.
         """
         rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
         row = find_row(rows, name)
@@ -1548,9 +1633,10 @@ def create_app(
                 False,
                 f"Unknown Managed instance {name!r}: it is unknown or was removed.",
                 404,
+                None,
             )
         if not is_contract_row(row):
-            return (row, None, None, False, LEGACY_ATTEMPT_MESSAGE, 404)
+            return (row, None, None, False, LEGACY_ATTEMPT_MESSAGE, 404, None)
         if row.state != "running":
             return (
                 row,
@@ -1560,6 +1646,7 @@ def create_app(
                 f"Attempt {attempt_id!r} is unavailable for this instance: "
                 "it is not running.",
                 200,
+                None,
             )
         if not row.exec_user:
             return (
@@ -1570,11 +1657,12 @@ def create_app(
                 f"Attempt {attempt_id!r} is unavailable for this instance: "
                 "its exec user is missing.",
                 200,
+                None,
             )
         try:
             validate_attempt_id_shape(attempt_id)
         except ValueError as exc:
-            return (row, None, None, False, f"Invalid attempt ID: {exc}", 404)
+            return (row, None, None, False, f"Invalid attempt ID: {exc}", 404, None)
         try:
             validate_contract_attempt_id(attempt_id, known_attempt_ids(name))
         except ValueError:
@@ -1586,6 +1674,7 @@ def create_app(
                 f"Unknown Attempt {attempt_id!r} for instance {name!r}: "
                 "the instance did not list it. Open the Attempt history first.",
                 404,
+                None,
             )
         try:
             validate_export_path(path)
@@ -1598,7 +1687,37 @@ def create_app(
                 f"Unknown artifact {path!r} for attempt {attempt_id!r}: "
                 "the archive manifest does not list it.",
                 404,
+                None,
             )
+        key = sealed_cache_key(row, attempt_id)
+        if key is not None:
+            assert sealed_archive_cache is not None
+            hit = cached_attempt_show(key, attempt_id)
+            if hit is not None:
+                cached_entry = next(
+                    (item for item in hit.manifest if item.path == path), None
+                )
+                if cached_entry is None:
+                    return (
+                        row,
+                        hit,
+                        None,
+                        False,
+                        f"Unknown artifact {path!r} for attempt {attempt_id!r}: "
+                        "the archive manifest does not list it.",
+                        404,
+                        None,
+                    )
+                blob = sealed_archive_cache.load_artifact(key, path)
+                if blob is not None:
+                    return (row, hit, cached_entry, True, None, 200, blob)
+                if sealed_archive_cache.load_show(key) is not None:
+                    # Header cached but this member not fetched yet: serve
+                    # the header without a show call; the export below
+                    # stores the new member.
+                    return (row, hit, cached_entry, True, None, 200, None)
+                # A failed read verification dropped the entry: fall through
+                # and fetch again below.
         try:
             show_exec = await gw.contract_attempt_show(
                 row.container_id, row.exec_user, attempt_id
@@ -1611,6 +1730,7 @@ def create_app(
                 False,
                 f"Could not read the Attempt: {exc}",
                 200,
+                None,
             )
         show = parse_contract_attempts_show(
             show_exec.stdout, show_exec.returncode, attempt_id=attempt_id
@@ -1623,6 +1743,7 @@ def create_app(
                 False,
                 show.error,
                 404 if show.not_found else 200,
+                None,
             )
         entry = next((item for item in show.manifest if item.path == path), None)
         if entry is None:
@@ -1634,9 +1755,15 @@ def create_app(
                 f"Unknown artifact {path!r} for attempt {attempt_id!r}: "
                 "the archive manifest does not list it.",
                 404,
+                None,
             )
         sealed = show.summary.sealed if show.summary is not None else False
-        return (row, show, entry, sealed, None, 200)
+        if key is not None and sealed:
+            assert sealed_archive_cache is not None
+            raw = raw_show_result(show_exec.stdout)
+            if raw is not None:
+                sealed_archive_cache.store_show(key, raw[0], raw[1])
+        return (row, show, entry, sealed, None, 200, None)
 
     def contract_artifact_urls(
         instance: str, attempt_id: str, path: str
@@ -1682,7 +1809,7 @@ def create_app(
 
         path = request.query_params.get("path", "")
         raw = request.query_params.get("raw") == "1"
-        row, _show, entry, sealed, message, status = (
+        row, _show, entry, sealed, message, status, cached_data = (
             await contract_artifact_source(name, attempt_id, path)
         )
         if message is not None:
@@ -1699,21 +1826,30 @@ def create_app(
                 download_url=download_url,
             )
 
-        async def _once():
-            return await gw.contract_attempt_export(
-                row.container_id, row.exec_user, attempt_id, entry.path
-            )
+        if cached_data is not None:
+            verified_data = cached_data
+        else:
 
-        try:
-            verified = await fetch_verified_artifact(
-                _once, entry, sealed=sealed, attempt_id=attempt_id
-            )
-        except (GatewayError, ValueError) as exc:
-            return fragment(f"Could not export the Attempt archive: {exc}")
-        if not verified.ok:
-            return fragment(verified.error)
-        assert verified.data is not None
-        preview_bytes, truncated = slice_artifact_preview(verified.data)
+            async def _once():
+                return await gw.contract_attempt_export(
+                    row.container_id, row.exec_user, attempt_id, entry.path
+                )
+
+            try:
+                verified = await fetch_verified_artifact(
+                    _once, entry, sealed=sealed, attempt_id=attempt_id
+                )
+            except (GatewayError, ValueError) as exc:
+                return fragment(f"Could not export the Attempt archive: {exc}")
+            if not verified.ok:
+                return fragment(verified.error)
+            assert verified.data is not None
+            verified_data = verified.data
+            if sealed_archive_cache is not None and sealed:
+                key = sealed_cache_key(row, attempt_id)
+                if key is not None:
+                    sealed_archive_cache.store_artifact(key, entry.path, verified_data)
+        preview_bytes, truncated = slice_artifact_preview(verified_data)
         if kind == "json":
             text = (
                 preview_bytes.decode("utf-8", errors="replace")
@@ -1725,7 +1861,7 @@ def create_app(
                 filename=entry.path,
                 kind=kind,
                 media_type=entry.media_type,
-                size_text=f"{len(verified.data)} B",
+                size_text=f"{len(verified_data)} B",
                 cap_text=f"{ARTIFACT_PREVIEW_CAP // 1024} KB",
                 total_size=entry.size,
                 truncated=truncated,
@@ -1741,7 +1877,7 @@ def create_app(
                 filename=entry.path,
                 kind=kind,
                 media_type=entry.media_type,
-                size_text=f"{len(verified.data)} B",
+                size_text=f"{len(verified_data)} B",
                 cap_text=f"{ARTIFACT_PREVIEW_CAP // 1024} KB",
                 total_size=entry.size,
                 truncated=truncated,
@@ -1774,28 +1910,40 @@ def create_app(
         returns 404 without any Docker call.
         """
         path = request.query_params.get("path", "")
-        row, _show, entry, sealed, message, status = (
+        row, _show, entry, sealed, message, status, cached_data = (
             await contract_artifact_source(name, attempt_id, path)
         )
         if message is not None:
             return PlainTextResponse(message, status_code=status)
         assert row is not None and entry is not None
 
-        async def _once():
-            return await gw.contract_attempt_export(
-                row.container_id, row.exec_user, attempt_id, entry.path
-            )
+        if cached_data is not None:
+            content = cached_data
+        else:
 
-        try:
-            verified = await fetch_verified_artifact(
-                _once, entry, sealed=sealed, attempt_id=attempt_id
-            )
-        except (GatewayError, ValueError) as exc:
-            return PlainTextResponse(f"Could not export the Attempt archive: {exc}")
-        if not verified.ok:
-            return PlainTextResponse(verified.error or "Could not read the artifact.")
-        assert verified.data is not None
-        content = verified.data
+            async def _once():
+                return await gw.contract_attempt_export(
+                    row.container_id, row.exec_user, attempt_id, entry.path
+                )
+
+            try:
+                verified = await fetch_verified_artifact(
+                    _once, entry, sealed=sealed, attempt_id=attempt_id
+                )
+            except (GatewayError, ValueError) as exc:
+                return PlainTextResponse(
+                    f"Could not export the Attempt archive: {exc}"
+                )
+            if not verified.ok:
+                return PlainTextResponse(
+                    verified.error or "Could not read the artifact."
+                )
+            assert verified.data is not None
+            content = verified.data
+            if sealed_archive_cache is not None and sealed:
+                key = sealed_cache_key(row, attempt_id)
+                if key is not None:
+                    sealed_archive_cache.store_artifact(key, entry.path, content)
         filename = entry.path.rsplit("/", 1)[-1] or entry.path
 
         def chunks():
@@ -1960,30 +2108,83 @@ def create_app(
                 reset_url=base,
                 refresh_url=base,
             )
-        try:
-            show_exec = await gw.contract_attempt_show(
-                row.container_id, row.exec_user, attempt_id
+        key = sealed_cache_key(row, attempt_id)
+        show = None
+        cached_events: bytes | None = None
+        if key is not None:
+            assert sealed_archive_cache is not None
+            show = cached_attempt_show(key, attempt_id)
+        if show is None:
+            try:
+                show_exec = await gw.contract_attempt_show(
+                    row.container_id, row.exec_user, attempt_id
+                )
+            except (GatewayError, ValueError) as exc:
+                return page(
+                    row,
+                    f"Could not read the Attempt: {exc}",
+                    attempt_url=base,
+                    reset_url=base,
+                    refresh_url=base,
+                )
+            show = parse_contract_attempts_show(
+                show_exec.stdout, show_exec.returncode, attempt_id=attempt_id
             )
-        except (GatewayError, ValueError) as exc:
-            return page(
-                row,
-                f"Could not read the Attempt: {exc}",
-                attempt_url=base,
-                reset_url=base,
-                refresh_url=base,
+            if not show.ok:
+                return page(
+                    row,
+                    show.error,
+                    status=404 if show.not_found else 200,
+                    attempt_url=base,
+                    reset_url=base,
+                    refresh_url=base,
+                )
+            if key is not None and show.summary is not None and show.summary.sealed:
+                assert sealed_archive_cache is not None
+                raw = raw_show_result(show_exec.stdout)
+                if raw is not None:
+                    sealed_archive_cache.store_show(key, raw[0], raw[1])
+        else:
+            assert sealed_archive_cache is not None and key is not None
+            cached_entry = next(
+                (entry for entry in show.manifest if entry.kind == "events"), None
             )
-        show = parse_contract_attempts_show(
-            show_exec.stdout, show_exec.returncode, attempt_id=attempt_id
-        )
-        if not show.ok:
-            return page(
-                row,
-                show.error,
-                status=404 if show.not_found else 200,
-                attempt_url=base,
-                reset_url=base,
-                refresh_url=base,
+            assert cached_entry is not None
+            cached_events = sealed_archive_cache.load_artifact(key, cached_entry.path)
+            if cached_events is None and sealed_archive_cache.load_show(key) is None:
+                # A failed read verification dropped the entry: fall back to
+                # a live read below.
+                show = None
+        if show is None:
+            try:
+                show_exec = await gw.contract_attempt_show(
+                    row.container_id, row.exec_user, attempt_id
+                )
+            except (GatewayError, ValueError) as exc:
+                return page(
+                    row,
+                    f"Could not read the Attempt: {exc}",
+                    attempt_url=base,
+                    reset_url=base,
+                    refresh_url=base,
+                )
+            show = parse_contract_attempts_show(
+                show_exec.stdout, show_exec.returncode, attempt_id=attempt_id
             )
+            if not show.ok:
+                return page(
+                    row,
+                    show.error,
+                    status=404 if show.not_found else 200,
+                    attempt_url=base,
+                    reset_url=base,
+                    refresh_url=base,
+                )
+            if key is not None and show.summary is not None and show.summary.sealed:
+                assert sealed_archive_cache is not None
+                raw = raw_show_result(show_exec.stdout)
+                if raw is not None:
+                    sealed_archive_cache.store_show(key, raw[0], raw[1])
         events_entry = next(
             (entry for entry in show.manifest if entry.kind == "events"), None
         )
@@ -1991,29 +2192,46 @@ def create_app(
         events_error: str | None = None
         events: tuple = ()
         unreadable = 0
-        try:
-            export_exec = await gw.contract_attempt_export(
-                row.container_id, row.exec_user, attempt_id, events_entry.path
-            )
-        except (GatewayError, ValueError) as exc:
-            events_error = f"Could not export the Attempt archive: {exc}"
-        else:
-            export = parse_contract_attempt_export(
-                export_exec.stdout,
-                export_exec.returncode,
-                attempt_id=attempt_id,
-                wanted=events_entry.path,
-            )
-            if not export.ok:
-                events_error = export.error
+        if cached_events is not None:
+            parsed = parse_contract_events(cached_events)
+            if not parsed.ok:
+                events_error = parsed.error
             else:
-                assert export.data is not None
-                parsed = parse_contract_events(export.data)
-                if not parsed.ok:
-                    events_error = parsed.error
+                events = parsed.events
+                unreadable = parsed.unreadable
+        else:
+            try:
+                export_exec = await gw.contract_attempt_export(
+                    row.container_id, row.exec_user, attempt_id, events_entry.path
+                )
+            except (GatewayError, ValueError) as exc:
+                events_error = f"Could not export the Attempt archive: {exc}"
+            else:
+                export = parse_contract_attempt_export(
+                    export_exec.stdout,
+                    export_exec.returncode,
+                    attempt_id=attempt_id,
+                    wanted=events_entry.path,
+                )
+                if not export.ok:
+                    events_error = export.error
                 else:
-                    events = parsed.events
-                    unreadable = parsed.unreadable
+                    assert export.data is not None
+                    parsed = parse_contract_events(export.data)
+                    if not parsed.ok:
+                        events_error = parsed.error
+                    else:
+                        events = parsed.events
+                        unreadable = parsed.unreadable
+                        if (
+                            key is not None
+                            and show.summary is not None
+                            and show.summary.sealed
+                        ):
+                            assert sealed_archive_cache is not None
+                            sealed_archive_cache.store_artifact(
+                                key, events_entry.path, export.data
+                            )
         if events_error is not None:
             return page(
                 row,

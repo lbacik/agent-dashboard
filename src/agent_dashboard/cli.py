@@ -83,8 +83,14 @@ def main(argv: list[str] | None = None) -> None:
         print(MIGRATION_LINE)
 
     try:
-        app = create_app(settings=settings)
-    except StoreError as exc:
+        from .sealed_archive_cache import SealedArchiveCache
+
+        sealed_cache = SealedArchiveCache(
+            directory=settings.sealed_archive_cache_dir,
+            max_bytes=settings.sealed_archive_cache_max_bytes,
+        )
+        app = create_app(settings=settings, sealed_archive_cache=sealed_cache)
+    except (StoreError, ValueError) as exc:
         _startup_fail(exc)
     uvicorn.run(
         app,
