@@ -99,8 +99,6 @@
       {% if c is not none and c.intake_observed is not none %}<div><dt>Intake observed</dt><dd>{{ c.intake_observed.age_text }}{% if c.intake_observed.stale %} <span class="stale-tag">stale</span>{% endif %}</dd></div>{% endif %}
     </dl>
     {% if c is not none and c.truncated %}<p class="hint">Truncated snapshot: older entries were trimmed.</p>{% endif %}
-    <p class="hint">Attempt statistics and history are unavailable for contract instances.</p>
-    <p class="hint">Control console is unavailable for contract instances.</p>
     </div>
   </section>
   <section class="drawer-section vc-module">
@@ -202,6 +200,7 @@
     {% endif %}
     </div>
   </section>
+  {% if row.state == "running" %}
   <section class="drawer-section ctl vc-module" id="control-console-{{ ctl_slug }}" hx-preserve>
     <h3 class="vc-module-bar">06 // Control console</h3>
     <div class="vc-module-body">
@@ -214,6 +213,7 @@
     </div>
     </div>
   </section>
+  {% endif %}
   </div>
   </div>
   <div class="vc-cockpit-col" data-col="history">

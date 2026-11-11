@@ -383,7 +383,7 @@ def test_no_control_console_on_a_stopped_contract_instance():
     assert "control-console-" not in drawer.text
     fragment = client.get("/instances/web-1/control")
     assert fragment.status_code == 200
-    assert "unavailable for contract instances" in fragment.text
+    assert "not running" in fragment.text
 
 
 def test_outcome_kinds_stay_exported():

@@ -114,7 +114,6 @@ from .range_stats import (
     COOKIE_MAX_AGE,
     COOKIE_NAME,
     FLEET_COOKIE_NAME,
-    RangeSpec,
     apply_range,
     day_strip,
     parse_cookie,
@@ -713,8 +712,10 @@ def create_app(
         if is_contract_row(row):
             # Contract instances page the online ``attempts list``
             # (newest first) through the shared contract history reader:
-            # outcome charts group by ``outcome.label`` (display only) and
-            # every Attempt counts as missing cost data, never zero.
+            # paging stops at the first Attempt starting before the
+            # selected range; outcome charts group by ``outcome.label``
+            # (display only) and every Attempt counts as missing cost
+            # data, never zero.
             now_ts = time.time()
             if row.state != "running":
                 ctx["error"] = (
@@ -732,7 +733,7 @@ def create_app(
                 gw,
                 row.container_id,
                 row.exec_user,
-                RangeSpec(preset="all"),
+                spec,
                 now=now_ts,
                 cap=cfg.contract_history_cap,
                 instance_name=name,

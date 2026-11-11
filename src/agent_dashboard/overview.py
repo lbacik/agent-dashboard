@@ -401,6 +401,12 @@ CONTRACT_STOPPED_MESSAGE = (
     "Attempt list is unavailable for this instance: it is not running."
 )
 
+#: Contract rows without an exec user cannot run an exec either, but the
+#: misconfiguration reads differently from a stopped instance.
+CONTRACT_NO_EXEC_USER_MESSAGE = (
+    "Attempt list is unavailable for this instance: its exec user is missing."
+)
+
 
 async def read_full_history(
     row: FleetRow,
@@ -408,6 +414,7 @@ async def read_full_history(
     *,
     now: float,
     contract_cap: int = HISTORY_CAP_DEFAULT,
+    spec: RangeSpec | None = None,
 ) -> HistoryResult | ContractHistoryResult | str:
     """Every attempt summary of one instance (window ``all``), or why not.
 
@@ -417,22 +424,24 @@ async def read_full_history(
     wraps the calls, so a slow read can never cancel the gateway mid-exec
     and orphan a ``docker`` child. Any failure comes back as a display
     message, never an exception. Contract-path rows page the online
-    ``attempts list`` (window ``all``, so paging stops at ``contract_cap``);
-    stopped contract instances cannot run an exec and read as error rows.
-    Every Attempt ID from a contract listing is remembered per instance as
-    an addressable ID for the Attempt page.
+    ``attempts list`` newest-first through the shared contract history
+    reader: paging stops at the first Attempt starting before ``spec``
+    (``all`` pages to ``contract_cap``); stopped contract instances cannot
+    run an exec and read as error rows. Every Attempt ID from a contract
+    listing is remembered per instance as an addressable ID for the
+    Attempt page.
     """
     if getattr(row, "path", "legacy") == "contract":
         if row.state != "running":
             return CONTRACT_STOPPED_MESSAGE
         if not getattr(row, "exec_user", None):
-            return CONTRACT_STOPPED_MESSAGE
+            return CONTRACT_NO_EXEC_USER_MESSAGE
         try:
             result = await collect_contract_history(
                 gateway,
                 row.container_id,
                 row.exec_user,
-                RangeSpec(preset="all"),
+                spec if spec is not None else RangeSpec(preset="all"),
                 now=now,
                 cap=contract_cap,
                 instance_name=row.name,
@@ -481,7 +490,9 @@ async def _read_one(
         "window": "all",
     }
     async with semaphore:
-        full = await read_full_history(row, gateway, now=now, contract_cap=contract_cap)
+        full = await read_full_history(
+            row, gateway, now=now, contract_cap=contract_cap, spec=spec
+        )
     if isinstance(full, str):
         return error_instance(error=full, **base), None, None
     if isinstance(full, ContractHistoryResult):
