@@ -58,6 +58,9 @@ def make_run_tree(entries: dict[str, bytes]) -> bytes:
 
 class FakeGateway:
     def __init__(self, rows=None, error=None):
+        self._contract_export_queues: dict[
+            tuple[str, str, str], list[ControlExec | Exception]
+        ] = {}
         self._rows = list(rows or [])
         self._error = error
         self._inspects: dict[str, OfflineInspect | Exception] = {}
@@ -596,6 +599,24 @@ class FakeGateway:
         """Script one ``attempts export`` tar reply for a contract Attempt."""
         self._contract_export[(container_id, attempt_id, path)] = scripted
 
+    def set_contract_attempt_exports(
+        self,
+        container_id: str,
+        attempt_id: str,
+        path: str,
+        scripted: list[ControlExec | Exception],
+    ) -> None:
+        """Script consecutive ``attempts export`` tar replies, in order.
+
+        Each call for the key consumes the next reply, so torn-read tests
+        can script a bad tar followed by a good one. When the queue runs
+        out, the single reply from :meth:`set_contract_attempt_export`
+        answers instead.
+        """
+        self._contract_export_queues[(container_id, attempt_id, path)] = list(
+            scripted
+        )
+
     async def contract_attempt_show(
         self,
         container_id: str,
@@ -632,6 +653,12 @@ class FakeGateway:
         argv = argv_contract_exec(container_id, agentctl_argv, exec_user=exec_user)
         self.contract_argvs.append(argv)
         self.contract_export_calls.append((container_id, exec_user, attempt_id, path))
+        queue = self._contract_export_queues.get((container_id, attempt_id, path))
+        if queue:
+            scripted = queue.pop(0)
+            if isinstance(scripted, Exception):
+                raise scripted
+            return scripted
         scripted = self._contract_export.get((container_id, attempt_id, path))
         if scripted is None:
             return ControlExec(stdout=b"", stderr=b"", returncode=1)

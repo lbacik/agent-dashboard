@@ -78,6 +78,45 @@ agent release can move or rename these files and break the view until the
 dashboard follows; an unrecognised layout renders "layout not recognised",
 never an error.
 
+## Contract Attempt page
+
+Contract instances (agentctl contract major 1) get their own Attempt page,
+reached from the contract Attempt history row and addressed by the opaque
+Attempt ID (`/instances/{name}/attempt/{attempt-id}`, URL-encoded, e.g.
+`%2341%2F1`). The header comes from `attempts show <attempt-id>` (sealed
+state included, marked "still changing" while unsealed); the Contract Events
+come from the `events.jsonl` member (kind `events`) of the Attempt archive,
+fetched with `attempts export <attempt-id> --path <path>` and server-paged
+at 200 rows with the shared level/event/text filters. The archive manifest
+is listed by kind with size and media type, and every row links its inline
+preview and download. ("Artifact" is the contract-domain word for one archive
+member, matching the agent API and the issue language; the legacy log layout
+instead calls these Evidence files.)
+
+Artifact previews fetch one archive member with `attempts export --path`,
+stop after 256 KiB with a visible truncation marker and the manifest's true
+size, and render by the manifest `media_type`:
+
+| `media_type` | Rendering |
+| --- | --- |
+| `application/json` (and `application/problem+json`) | formatted JSON with a raw toggle |
+| `application/x-ndjson` | rows |
+| `text/*` | text |
+| anything else | download only (no export runs) |
+
+Downloads read the whole member and serve it as an attachment. Every
+exported member is verified (size and `sha256`) against the manifest before
+it renders: a mismatch on an unsealed archive is re-fetched once, then
+reported as "changing, try again"; on a sealed archive it is an error.
+Artifact names pass the read allow-list in the route layer, so traversal
+names are rejected before any Docker call. In LAN mode, viewers can preview
+and download artifacts, the same access they have to legacy Evidence files.
+
+The export bound is 30 s without progress: an export that stalls that long
+is killed and reaped. Configure it with `--contract-export-timeout`
+(seconds, must be positive) or `AGENT_DASHBOARD_CONTRACT_EXPORT_TIMEOUT`;
+the flag beats the env var.
+
 ## Control actions
 
 On a live managed instance, the drawer offers a **Control console** with

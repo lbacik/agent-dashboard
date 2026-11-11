@@ -31,19 +31,25 @@
 <h3>Archive manifest</h3>
 <table class="fleet history">
   <thead>
-    <tr><th>Kind</th><th>Path</th><th>Size</th><th>Media type</th></tr>
+    <tr><th>Kind</th><th>Path</th><th>Size</th><th>Media type</th><th>Preview</th><th>Download</th></tr>
   </thead>
   <tbody>
     {% for entry in manifest %}
+    {% set preview_url, download_url = artifact_urls(name, attempt_id, entry.path) %}
     <tr>
       <td>{{ entry.kind }}</td>
       <td>{{ entry.path }}</td>
       <td>{{ entry.size_text }}</td>
       <td>{{ entry.media_type }}</td>
+      <td><a href="{{ preview_url }}" hx-get="{{ preview_url }}" hx-target="#artifact-preview" hx-swap="innerHTML">Preview</a></td>
+      <td><a href="{{ download_url }}">download</a></td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+<div id="artifact-preview">
+  <p class="hint">Choose Preview on a manifest row to inspect an artifact inline, rendered by its media type and verified against its manifest sha256.</p>
+</div>
 {% if events_error %}
 <div class="banner" role="alert">{{ events_error }}</div>
 {% else %}

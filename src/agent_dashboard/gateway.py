@@ -27,7 +27,7 @@ import secrets
 import tarfile
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from agent_operator_contract import CONTRACT_MAJOR
 from agent_operator_contract import client as contract_client
@@ -1874,9 +1874,11 @@ class ProcessRunner(Protocol):
     ) -> ControlExec:
         """Run ``argv`` to completion and report stdout, stderr and exit code.
 
-        Raises ``timeout_error`` (after killing and reaping the child) when
-        the run outlives ``timeout``, and :class:`DockerNotAvailableError`
-        when Docker never started. Exit codes are reported, never raised.
+        ``timeout`` bounds the run without progress: bytes on either stream
+        restart the deadline. Raises ``timeout_error`` (after killing and
+        reaping the child) when the run outlives ``timeout`` without
+        progress, and :class:`DockerNotAvailableError` when Docker never
+        started. Exit codes are reported, never raised.
         """
         ...  # pragma: no cover - the protocol is never run directly
 
@@ -1889,25 +1891,93 @@ class AsyncSubprocessRunner:
     ) -> ControlExec:
         """Spawn the Docker CLI and report its stdout, stderr and exit code.
 
-        A lapsed bound kills and reaps the child, then raises
-        ``timeout_error``; a missing Docker CLI raises
-        :class:`DockerNotAvailableError`. Anything else (including
-        cancellation) reaps a still-running child before propagating.
+        The bound is a progress bound: every stdout or stderr chunk restarts
+        the deadline, so a slow producer that keeps streaming is never
+        killed, while a stalled one trips the bound. A lapsed bound kills
+        and reaps the child, then raises ``timeout_error``; a missing Docker
+        CLI raises :class:`DockerNotAvailableError`. Anything else
+        (including cancellation) reaps a still-running child before
+        propagating.
         """
         proc = await _spawn_docker_cli(argv)
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
-        except TimeoutError as exc:
+        out_stream = getattr(proc, "stdout", None)
+        err_stream = getattr(proc, "stderr", None)
+        can_stream = callable(getattr(out_stream, "read", None)) or callable(
+            getattr(err_stream, "read", None)
+        )
+        if not can_stream and hasattr(proc, "communicate"):
+            # Test doubles (and any proc without pipe streams) speak only
+            # ``communicate``: bound the whole run, then kill and reap.
             try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            await proc.wait()
-            raise timeout_error from exc
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout
+                )
+            except TimeoutError as exc:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await proc.wait()
+                except ProcessLookupError:
+                    pass
+                raise timeout_error from exc
+            except BaseException:
+                await _kill_and_reap(proc)
+                raise
+            return ControlExec(
+                stdout=stdout,
+                stderr=stderr,
+                returncode=proc.returncode,
+            )
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+
+        async def _drain(stream: Any, chunks: list[bytes]) -> None:
+            while True:
+                data = await stream.read(65536)
+                if not data:
+                    return
+                chunks.append(data)
+
+        readers = []
+        if out_stream is not None and callable(getattr(out_stream, "read", None)):
+            readers.append(asyncio.create_task(_drain(out_stream, stdout_chunks)))
+        if err_stream is not None and callable(getattr(err_stream, "read", None)):
+            readers.append(asyncio.create_task(_drain(err_stream, stderr_chunks)))
+        try:
+            loop = asyncio.get_running_loop()
+            seen = 0
+            deadline = loop.time() + timeout
+            pending = set(readers)
+            while pending:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise timeout_error
+                _done, pending = await asyncio.wait(pending, timeout=remaining)
+                total = len(stdout_chunks) + len(stderr_chunks)
+                if total != seen:
+                    seen = total
+                    deadline = loop.time() + timeout
+            try:
+                await asyncio.wait_for(proc.wait(), timeout)
+            except TimeoutError as exc:
+                raise timeout_error from exc
         except BaseException:
+            for task in readers:
+                task.cancel()
             await _kill_and_reap(proc)
+            for task in readers:
+                try:
+                    await task
+                except BaseException:
+                    pass
             raise
-        return ControlExec(stdout=stdout, stderr=stderr, returncode=proc.returncode)
+        return ControlExec(
+            stdout=b"".join(stdout_chunks),
+            stderr=b"".join(stderr_chunks),
+            returncode=proc.returncode,
+        )
 
 
 class DockerGateway:
@@ -1934,6 +2004,7 @@ class DockerGateway:
         log_timeout: float = LOG_EXEC_TIMEOUT,
         control_exec_timeout: float = DEFAULT_CONTROL_EXEC_TIMEOUT,
         process_runner: ProcessRunner | None = None,
+        contract_export_timeout: float | None = None,
     ) -> None:
         if timeout <= 0:
             raise ValueError(f"timeout must be positive: {timeout}")
@@ -1946,9 +2017,14 @@ class DockerGateway:
                 "control exec timeout must be greater than "
                 f"{MIN_CONTROL_EXEC_TIMEOUT:g} s: {control_exec_timeout}"
             )
+        if contract_export_timeout is not None and not contract_export_timeout > 0:
+            raise ValueError(
+                f"contract export timeout must be positive: {contract_export_timeout}"
+            )
         self.timeout = timeout
         self.log_timeout = log_timeout
         self.control_exec_timeout = control_exec_timeout
+        self.contract_export_timeout = contract_export_timeout
         self._log_semaphore = asyncio.Semaphore(LOG_MAX_CONCURRENT)
         self._control_in_flight: set[str] = set()
         self._process_runner = (
@@ -2216,18 +2292,21 @@ class DockerGateway:
         The argv is pinned here from validated values (contract section 3.1,
         no TTY, no stdin); the bound is the contract's ``attempts-export``
         progress policy (30 s without bytes) unless ``timeout`` overrides it
-        with a positive number of seconds. The exit code is reported, never
-        raised: the archive reader discards the output when a non-zero exit
-        follows streaming output. A bad container ID, exec user, Attempt ID
-        or path raises :class:`ValueError` before anything is spawned.
+        with a positive number of seconds, falling back to the gateway's
+        configured export timeout. A lapsed bound kills and reaps the
+        client. The exit code is reported, never raised: the archive reader
+        discards the output when a non-zero exit follows streaming output.
+        A bad container ID, exec user, Attempt ID or path raises
+        :class:`ValueError` before anything is spawned.
         """
         agentctl_argv = argv_contract_attempts_export(attempt_id, path)
+        override = timeout if timeout is not None else self.contract_export_timeout
         return await self.contract_exec(
             container_id,
             agentctl_argv,
             exec_user=exec_user,
             operation="attempts-export",
-            timeout=timeout,
+            timeout=override,
         )
 
     def _claim_control(self, container_id: str) -> None:

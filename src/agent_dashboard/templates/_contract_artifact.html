@@ -1,0 +1,52 @@
+{% if error %}
+<p class="banner" role="alert">{{ error }}</p>
+{% elif kind == "binary" %}
+<div class="evidence-preview">
+  <div class="evidence-bar">
+    <span class="evidence-size">{{ filename }} · {{ media_type }}</span>
+    <a href="{{ download_url }}">download</a>
+  </div>
+  <p class="hint">No inline preview for {{ media_type }}: download the file to inspect it.</p>
+</div>
+{% elif kind == "ndjson" %}
+<div class="evidence-preview">
+  <div class="evidence-bar">
+    <span class="evidence-size">{{ size_text }}</span>
+    <a href="{{ download_url }}">download</a>
+  </div>
+  {% if truncated %}
+  <p class="evidence-truncated" role="note"><strong>truncated at {{ cap_text }}, {{ total_size }} B total</strong></p>
+  {% endif %}
+  <table class="fleet history">
+    <thead>
+      <tr><th>#</th><th>Row</th></tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td><pre class="evidence-content">{{ row }}</pre></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="evidence-preview">
+  <div class="evidence-bar">
+    <span class="evidence-size">{{ size_text }}</span>
+    <a href="{{ download_url }}">download</a>
+    {% if kind == "json" %}
+    {% if raw %}
+    <a href="{{ formatted_url }}" hx-get="{{ formatted_url }}" hx-target="closest .evidence-preview" hx-swap="outerHTML">formatted</a>
+    {% else %}
+    <a href="{{ raw_url }}" hx-get="{{ raw_url }}" hx-target="closest .evidence-preview" hx-swap="outerHTML">raw</a>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% if truncated %}
+  <p class="evidence-truncated" role="note"><strong>truncated at {{ cap_text }}, {{ total_size }} B total</strong></p>
+  {% endif %}
+  <pre class="evidence-content">{{ text }}</pre>
+</div>
+{% endif %}
