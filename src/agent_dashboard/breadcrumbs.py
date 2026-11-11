@@ -64,3 +64,17 @@ def attempt_progress_trail(
         Breadcrumb(label=f"#{issue} · {started_at}", url=attempt_url),
         Breadcrumb(label="Progress"),
     )
+
+
+def contract_attempt_trail(instance: str, attempt_id: str) -> tuple[Breadcrumb, ...]:
+    """Breadcrumb trail for the contract Attempt page.
+
+    ``Fleet › <instance> › <attempt_id>``: Fleet links home, the instance
+    links to its Attempt history, and the opaque Attempt ID is plain
+    current-page text.
+    """
+    return (
+        Breadcrumb(label="Fleet", url="/"),
+        Breadcrumb(label=instance, url=_history_url(instance)),
+        Breadcrumb(label=str(attempt_id)),
+    )

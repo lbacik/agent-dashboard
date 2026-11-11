@@ -28,6 +28,8 @@ from agent_dashboard.gateway import (
     TelemetryExec,
     TelemetryTimeoutError,
     argv_command_status,
+    argv_contract_attempts_export,
+    argv_contract_attempts_show,
     argv_contract_command,
     argv_contract_exec,
     argv_contract_mutation,
@@ -73,6 +75,14 @@ class FakeGateway:
         self.contract_attempts_calls: list[
             tuple[str, str, int, str | None]
         ] = []
+        self._contract_show: dict[
+            tuple[str, str], ControlExec | Exception
+        ] = {}
+        self._contract_export: dict[
+            tuple[str, str, str], ControlExec | Exception
+        ] = {}
+        self.contract_show_calls: list[tuple[str, str, str]] = []
+        self.contract_export_calls: list[tuple[str, str, str, str]] = []
         self._histories: dict[str, TelemetryExec | Exception] = {}
         self._events: dict[str, TelemetryExec | Exception] = {}
         self._logs: dict[str, TelemetryExec | Exception] = {}
@@ -569,6 +579,65 @@ class FakeGateway:
         return TelemetryExec(
             stdout=json.dumps(scripted).encode(), returncode=0
         )
+
+    def set_contract_attempt_show(
+        self, container_id: str, attempt_id: str, scripted: ControlExec | Exception
+    ) -> None:
+        """Script one ``attempts show`` header reply for a contract Attempt."""
+        self._contract_show[(container_id, attempt_id)] = scripted
+
+    def set_contract_attempt_export(
+        self,
+        container_id: str,
+        attempt_id: str,
+        path: str,
+        scripted: ControlExec | Exception,
+    ) -> None:
+        """Script one ``attempts export`` tar reply for a contract Attempt."""
+        self._contract_export[(container_id, attempt_id, path)] = scripted
+
+    async def contract_attempt_show(
+        self,
+        container_id: str,
+        exec_user: str,
+        attempt_id: str,
+        *,
+        timeout: float | None = None,
+    ) -> ControlExec:
+        """One scripted ``attempts show`` header, validated like the real one."""
+        _ = timeout
+        agentctl_argv = argv_contract_attempts_show(attempt_id)
+        argv = argv_contract_exec(container_id, agentctl_argv, exec_user=exec_user)
+        self.contract_argvs.append(argv)
+        self.contract_show_calls.append((container_id, exec_user, attempt_id))
+        scripted = self._contract_show.get((container_id, attempt_id))
+        if scripted is None:
+            return ControlExec(stdout=b"", stderr=b"", returncode=1)
+        if isinstance(scripted, Exception):
+            raise scripted
+        return scripted
+
+    async def contract_attempt_export(
+        self,
+        container_id: str,
+        exec_user: str,
+        attempt_id: str,
+        path: str,
+        *,
+        timeout: float | None = None,
+    ) -> ControlExec:
+        """One scripted ``attempts export`` tar, validated like the real one."""
+        _ = timeout
+        agentctl_argv = argv_contract_attempts_export(attempt_id, path)
+        argv = argv_contract_exec(container_id, agentctl_argv, exec_user=exec_user)
+        self.contract_argvs.append(argv)
+        self.contract_export_calls.append((container_id, exec_user, attempt_id, path))
+        scripted = self._contract_export.get((container_id, attempt_id, path))
+        if scripted is None:
+            return ControlExec(stdout=b"", stderr=b"", returncode=1)
+        if isinstance(scripted, Exception):
+            raise scripted
+        return scripted
 
     async def attempt_history(self, container_id: str) -> TelemetryExec:
         """One scripted history exec; unscripted IDs report an empty log."""

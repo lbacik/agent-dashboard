@@ -21,7 +21,9 @@ from agent_dashboard.gateway import (
     argv_attempt_log,
     argv_attempt_tail_log,
     argv_command_status,
+    argv_contract_attempts_export,
     argv_contract_attempts_list,
+    argv_contract_attempts_show,
     argv_contract_exec,
     argv_control,
     argv_copy_logs,
@@ -111,6 +113,10 @@ def test_every_argv_producer_is_pinned():
         ),
         "argv_contract_exec": argv_contract_exec("abc123", ["status"]),
         "argv_contract_attempts_list": argv_contract_attempts_list(100, None),
+        "argv_contract_attempts_show": argv_contract_attempts_show("plain-1"),
+        "argv_contract_attempts_export": argv_contract_attempts_export(
+            "plain-1", "events.jsonl"
+        ),
         "argv_read_file": argv_read_file(
             "abc123", 98, "2026-09-27T16:33:43.385090Z", "0003_tool_call.json"
         ),
@@ -137,6 +143,8 @@ def test_every_argv_producer_is_pinned():
         "argv_command_status",
         "argv_contract_exec",
         "argv_contract_attempts_list",
+        "argv_contract_attempts_show",
+        "argv_contract_attempts_export",
         "argv_attempt_history",
         "argv_attempt_events",
         "argv_attempt_log",
@@ -155,13 +163,31 @@ def test_every_argv_producer_is_pinned():
         "--limit",
         "100",
     ]
+    assert producers["argv_contract_attempts_show"] == [
+        "attempts",
+        "show",
+        "plain-1",
+    ]
+    assert producers["argv_contract_attempts_export"] == [
+        "attempts",
+        "export",
+        "plain-1",
+        "--path",
+        "events.jsonl",
+    ]
     for name, argv in producers.items():
         assert isinstance(argv, list)
         assert all(isinstance(part, str) for part in argv)
-        if name == "argv_contract_attempts_list":
+        if name in (
+            "argv_contract_attempts_list",
+            "argv_contract_attempts_show",
+            "argv_contract_attempts_export",
+        ):
             # Agentctl-level argv: the gateway wraps it in the pinned
             # ``docker exec`` via ``argv_contract_exec`` (see the
-            # ``contract_attempts_list`` tests in test_contract_history).
+            # ``contract_attempts_list`` tests in test_contract_history
+            # and the ``attempts show``/``export`` tests in
+            # test_contract_attempt).
             continue
         assert argv[0] == "docker"
 

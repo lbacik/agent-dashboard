@@ -1040,6 +1040,37 @@ def argv_contract_attempts_list(
     return argv
 
 
+def argv_contract_attempts_show(attempt_id: str) -> list[str]:
+    """Agentctl argv for one ``attempts show`` header (without ``--contract``).
+
+    ``attempt_id`` is the opaque Attempt ID the instance listed: a
+    non-empty string within the length bound, with no leading ``-`` and
+    no control characters. Anything else raises :class:`ValueError` before
+    any argv exists, so the gateway only ever sends the pinned
+    ``attempts show <attempt-id>`` shape.
+    """
+    from .contract_attempt import validate_attempt_id_shape
+
+    validate_attempt_id_shape(attempt_id)
+    return ["attempts", "show", attempt_id]
+
+
+def argv_contract_attempts_export(attempt_id: str, path: str) -> list[str]:
+    """Agentctl argv for one ``attempts export`` member (without ``--contract``).
+
+    ``attempt_id`` follows the same shape rule as
+    :func:`argv_contract_attempts_show`; ``path`` is the relative archive
+    member (no leading ``/``, no ``..`` segment). Anything else raises
+    :class:`ValueError` before any argv exists, so the gateway only ever
+    sends the pinned ``attempts export <attempt-id> --path <path>`` shape.
+    """
+    from .contract_attempt import validate_attempt_id_shape, validate_export_path
+
+    validate_attempt_id_shape(attempt_id)
+    validate_export_path(path)
+    return ["attempts", "export", attempt_id, "--path", path]
+
+
 def argv_attempt_history(container_id: str) -> list[str]:
     """Argv for one Attempt log history exec: every attempt summary at once.
 
@@ -2141,6 +2172,61 @@ class DockerGateway:
             agentctl_argv,
             exec_user=exec_user,
             operation="attempts-list",
+            timeout=timeout,
+        )
+
+    async def contract_attempt_show(
+        self,
+        container_id: str,
+        exec_user: str,
+        attempt_id: str,
+        *,
+        timeout: float | None = None,
+    ) -> ControlExec:
+        """Run one ``attempts show <attempt-id>`` header read.
+
+        The argv is pinned here from validated values (contract section 3.1,
+        no TTY, no stdin); the bound is the contract's ``attempts-show``
+        policy (15 s) unless ``timeout`` overrides it with a positive number
+        of seconds. The exit code is reported, never raised: the Attempt
+        reader classifies each reply into a header or a clear message. A
+        bad container ID, exec user or Attempt ID raises :class:`ValueError`
+        before anything is spawned.
+        """
+        agentctl_argv = argv_contract_attempts_show(attempt_id)
+        return await self.contract_exec(
+            container_id,
+            agentctl_argv,
+            exec_user=exec_user,
+            operation="attempts-show",
+            timeout=timeout,
+        )
+
+    async def contract_attempt_export(
+        self,
+        container_id: str,
+        exec_user: str,
+        attempt_id: str,
+        path: str,
+        *,
+        timeout: float | None = None,
+    ) -> ControlExec:
+        """Run one ``attempts export <attempt-id> --path <path>`` tar read.
+
+        The argv is pinned here from validated values (contract section 3.1,
+        no TTY, no stdin); the bound is the contract's ``attempts-export``
+        progress policy (30 s without bytes) unless ``timeout`` overrides it
+        with a positive number of seconds. The exit code is reported, never
+        raised: the archive reader discards the output when a non-zero exit
+        follows streaming output. A bad container ID, exec user, Attempt ID
+        or path raises :class:`ValueError` before anything is spawned.
+        """
+        agentctl_argv = argv_contract_attempts_export(attempt_id, path)
+        return await self.contract_exec(
+            container_id,
+            agentctl_argv,
+            exec_user=exec_user,
+            operation="attempts-export",
             timeout=timeout,
         )
 

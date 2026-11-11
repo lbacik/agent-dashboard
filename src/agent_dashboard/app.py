@@ -49,7 +49,12 @@ from .auth import (
     register_auth_routes,
     resolve_session,
 )
-from .breadcrumbs import attempt_progress_trail, attempt_trail, history_trail
+from .breadcrumbs import (
+    attempt_progress_trail,
+    attempt_trail,
+    contract_attempt_trail,
+    history_trail,
+)
 from .charts import (
     CACHE_READ_SHARE_DEFINITION,
     OUTCOME_LABELS,
@@ -71,12 +76,20 @@ from .charts import (
     undated_count,
 )
 from .config import Settings
+from .contract_attempt import (
+    parse_contract_attempt_export,
+    parse_contract_attempts_show,
+    parse_contract_events,
+    validate_attempt_id_shape,
+    validate_contract_attempt_id,
+)
 from .contract_history import (
     apply_contract_range,
     collect_contract_history,
     contract_day_strip,
     contract_legend,
     counts_by_label,
+    known_attempt_ids,
 )
 from .control import compute_control_mode, control_slug
 from .control_routes import register_control_routes
@@ -345,6 +358,12 @@ def create_app(
         "a contract Status Snapshot, not Attempt logs."
     )
 
+    #: Message for the contract Attempt page on a legacy-path row.
+    LEGACY_ATTEMPT_MESSAGE = (
+        "Unavailable for legacy instances: this instance reports "
+        "Attempt logs, not contract Attempt archives."
+    )
+
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> Response:
         """Fleet table plus the instance drawer.
@@ -505,6 +524,13 @@ def create_app(
             f"/instances/{quote(name, safe='')}"
             f"/attempts/{quote(str(number), safe='')}"
             f"/{quote(dash, safe='')}"
+        )
+
+    def contract_attempt_url(instance: str, attempt_id: str) -> str:
+        """The contract Attempt page URL: the opaque ID, URL-encoded."""
+        return (
+            f"/instances/{quote(instance, safe='')}"
+            f"/attempt/{quote(attempt_id, safe='')}"
         )
 
     @app.get("/instances/{name}/activity", response_class=HTMLResponse)
@@ -844,6 +870,7 @@ def create_app(
                     "result": result,
                     "error": error,
                     "breadcrumbs": history_trail(name),
+                    "contract_attempt_url": contract_attempt_url,
                     **extra,
                 },
             )
@@ -1090,7 +1117,12 @@ def create_app(
         """
 
         def progress_page(
-            row, error: str | None, result=None, series=None, **extra
+            row,
+            error: str | None,
+            result=None,
+            series=None,
+            status: int = 200,
+            **extra,
         ) -> Response:
             if result is not None and result.started_at:
                 label_issue: int | str = result.issue
@@ -1128,6 +1160,7 @@ def create_app(
                     ),
                     **extra,
                 },
+                status_code=status,
             )
 
         rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
@@ -1138,7 +1171,7 @@ def create_app(
                 f"Unknown Managed instance {name!r}: it is unknown or was removed.",
             )
         if is_contract_row(row):
-            return progress_page(row, CONTRACT_WIDGET_MESSAGE)
+            return progress_page(row, CONTRACT_WIDGET_MESSAGE, status=404)
         try:
             number, dash_started = validate_attempt_ref(issue, started)
         except ValueError as exc:
@@ -1259,6 +1292,7 @@ def create_app(
             next_url: str | None = None,
             pair_files: dict | None = None,
             command_logs: tuple[str, ...] = (),
+            status: int = 200,
         ) -> Response:
             if result is not None:
                 label_issue: int | str = result.issue
@@ -1300,6 +1334,7 @@ def create_app(
                     "next_url": next_url,
                     "pair_files": pair_files or {},
                 },
+                status_code=status,
             )
 
         def attempt_base_url(dash: str) -> str:
@@ -1331,6 +1366,7 @@ def create_app(
                 attempt_url=base_url,
                 reset_url=base_url,
                 refresh_url=base_url,
+                status=404,
             )
         try:
             number, dash = validate_attempt_ref(issue, started)
@@ -1479,6 +1515,280 @@ def create_app(
             command_logs=command_logs,
         )
 
+    @app.get("/instances/{name}/attempt/{attempt_id:path}", response_class=HTMLResponse)
+    async def contract_attempt_page(
+        request: Request, name: str, attempt_id: str
+    ) -> Response:
+        """Contract Attempt page: header, archive events and manifest.
+
+        Static with manual refresh (no stream subscription): the header and
+        manifest come from ``attempts show <attempt-id>`` while the
+        Attempt's Contract Events come from the ``events.jsonl`` member
+        (kind ``events``) of its archive, fetched with ``attempts export
+        <attempt-id> --path <path>``. An unknown instance, a legacy
+        instance, an invalid reference and an unknown Attempt each render
+        a clear message with status 404; a gateway failure, a malformed
+        reply and an unreadable archive render a clear message with status
+        200, never an error. The event stream is server-paged at 200 rows
+        with the shared level, event and text filters.
+        """
+
+        def page(
+            row,
+            error: str | None,
+            *,
+            status: int = 200,
+            show=None,
+            manifest=(),
+            events_error: str | None = None,
+            page_events=(),
+            page_num: int = 1,
+            pages: int = 1,
+            level_value: str = "",
+            event_value: str = "",
+            q_value: str = "",
+            event_name_options: tuple = (),
+            level_option_values: tuple = (),
+            filtered_total: int = 0,
+            total_events: int = 0,
+            unreadable: int = 0,
+            has_filters: bool = False,
+            attempt_url: str = "",
+            reset_url: str = "",
+            refresh_url: str = "",
+            prev_url: str | None = None,
+            next_url: str | None = None,
+        ) -> Response:
+            return templates.TemplateResponse(
+                request,
+                "contract_attempt.html",
+                {
+                    **context(request),
+                    "row": row,
+                    "name": name,
+                    "attempt_id": attempt_id,
+                    "error": error,
+                    "show": show,
+                    "summary": (
+                        show.summary if show is not None and show.ok else None
+                    ),
+                    "manifest": manifest,
+                    "events_error": events_error,
+                    "page_events": page_events,
+                    "page_num": page_num,
+                    "pages": pages,
+                    "level_value": level_value,
+                    "event_value": event_value,
+                    "q_value": q_value,
+                    "event_name_options": event_name_options,
+                    "level_option_values": level_option_values,
+                    "filtered_total": filtered_total,
+                    "total_events": total_events,
+                    "unreadable": unreadable,
+                    "has_filters": has_filters,
+                    "attempt_url": attempt_url,
+                    "reset_url": reset_url,
+                    "refresh_url": refresh_url,
+                    "prev_url": prev_url,
+                    "next_url": next_url,
+                    "breadcrumbs": contract_attempt_trail(name, attempt_id),
+                },
+                status_code=status,
+            )
+
+        def base_url() -> str:
+            """The filter-free Attempt URL: filters live in the query."""
+            return contract_attempt_url(name, attempt_id)
+
+        rows, _ = await fleet.snapshot(poll_interval=cfg.poll_interval)
+        row = find_row(rows, name)
+        base = base_url()
+        if row is None:
+            return page(
+                None,
+                f"Unknown Managed instance {name!r}: it is unknown or was removed.",
+                status=404,
+                attempt_url=base,
+                reset_url=base,
+                refresh_url=base,
+            )
+        if not is_contract_row(row):
+            return page(
+                row,
+                LEGACY_ATTEMPT_MESSAGE,
+                status=404,
+                attempt_url=base,
+                reset_url=base,
+                refresh_url=base,
+            )
+        if row.state != "running":
+            return page(
+                row,
+                f"Attempt {attempt_id!r} is unavailable for this instance: "
+                "it is not running.",
+                attempt_url=base,
+                reset_url=base,
+                refresh_url=base,
+            )
+        if not row.exec_user:
+            return page(
+                row,
+                f"Attempt {attempt_id!r} is unavailable for this instance: "
+                "its exec user is missing.",
+                attempt_url=base,
+                reset_url=base,
+                refresh_url=base,
+            )
+        try:
+            validate_attempt_id_shape(attempt_id)
+        except ValueError as exc:
+            return page(
+                row,
+                f"Invalid attempt ID: {exc}",
+                status=404,
+                attempt_url=base,
+                reset_url=base,
+                refresh_url=base,
+            )
+        try:
+            validate_contract_attempt_id(attempt_id, known_attempt_ids(name))
+        except ValueError:
+            return page(
+                row,
+                f"Unknown Attempt {attempt_id!r} for instance {name!r}: "
+                "the instance did not list it. Open the Attempt history first.",
+                status=404,
+                attempt_url=base,
+                reset_url=base,
+                refresh_url=base,
+            )
+        try:
+            show_exec = await gw.contract_attempt_show(
+                row.container_id, row.exec_user, attempt_id
+            )
+        except (GatewayError, ValueError) as exc:
+            return page(
+                row,
+                f"Could not read the Attempt: {exc}",
+                attempt_url=base,
+                reset_url=base,
+                refresh_url=base,
+            )
+        show = parse_contract_attempts_show(
+            show_exec.stdout, show_exec.returncode, attempt_id=attempt_id
+        )
+        if not show.ok:
+            return page(
+                row,
+                show.error,
+                status=404 if show.not_found else 200,
+                attempt_url=base,
+                reset_url=base,
+                refresh_url=base,
+            )
+        events_entry = next(
+            (entry for entry in show.manifest if entry.kind == "events"), None
+        )
+        assert events_entry is not None
+        events_error: str | None = None
+        events: tuple = ()
+        unreadable = 0
+        try:
+            export_exec = await gw.contract_attempt_export(
+                row.container_id, row.exec_user, attempt_id, events_entry.path
+            )
+        except (GatewayError, ValueError) as exc:
+            events_error = f"Could not export the Attempt archive: {exc}"
+        else:
+            export = parse_contract_attempt_export(
+                export_exec.stdout,
+                export_exec.returncode,
+                attempt_id=attempt_id,
+                wanted=events_entry.path,
+            )
+            if not export.ok:
+                events_error = export.error
+            else:
+                assert export.data is not None
+                parsed = parse_contract_events(export.data)
+                if not parsed.ok:
+                    events_error = parsed.error
+                else:
+                    events = parsed.events
+                    unreadable = parsed.unreadable
+        if events_error is not None:
+            return page(
+                row,
+                None,
+                show=show,
+                manifest=show.manifest,
+                events_error=events_error,
+                total_events=len(events),
+                unreadable=unreadable,
+                attempt_url=base,
+                reset_url=base,
+                refresh_url=base,
+            )
+        params = request.query_params
+        raw_level = params.get("level", "")
+        raw_event = params.get("event", "")
+        raw_q = params.get("q", "")
+        # A stripped ``all`` reads as no filtering, so the selects' "All"
+        # option and a hand-typed ``?level=all`` agree.
+        level_value = raw_level.strip()
+        event_value = raw_event.strip()
+        q_value = raw_q.strip()
+        if level_value.lower() == "all":
+            level_value = ""
+        if event_value.lower() == "all":
+            event_value = ""
+        names = event_names(events)
+        levels = level_options(events)
+        filtered = filter_events(
+            events, level=level_value, event=event_value, q=q_value
+        )
+        page_events, page_num, pages = paginate(
+            filtered, params.get("page", "1")
+        )
+
+        def page_url(number: int | None) -> str:
+            """One paging/refresh link: the active filters plus one page."""
+            query: dict[str, str] = {}
+            if level_value:
+                query["level"] = level_value
+            if event_value:
+                query["event"] = event_value
+            if q_value:
+                query["q"] = q_value
+            if number is not None:
+                query["page"] = str(number)
+            text = urlencode(query)
+            return base if not text else f"{base}?{text}"
+
+        return page(
+            row,
+            None,
+            show=show,
+            manifest=show.manifest,
+            page_events=page_events,
+            page_num=page_num,
+            pages=pages,
+            level_value=level_value,
+            event_value=event_value,
+            q_value=q_value,
+            event_name_options=names,
+            level_option_values=levels,
+            filtered_total=len(filtered),
+            total_events=len(events),
+            unreadable=unreadable,
+            has_filters=bool(level_value or event_value or q_value),
+            attempt_url=base,
+            reset_url=base,
+            refresh_url=page_url(page_num if page_num > 1 else None),
+            prev_url=page_url(page_num - 1) if page_num > 1 else None,
+            next_url=page_url(page_num + 1) if page_num < pages else None,
+        )
+
     @app.get(
         "/instances/{name}/attempts/{issue}/{started}/files/{file}",
         response_class=HTMLResponse,
@@ -1536,7 +1846,7 @@ def create_app(
                 f"Unknown Managed instance {name!r}: it is unknown or was removed."
             )
         if is_contract_row(row):
-            return fragment(CONTRACT_WIDGET_MESSAGE)
+            return fragment(CONTRACT_WIDGET_MESSAGE, status=404)
         # Evidence files arrive via ``docker cp``, which works on stopped
         # containers too, so no running-instance guard is needed here.
         try:
@@ -1598,7 +1908,7 @@ def create_app(
                 f"Unknown Managed instance {name!r}: it is unknown or was removed."
             )
         if is_contract_row(row):
-            return PlainTextResponse(CONTRACT_WIDGET_MESSAGE)
+            return PlainTextResponse(CONTRACT_WIDGET_MESSAGE, status_code=404)
         # Evidence files arrive via ``docker cp``, which works on stopped
         # containers too, so no running-instance guard is needed here.
         try:
