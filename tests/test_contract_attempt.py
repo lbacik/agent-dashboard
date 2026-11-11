@@ -611,11 +611,12 @@ def make_attempt_client(
     remember: bool = True,
 ) -> tuple[TestClient, FakeGateway]:
     """A client with one contract instance and scripted show/export replies."""
+    container_id = "abc123"
     fleet_state = FleetState()
     rows = [
         ManagedInstance(
             instance,
-            f"abc{instance}",
+            container_id,
             state,
             path=CONTRACT_PATH,
             instance=instance,
@@ -623,18 +624,18 @@ def make_attempt_client(
         )
     ]
     gateway = FakeGateway(rows)
-    gateway.set_contract_snapshot(f"abc{instance}", _status_result())
+    gateway.set_contract_snapshot(container_id, _status_result())
     asyncio.run(run_cycle(fleet_state, gateway, now=1000.0))
     if remember:
         remember_attempt_ids(instance, [attempt_id])
     if show is not None:
         if isinstance(show, Exception):
-            gateway.set_contract_attempt_show(f"abc{instance}", attempt_id, show)
+            gateway.set_contract_attempt_show(container_id, attempt_id, show)
         else:
-            gateway.set_contract_attempt_show(f"abc{instance}", attempt_id, show)
+            gateway.set_contract_attempt_show(container_id, attempt_id, show)
     if export is not None:
         gateway.set_contract_attempt_export(
-            f"abc{instance}", attempt_id, "events.jsonl", export
+            container_id, attempt_id, "events.jsonl", export
         )
     app = create_app(
         state=fleet_state,
@@ -666,7 +667,7 @@ def test_history_row_links_to_the_attempt_page():
         "ok": True,
         "result": {"attempts": [_summary("#41/1")], "next_cursor": None},
     }
-    gateway.set_contract_attempts("abcweb-1", {None: payload})
+    gateway.set_contract_attempts("abc123", {None: payload})
     body = client.get("/instances/web-1/history?preset=all").text
     assert "/instances/web-1/attempt/%2341%2F1" in body
 
@@ -694,9 +695,9 @@ def test_attempt_page_shows_header_events_and_manifest():
     assert 'name="q"' in body
     assert "page 1/1, 3 events" in body
     # The pinned argv ran once per operation.
-    assert gateway.contract_show_calls == [("abcweb-1", "agent", "#41/1")]
+    assert gateway.contract_show_calls == [("abc123", "agent", "#41/1")]
     assert gateway.contract_export_calls == [
-        ("abcweb-1", "agent", "#41/1", "events.jsonl")
+        ("abc123", "agent", "#41/1", "events.jsonl")
     ]
     assert gateway.contract_argvs == [
         [
@@ -704,7 +705,7 @@ def test_attempt_page_shows_header_events_and_manifest():
             "exec",
             "--user",
             "agent",
-            "abcweb-1",
+            "abc123",
             AGENTCTL_PATH,
             "--contract",
             "1",
@@ -717,7 +718,7 @@ def test_attempt_page_shows_header_events_and_manifest():
             "exec",
             "--user",
             "agent",
-            "abcweb-1",
+            "abc123",
             AGENTCTL_PATH,
             "--contract",
             "1",
@@ -789,10 +790,11 @@ def test_attempt_page_filters_and_paging():
     assert "row 1" not in client.get(
         "/instances/web-1/attempt/%2341%2F1?level=warning"
     ).text
-    assert "sealed" in client.get(
+    assert "<td>sealed</td>" in client.get(
         "/instances/web-1/attempt/%2341%2F1?event=sealed"
     ).text
-    assert "claim_opened" not in client.get(
+    # The filter select still lists every observed name; only rows narrow.
+    assert "<td>claim_opened</td>" not in client.get(
         "/instances/web-1/attempt/%2341%2F1?event=sealed"
     ).text
     assert "row 3" in client.get("/instances/web-1/attempt/%2341%2F1?q=row+3").text
@@ -806,22 +808,22 @@ def test_attempt_page_reached_from_history_lists_then_shows():
     fleet_state = FleetState()
     rows = [
         ManagedInstance(
-            "web-1", "abcweb-1", "running", path=CONTRACT_PATH,
+            "web-1", "abc123", "running", path=CONTRACT_PATH,
             instance="web-1", exec_user="agent",
         )
     ]
     gateway = FakeGateway(rows)
-    gateway.set_contract_snapshot("abcweb-1", _status_result())
+    gateway.set_contract_snapshot("abc123", _status_result())
     asyncio.run(run_cycle(fleet_state, gateway, now=1000.0))
     show, export = _scripted_page()
-    gateway.set_contract_attempt_show("abcweb-1", "#41/1", show)
-    gateway.set_contract_attempt_export("abcweb-1", "#41/1", "events.jsonl", export)
+    gateway.set_contract_attempt_show("abc123", "#41/1", show)
+    gateway.set_contract_attempt_export("abc123", "#41/1", "events.jsonl", export)
     payload = {
         "contract": "1.0",
         "ok": True,
         "result": {"attempts": [_summary("#41/1")], "next_cursor": None},
     }
-    gateway.set_contract_attempts("abcweb-1", {None: payload})
+    gateway.set_contract_attempts("abc123", {None: payload})
     app = create_app(
         state=fleet_state,
         settings=Settings(poll_interval=5.0),
@@ -862,6 +864,7 @@ def test_attempt_page_on_legacy_instance_answers_404():
     fleet_state = FleetState()
     rows = [ManagedInstance("old-1", "abc123", "running", path=LEGACY_PATH)]
     gateway = FakeGateway(rows)
+    asyncio.run(run_cycle(fleet_state, gateway, now=1000.0))
     app = create_app(
         state=fleet_state,
         settings=Settings(poll_interval=5.0),
