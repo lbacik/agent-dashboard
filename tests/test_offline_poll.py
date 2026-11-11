@@ -129,7 +129,7 @@ def test_new_finish_time_reads_again():
 
 def test_offline_reads_share_the_global_exec_limit():
     state = FleetState()
-    rows = [_stopped(f"web-{i}", f"cid{i:04d}") for i in range(4)]
+    rows = [_stopped(f"web-{i}", f"abc10{i}") for i in range(4)]
     gateway = FakeGateway(rows)
     for inst in rows:
         gateway.set_inspect(inst.container_id, _inspect())

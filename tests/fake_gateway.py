@@ -34,6 +34,9 @@ from agent_dashboard.gateway import (
     argv_contract_exec,
     argv_contract_mutation,
     argv_control,
+    argv_offline_attempts_export,
+    argv_offline_attempts_list,
+    argv_offline_attempts_show,
     argv_offline_status,
 )
 
@@ -71,6 +74,16 @@ class FakeGateway:
         self.inspect_calls: list[str] = []
         self.offline_calls: list[dict] = []
         self.offline_argvs: list[list[str]] = []
+        self._offline_locks: dict[str, asyncio.Lock] = {}
+        self._offline_attempts_pages: dict[tuple[str, str | None], object] = {}
+        self.offline_attempts_calls: list[tuple[str, str, int, str | None]] = []
+        self._offline_show: dict[tuple[str, str], ControlExec | Exception] = {}
+        self._offline_export: dict[tuple[str, str, str], ControlExec | Exception] = {}
+        self._offline_export_queues: dict[
+            tuple[str, str, str], list[ControlExec | Exception]
+        ] = {}
+        self.offline_show_calls: list[tuple[str, str, str]] = []
+        self.offline_export_calls: list[tuple[str, str, str, str]] = []
         self._scripts: dict[str, TelemetryExec | Exception] = {}
         self._contract_attempts_pages: dict[
             tuple[str, str | None], object
@@ -247,6 +260,185 @@ class FakeGateway:
             scripted = self._offline_scripts.get(
                 image, GatewayError(f"no offline read scripted for {image}")
             )
+            if isinstance(scripted, Exception):
+                raise scripted
+            return scripted
+        finally:
+            self.offline_in_flight -= 1
+
+    def offline_lock(self, container_id: str) -> asyncio.Lock:
+        """One lock per stopped instance: at most one Offline Read at a time."""
+        from agent_dashboard.gateway import validate_container_id
+
+        validate_container_id(container_id)
+        existing = self._offline_locks.get(container_id)
+        if existing is None:
+            existing = asyncio.Lock()
+            self._offline_locks[container_id] = existing
+        return existing
+
+    def set_offline_attempts(self, image: str, pages: dict) -> None:
+        """Script offline ``attempts list`` pages keyed by request cursor."""
+        for cursor, scripted in pages.items():
+            self._offline_attempts_pages[(image, cursor)] = scripted
+
+    def set_offline_attempt_show(
+        self, image: str, attempt_id: str, scripted: ControlExec | Exception
+    ) -> None:
+        """Script one offline ``attempts show`` header reply."""
+        self._offline_show[(image, attempt_id)] = scripted
+
+    def set_offline_attempt_export(
+        self,
+        image: str,
+        attempt_id: str,
+        path: str,
+        scripted: ControlExec | Exception,
+    ) -> None:
+        """Script one offline ``attempts export`` tar reply."""
+        self._offline_export[(image, attempt_id, path)] = scripted
+
+    def set_offline_attempt_exports(
+        self,
+        image: str,
+        attempt_id: str,
+        path: str,
+        scripted: list[ControlExec | Exception],
+    ) -> None:
+        """Script consecutive offline ``attempts export`` replies, in order."""
+        self._offline_export_queues[(image, attempt_id, path)] = list(scripted)
+
+    async def _track_offline(self):
+        self.offline_in_flight += 1
+        self.peak_offline_in_flight = max(
+            self.peak_offline_in_flight, self.offline_in_flight
+        )
+
+    def _offline_list_payload(self, scripted: object) -> ControlExec:
+        if isinstance(scripted, ControlExec):
+            return scripted
+        if isinstance(scripted, Exception):
+            raise scripted
+        if isinstance(scripted, bytes):
+            return ControlExec(stdout=scripted, stderr=b"", returncode=0)
+        if isinstance(scripted, tuple):
+            payload, returncode = scripted
+            if isinstance(payload, bytes):
+                return ControlExec(
+                    stdout=payload, stderr=b"", returncode=returncode
+                )
+            return ControlExec(
+                stdout=json.dumps(payload).encode(),
+                stderr=b"",
+                returncode=returncode,
+            )
+        return ControlExec(
+            stdout=json.dumps(scripted).encode(), stderr=b"", returncode=0
+        )
+
+    async def offline_attempts_list(
+        self,
+        image: str,
+        mounts,
+        exec_user: str,
+        *,
+        limit: int = 100,
+        before: str | None = None,
+        helper_name: str | None = None,
+        timeout=None,
+    ) -> ControlExec:
+        """One scripted offline ``attempts list`` page, validated like real."""
+        _ = timeout
+        name = helper_name or "fake-offline-helper"
+        argv = argv_offline_attempts_list(
+            image, mounts, exec_user, name, limit=limit, before=before
+        )
+        self.offline_argvs.append(argv)
+        self.offline_attempts_calls.append((image, exec_user, limit, before))
+        await self._track_offline()
+        try:
+            if self.offline_delay:
+                await asyncio.sleep(self.offline_delay)
+            scripted = self._offline_attempts_pages.get((image, before))
+            if scripted is None:
+                return ControlExec(
+                    stdout=json.dumps(
+                        {
+                            "contract": "1.0",
+                            "ok": True,
+                            "result": {"attempts": [], "next_cursor": None},
+                        }
+                    ).encode(),
+                    stderr=b"",
+                    returncode=0,
+                )
+            if isinstance(scripted, Exception):
+                raise scripted
+            return self._offline_list_payload(scripted)
+        finally:
+            self.offline_in_flight -= 1
+
+    async def offline_attempt_show(
+        self,
+        image: str,
+        mounts,
+        exec_user: str,
+        attempt_id: str,
+        *,
+        helper_name: str | None = None,
+        timeout=None,
+    ) -> ControlExec:
+        """One scripted offline ``attempts show`` header, validated like real."""
+        _ = timeout
+        name = helper_name or "fake-offline-helper"
+        argv = argv_offline_attempts_show(image, mounts, exec_user, name, attempt_id)
+        self.offline_argvs.append(argv)
+        self.offline_show_calls.append((image, exec_user, attempt_id))
+        await self._track_offline()
+        try:
+            if self.offline_delay:
+                await asyncio.sleep(self.offline_delay)
+            scripted = self._offline_show.get((image, attempt_id))
+            if scripted is None:
+                return ControlExec(stdout=b"", stderr=b"", returncode=1)
+            if isinstance(scripted, Exception):
+                raise scripted
+            return scripted
+        finally:
+            self.offline_in_flight -= 1
+
+    async def offline_attempt_export(
+        self,
+        image: str,
+        mounts,
+        exec_user: str,
+        attempt_id: str,
+        path: str,
+        *,
+        helper_name: str | None = None,
+        timeout=None,
+    ) -> ControlExec:
+        """One scripted offline ``attempts export`` tar, validated like real."""
+        _ = timeout
+        name = helper_name or "fake-offline-helper"
+        argv = argv_offline_attempts_export(
+            image, mounts, exec_user, name, attempt_id, path
+        )
+        self.offline_argvs.append(argv)
+        self.offline_export_calls.append((image, exec_user, attempt_id, path))
+        await self._track_offline()
+        try:
+            if self.offline_delay:
+                await asyncio.sleep(self.offline_delay)
+            queue = self._offline_export_queues.get((image, attempt_id, path))
+            if queue:
+                scripted = queue.pop(0)
+                if isinstance(scripted, Exception):
+                    raise scripted
+                return scripted
+            scripted = self._offline_export.get((image, attempt_id, path))
+            if scripted is None:
+                return ControlExec(stdout=b"", stderr=b"", returncode=1)
             if isinstance(scripted, Exception):
                 raise scripted
             return scripted

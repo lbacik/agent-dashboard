@@ -32,15 +32,18 @@ from .charts import (
 )
 from .contract_history import (
     HISTORY_CAP_DEFAULT,
+    OFFLINE_STARTED_MESSAGE,
     ContractAttempt,
     ContractHistoryResult,
     apply_contract_range,
     collect_contract_history,
+    collect_contract_history_offline,
     contract_day_strip,
     contract_outcome_text,
     counts_by_label,
 )
 from .fleet import FleetRow
+from .gateway import ControlTimeoutError, GatewayError
 from .history import (
     DEFAULT_WINDOW,
     NOT_APPLICABLE,
@@ -408,6 +411,74 @@ CONTRACT_NO_EXEC_USER_MESSAGE = (
 )
 
 
+async def _read_stopped_contract_history(
+    row: FleetRow,
+    gateway,
+    *,
+    now: float,
+    contract_cap: int,
+    spec: RangeSpec | None,
+) -> ContractHistoryResult | str:
+    """Page offline ``attempts list`` for a stopped contract instance.
+
+    The instance is re-inspected and its image runs through the Offline Read
+    helper under the instance's lock, so Attempt history renders what it
+    would have rendered while running. A running re-inspect or a helper
+    ``instance_running`` refusal reads as the started message; an invalid
+    image, volume or destination reads as unavailable; a gone volume reads
+    as the gone message; a helper timeout (already removed) reads as a
+    could-not-read message. Never raises.
+    """
+    try:
+        info = await gateway.inspect_offline(row.container_id)
+    except FileNotFoundError:
+        return LOGS_GONE_MESSAGE
+    except GatewayError as exc:
+        lowered = str(exc).lower()
+        if "no such" in lowered or "not found" in lowered:
+            return LOGS_GONE_MESSAGE
+        return f"Could not read the Attempt list: {exc}"
+    except Exception as exc:  # one bad instance never fails the caller
+        return f"Could not read the Attempt list: {exc}"
+    if info.running:
+        return OFFLINE_STARTED_MESSAGE
+    get_lock = getattr(gateway, "offline_lock", None)
+    lock = get_lock(row.container_id) if callable(get_lock) else None
+    try:
+        if lock is not None:
+            async with lock:
+                result = await collect_contract_history_offline(
+                    gateway,
+                    info.image,
+                    info.mounts,
+                    row.exec_user,
+                    spec if spec is not None else RangeSpec(preset="all"),
+                    now=now,
+                    cap=contract_cap,
+                    instance_name=row.name,
+                )
+        else:
+            result = await collect_contract_history_offline(
+                gateway,
+                info.image,
+                info.mounts,
+                row.exec_user,
+                spec if spec is not None else RangeSpec(preset="all"),
+                now=now,
+                cap=contract_cap,
+                instance_name=row.name,
+            )
+    except FileNotFoundError:
+        return LOGS_GONE_MESSAGE
+    except ControlTimeoutError as exc:
+        return f"Could not read the Attempt list: {exc}"
+    except Exception as exc:  # one bad instance never fails the caller
+        return f"Could not read the Attempt list: {exc}"
+    if not result.ok:
+        return result.error or "Attempt list not recognised"
+    return result
+
+
 async def read_full_history(
     row: FleetRow,
     gateway,
@@ -426,16 +497,18 @@ async def read_full_history(
     message, never an exception. Contract-path rows page the online
     ``attempts list`` newest-first through the shared contract history
     reader: paging stops at the first Attempt starting before ``spec``
-    (``all`` pages to ``contract_cap``); stopped contract instances cannot
-    run an exec and read as error rows. Every Attempt ID from a contract
+    (``all`` pages to ``contract_cap``); stopped contract instances read
+    the same reader offline through the helper. Every Attempt ID from a contract
     listing is remembered per instance as an addressable ID for the
     Attempt page.
     """
     if getattr(row, "path", "legacy") == "contract":
-        if row.state != "running":
-            return CONTRACT_STOPPED_MESSAGE
         if not getattr(row, "exec_user", None):
             return CONTRACT_NO_EXEC_USER_MESSAGE
+        if row.state != "running":
+            return await _read_stopped_contract_history(
+                row, gateway, now=now, contract_cap=contract_cap, spec=spec
+            )
         try:
             result = await collect_contract_history(
                 gateway,

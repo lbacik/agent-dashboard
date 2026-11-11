@@ -31,6 +31,9 @@ from agent_dashboard.gateway import (
     argv_inspect_offline,
     argv_list_instances,
     argv_list_run_files,
+    argv_offline_attempts_export,
+    argv_offline_attempts_list,
+    argv_offline_attempts_show,
     argv_offline_cleanup,
     argv_offline_status,
     argv_read_file,
@@ -134,6 +137,27 @@ def test_every_argv_producer_is_pinned():
             "agent",
             "offline-helper-01",
         ),
+        "argv_offline_attempts_list": argv_offline_attempts_list(
+            "sha256:" + "ab" * 32,
+            (OfflineMount("data-vol", "/data"),),
+            "agent",
+            "offline-helper-01",
+        ),
+        "argv_offline_attempts_show": argv_offline_attempts_show(
+            "sha256:" + "ab" * 32,
+            (OfflineMount("data-vol", "/data"),),
+            "agent",
+            "offline-helper-01",
+            "plain-1",
+        ),
+        "argv_offline_attempts_export": argv_offline_attempts_export(
+            "sha256:" + "ab" * 32,
+            (OfflineMount("data-vol", "/data"),),
+            "agent",
+            "offline-helper-01",
+            "plain-1",
+            "events.jsonl",
+        ),
         "argv_offline_cleanup": argv_offline_cleanup("offline-helper-01"),
     }
     assert set(producers) == {
@@ -155,6 +179,9 @@ def test_every_argv_producer_is_pinned():
         "argv_copy_run",
         "argv_inspect_offline",
         "argv_offline_status",
+        "argv_offline_attempts_list",
+        "argv_offline_attempts_show",
+        "argv_offline_attempts_export",
         "argv_offline_cleanup",
     }
     assert producers["argv_contract_attempts_list"] == [

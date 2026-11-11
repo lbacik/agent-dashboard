@@ -767,7 +767,9 @@ def test_history_page_malformed_reply_is_a_message_not_500():
     assert "tbody" not in response.text
 
 
-def test_history_page_stopped_contract_instance_is_a_message():
+def test_history_page_stopped_contract_instance_reads_offline():
+    from agent_dashboard.gateway import OfflineInspect, OfflineMount
+
     state = FleetState()
     gateway = FakeGateway(
         [
@@ -783,6 +785,25 @@ def test_history_page_stopped_contract_instance_is_a_message():
     )
     gateway.set_contract_snapshot("abcdown", _status_result("offline-status-halted"))
     asyncio.run(run_cycle(state, gateway, now=1000.0))
+    image = "sha256:" + "ab" * 32
+    gateway.set_inspect(
+        "abcdown",
+        OfflineInspect(
+            running=False,
+            finished_at="2026-11-06T09:58:12.123456789Z",
+            image=image,
+            mounts=(OfflineMount("data-vol", "/data"),),
+        ),
+    )
+    gateway.set_offline_attempts(
+        image,
+        {
+            None: _envelope(
+                [_attempt("#42/1", 42, _iso(1), _iso(1), title="Add CSV export")],
+                None,
+            )
+        },
+    )
     app = create_app(
         state=state,
         settings=Settings(poll_interval=5.0),
@@ -792,7 +813,12 @@ def test_history_page_stopped_contract_instance_is_a_message():
     client = TestClient(app, base_url="http://localhost")
     response = client.get("/instances/down-1/history?preset=all")
     assert response.status_code == 200
-    assert "not running" in response.text
+    body = response.text
+    assert "#42" in body
+    assert "Add CSV export" in body
+    assert "Delivered" in body
+    assert gateway.offline_attempts_calls != []
+    assert gateway.contract_attempts_calls == []
 
 
 def test_history_page_unknown_instance_is_a_message():

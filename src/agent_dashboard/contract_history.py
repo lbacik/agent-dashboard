@@ -547,27 +547,56 @@ def contract_day_strip(
     return out
 
 
-async def collect_contract_history(
-    gateway: Any,
-    container_id: str,
-    exec_user: str,
+#: Shown when an Offline Read helper refuses the read because the
+#: container started between inspection and the helper run: the live
+#: engine owns the volume again, so the operator refreshes the view.
+OFFLINE_STARTED_MESSAGE = "The instance started while reading: refresh the view."
+
+#: Prefix for an Offline Read that never started a helper: an invalid
+#: image, volume or destination fails validation before any argv exists.
+OFFLINE_UNAVAILABLE_MESSAGE = "offline read unavailable: "
+
+
+def is_instance_running_rejection(stdout: bytes, returncode: int | None) -> bool:
+    """True when a helper refused the read because the instance is running.
+
+    The helper answers ``rejected`` with ``details.reason``
+    ``instance_running`` when the container started between inspection and
+    the run. Never raises: anything unparsable reads as no race.
+    """
+    try:
+        envelope = json.loads(stdout.decode("utf-8") if isinstance(stdout, bytes) else "")
+    except (ValueError, UnicodeDecodeError):
+        return False
+    if not isinstance(envelope, dict):
+        return False
+    error = envelope.get("error")
+    if not isinstance(error, dict) or error.get("code") != "rejected":
+        return False
+    details = error.get("details")
+    return isinstance(details, dict) and details.get("reason") == "instance_running"
+
+
+async def _collect_paged(
+    fetch_page: Any,
     spec: Any,
     *,
-    now: float | None = None,
-    cap: int = HISTORY_CAP_DEFAULT,
-    instance_name: str | None = None,
+    now: float,
+    cap: int,
+    instance_name: str | None,
+    is_race: Any = None,
 ) -> ContractHistoryResult:
     """Page ``attempts list`` newest-first until the range cutoff or the cap.
 
-    Every page runs online with the contract's ``attempts-list`` timeout
-    (15 s). Paging stops at the first page whose oldest Attempt starts
-    before the selected range; ``All`` stops at ``cap`` with ``capped``
-    set so the page shows a "showing newest N" note.
+    ``fetch_page`` takes the page cursor and returns the exec result; every
+    page parses through the same reader, so running and stopped instances
+    share their view models. Paging stops at the first page whose oldest
+    Attempt starts before the selected range; ``All`` stops at ``cap`` with
+    ``capped`` set so the page shows a "showing newest N" note.
     """
-    at = time.time() if now is None else now
     if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
         cap = HISTORY_CAP_DEFAULT
-    cutoff = _cutoff_for_spec(spec, at)
+    cutoff = _cutoff_for_spec(spec, now)
     fetched: list[ContractAttempt] = []
     unreadable = 0
     cursor: str | None = None
@@ -575,11 +604,9 @@ async def collect_contract_history(
     last_cursor: str | None = None
     while len(fetched) < cap:
         try:
-            exec_result = await gateway.contract_attempts_list(
-                container_id, exec_user, limit=HISTORY_PAGE_LIMIT, before=cursor
-            )
+            exec_result = await fetch_page(cursor)
             page = parse_contract_attempts_page(
-                exec_result.stdout, exec_result.returncode, now=at
+                exec_result.stdout, exec_result.returncode, now=now
             )
         except FileNotFoundError:
             return ContractHistoryResult(
@@ -595,6 +622,14 @@ async def collect_contract_history(
                 ok=False, error=f"Could not read the Attempt list: {exc}", cap=cap
             )
         if not page.ok:
+            if is_race is not None:
+                try:
+                    if is_race(exec_result):
+                        return ContractHistoryResult(
+                            ok=False, error=OFFLINE_STARTED_MESSAGE, cap=cap
+                        )
+                except Exception:
+                    pass
             return ContractHistoryResult(ok=False, error=page.error, cap=cap)
         fetched.extend(page.attempts)
         unreadable += page.unreadable
@@ -624,7 +659,7 @@ async def collect_contract_history(
         # newest ``cap`` Attempts with the visible note.
         fetched = fetched[:cap]
         capped = True
-    cut = apply_contract_range(tuple(fetched), spec, at)
+    cut = apply_contract_range(tuple(fetched), spec, now)
     return ContractHistoryResult(
         ok=True,
         summaries=tuple(cut),
@@ -634,6 +669,101 @@ async def collect_contract_history(
         cap=cap,
         next_cursor=last_cursor,
     )
+
+
+async def collect_contract_history(
+    gateway: Any,
+    container_id: str,
+    exec_user: str,
+    spec: Any,
+    *,
+    now: float | None = None,
+    cap: int = HISTORY_CAP_DEFAULT,
+    instance_name: str | None = None,
+) -> ContractHistoryResult:
+    """Page ``attempts list`` newest-first until the range cutoff or the cap.
+
+    Every page runs online with the contract's ``attempts-list`` timeout
+    (15 s). Paging stops at the first page whose oldest Attempt starts
+    before the selected range; ``All`` stops at ``cap`` with ``capped``
+    set so the page shows a "showing newest N" note.
+    """
+    at = time.time() if now is None else now
+
+    async def _fetch(cursor: str | None) -> Any:
+        return await gateway.contract_attempts_list(
+            container_id, exec_user, limit=HISTORY_PAGE_LIMIT, before=cursor
+        )
+
+    return await _collect_paged(
+        _fetch, spec, now=at, cap=cap, instance_name=instance_name
+    )
+
+
+async def collect_contract_history_offline(
+    gateway: Any,
+    image: str,
+    mounts: Any,
+    exec_user: str,
+    spec: Any,
+    *,
+    now: float | None = None,
+    cap: int = HISTORY_CAP_DEFAULT,
+    instance_name: str | None = None,
+) -> ContractHistoryResult:
+    """Page ``attempts list`` offline newest-first, same view models as online.
+
+    Every page runs through the same Offline Read helper (no network,
+    read-only volumes) with the contract's ``attempts-list`` bound. An
+    ``instance_running`` refusal reads as the started message so the
+    operator refreshes the view; an invalid image, volume or destination
+    reads as unavailable with its reason; a gone volume reads as
+    unavailable logs. The caller holds the instance's offline lock across
+    the read; this function never acquires it. Every Attempt ID is
+    remembered per instance exactly like the online reader.
+    """
+    at = time.time() if now is None else now
+
+    async def _fetch(cursor: str | None) -> Any:
+        try:
+            return await gateway.offline_attempts_list(
+                image, mounts, exec_user, limit=HISTORY_PAGE_LIMIT, before=cursor
+            )
+        except ValueError as exc:
+            raise _OfflineUnavailable(exc) from exc
+
+    def _is_race(exec_result: Any) -> bool:
+        try:
+            return is_instance_running_rejection(
+                exec_result.stdout, exec_result.returncode
+            )
+        except Exception:
+            return False
+
+    try:
+        return await _collect_paged(
+            _fetch,
+            spec,
+            now=at,
+            cap=cap,
+            instance_name=instance_name,
+            is_race=_is_race,
+        )
+    except _OfflineUnavailable as exc:
+        safe_cap = (
+            cap
+            if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 1
+            else HISTORY_CAP_DEFAULT
+        )
+        return ContractHistoryResult(
+            ok=False,
+            error=f"{OFFLINE_UNAVAILABLE_MESSAGE}{exc}",
+            cap=safe_cap,
+        )
+
+
+class _OfflineUnavailable(Exception):
+    """One offline validation failure, reported as unavailable, never raised."""
 
 
 def read_attempt_summary(entry: Any, now: float | None = None) -> ContractAttempt | None:
