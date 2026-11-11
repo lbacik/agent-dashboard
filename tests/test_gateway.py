@@ -41,17 +41,27 @@ from agent_dashboard.gateway import (
     parse_ps_output,
 )
 
-EXPECTED_ARGV = [
+EXPECTED_ROLE_ARGV = [
     "docker",
     "ps",
     "-a",
     "--filter",
     f"label={AGENT_ROLE_LABEL}",
+    "--format",
+    gateway.PS_FORMAT,
+]
+
+EXPECTED_CONTRACT_ARGV = [
+    "docker",
+    "ps",
+    "-a",
     "--filter",
     f"label={CONTRACT_LABEL}",
     "--format",
     gateway.PS_FORMAT,
 ]
+
+EXPECTED_DISCOVERY_ARGVS = [EXPECTED_ROLE_ARGV, EXPECTED_CONTRACT_ARGV]
 
 
 def _ps_row(
@@ -86,11 +96,34 @@ def test_agent_role_label():
 
 
 def test_list_instances_argv_pinned():
-    assert argv_list_instances() == EXPECTED_ARGV
+    assert argv_list_instances() == EXPECTED_DISCOVERY_ARGVS
 
 
 def test_gateway_argv_matches_module_function():
-    assert DockerGateway(timeout=5.0).argv() == argv_list_instances() == EXPECTED_ARGV
+    assert (
+        DockerGateway(timeout=5.0).argv()
+        == argv_list_instances()
+        == EXPECTED_DISCOVERY_ARGVS
+    )
+
+
+def test_discovery_argvs_carry_exactly_one_label_filter():
+    argvs = argv_list_instances()
+    assert len(argvs) == 2
+    labels = []
+    for argv in argvs:
+        filters = [a for a in argv if a.startswith("label=")]
+        assert len(filters) == 1, argv
+        assert argv.count("--filter") == 1, argv
+        labels.append(filters[0])
+    assert sorted(labels) == sorted(
+        [f"label={AGENT_ROLE_LABEL}", f"label={CONTRACT_LABEL}"]
+    )
+    for argv in argvs:
+        assert not (
+            f"label={AGENT_ROLE_LABEL}" in argv
+            and f"label={CONTRACT_LABEL}" in argv
+        ), argv
 
 
 def test_every_argv_producer_is_pinned():
@@ -202,7 +235,15 @@ def test_every_argv_producer_is_pinned():
         "--path",
         "events.jsonl",
     ]
+    discovery = producers["argv_list_instances"]
+    assert discovery == EXPECTED_DISCOVERY_ARGVS
+    for argv in discovery:
+        assert argv == EXPECTED_ROLE_ARGV or argv == EXPECTED_CONTRACT_ARGV
+        assert argv[0] == "docker"
+        assert argv.count("--filter") == 1
     for name, argv in producers.items():
+        if name == "argv_list_instances":
+            continue
         assert isinstance(argv, list)
         assert all(isinstance(part, str) for part in argv)
         if name in (
@@ -301,12 +342,154 @@ def _patch_create_subprocess(monkeypatch, process=None, *, exc=None):
 
 def test_list_instances_uses_pinned_argv(monkeypatch):
     row = _ps_row("abc", "worker-1", "running").encode() + b"\n"
-    proc = _FakeProcess(stdout=row)
-    seen = _patch_create_subprocess(monkeypatch, proc)
+    calls: list[list[str]] = []
+
+    async def fake_create(*argv, **kwargs):
+        calls.append(list(argv))
+        assert "shell" not in kwargs
+        return _FakeProcess(stdout=row if len(calls) == 1 else b"")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
     rows = asyncio.run(DockerGateway(timeout=5.0).list_instances())
-    assert seen["argv"] == EXPECTED_ARGV
-    assert "shell" not in seen["kwargs"]
+    assert calls == EXPECTED_DISCOVERY_ARGVS
     assert [r.name for r in rows] == ["worker-1"]
+
+
+def _contract_ps_row(
+    container_id="bbb222",
+    name="c-web-2",
+    state="running",
+    instance="web-2",
+):
+    return _ps_row(
+        container_id,
+        name,
+        state,
+        contract="1",
+        instance=instance,
+        exec_user="agent",
+        backend="coding-agent",
+    )
+
+
+def _patch_discovery_queues(monkeypatch, results):
+    """Stub ``create_subprocess_exec`` with one result per discovery call.
+
+    Each entry is a ``_FakeProcess`` or an exception to raise. Returns the
+    list of seen argvs.
+    """
+    calls: list[list[str]] = []
+    queue = list(results)
+
+    async def fake_create(*argv, **kwargs):
+        calls.append(list(argv))
+        item = queue.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    return calls
+
+
+def test_list_instances_merges_role_and_contract_rows(monkeypatch):
+    both_id = "ccc333"
+    both_row = _contract_ps_row(
+        container_id=both_id, name="c-web-3", instance="web-3"
+    )
+    role_row = _ps_row("aaa111", "worker-legacy", "running")
+    contract_row = _contract_ps_row()
+    role_out = (role_row + "\n" + both_row + "\n").encode()
+    contract_out = (contract_row + "\n" + both_row + "\n").encode()
+    calls = _patch_discovery_queues(
+        monkeypatch,
+        [_FakeProcess(stdout=role_out), _FakeProcess(stdout=contract_out)],
+    )
+    rows = asyncio.run(DockerGateway(timeout=5.0).list_instances())
+    assert calls == EXPECTED_DISCOVERY_ARGVS
+    by_id = {r.container_id: r for r in rows}
+    assert set(by_id) == {"aaa111", "bbb222", both_id}
+    assert by_id["aaa111"].path == "legacy"
+    assert by_id["aaa111"].name == "worker-legacy"
+    assert by_id["bbb222"].path == "contract"
+    assert by_id["bbb222"].name == "web-2"
+    both = by_id[both_id]
+    assert both.path == "contract"
+    assert both.name == "web-3"
+    assert both.duplicate is False
+
+
+def test_list_instances_ignores_offline_marker_rows(monkeypatch):
+    good = _ps_row("aaa111", "worker-1", "running")
+    marked_legacy = _ps_row("ddd444", "helper-1", "running", marker="1")
+    marked_contract = _ps_row(
+        "eee555",
+        "c-helper",
+        "running",
+        contract="1",
+        instance="helper",
+        exec_user="agent",
+        backend="x",
+        marker="1",
+    )
+    role_out = (good + "\n" + marked_legacy + "\n").encode()
+    contract_out = (marked_contract + "\n").encode()
+    _patch_discovery_queues(
+        monkeypatch,
+        [_FakeProcess(stdout=role_out), _FakeProcess(stdout=contract_out)],
+    )
+    rows = asyncio.run(DockerGateway(timeout=5.0).list_instances())
+    assert [r.container_id for r in rows] == ["aaa111"]
+
+
+def test_list_instances_second_call_failure_fails_whole(monkeypatch):
+    role_out = (_ps_row("aaa111", "worker-1", "running") + "\n").encode()
+    calls = _patch_discovery_queues(
+        monkeypatch,
+        [
+            _FakeProcess(stdout=role_out),
+            _FakeProcess(returncode=1, stderr=b"boom"),
+        ],
+    )
+    with pytest.raises(GatewayError, match="boom"):
+        asyncio.run(DockerGateway(timeout=5.0).list_instances())
+    assert calls == EXPECTED_DISCOVERY_ARGVS
+
+
+def test_list_instances_second_call_timeout_fails_whole(monkeypatch):
+    role_out = (_ps_row("aaa111", "worker-1", "running") + "\n").encode()
+
+    class HangingProcess(_FakeProcess):
+        async def communicate(self):
+            await asyncio.sleep(10)
+            return b"", b""
+
+    calls: list[list[str]] = []
+
+    async def fake_create(*argv, **kwargs):
+        calls.append(list(argv))
+        if len(calls) == 1:
+            return _FakeProcess(stdout=role_out)
+        return HangingProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    with pytest.raises(DiscoveryTimeoutError):
+        asyncio.run(DockerGateway(timeout=0.05).list_instances())
+    assert calls == EXPECTED_DISCOVERY_ARGVS
+
+
+def test_list_instances_second_call_missing_cli_fails_whole(monkeypatch):
+    role_out = (_ps_row("aaa111", "worker-1", "running") + "\n").encode()
+    calls = _patch_discovery_queues(
+        monkeypatch,
+        [
+            _FakeProcess(stdout=role_out),
+            FileNotFoundError("no docker"),
+        ],
+    )
+    with pytest.raises(DockerNotAvailableError):
+        asyncio.run(DockerGateway(timeout=5.0).list_instances())
+    assert calls == EXPECTED_DISCOVERY_ARGVS
 
 
 def test_list_instances_missing_cli(monkeypatch):

@@ -724,23 +724,33 @@ def validate_exec_user(exec_user: str) -> str:
     return exec_user
 
 
-def argv_list_instances() -> list[str]:
-    """Argv for discovery: list agent containers, running or exited.
-
-    Both label sets are listed at once (the filters are OR-ed): the legacy
-    role label and the contract label. The contract label wins per
-    container (see :func:`parse_ps_output`).
-    """
+def _argv_list_instances_for_label(label: str) -> list[str]:
+    """Argv for one discovery call listing containers carrying one label."""
     return [
         "docker",
         "ps",
         "-a",
         "--filter",
-        f"label={AGENT_ROLE_LABEL}",
-        "--filter",
-        f"label={CONTRACT_LABEL}",
+        f"label={label}",
         "--format",
         PS_FORMAT,
+    ]
+
+
+def argv_list_instances() -> list[list[str]]:
+    """Argv lists for discovery: list agent containers, running or exited.
+
+    One ``docker ps -a`` call per label (the legacy role label and the
+    contract label). Docker ANDs repeated ``label`` filters on a single
+    ``docker ps`` call, so one call with both filters would list only
+    containers carrying both labels; separate calls list containers
+    carrying either label. The contract label wins per container (see
+    :func:`parse_ps_output`); callers merge rows by container ID before
+    parsing so a container carrying both labels yields one contract row.
+    """
+    return [
+        _argv_list_instances_for_label(AGENT_ROLE_LABEL),
+        _argv_list_instances_for_label(CONTRACT_LABEL),
     ]
 
 
@@ -2161,7 +2171,7 @@ class DockerGateway:
             self._offline_locks[container_id] = existing
         return existing
 
-    def argv(self) -> list[str]:
+    def argv(self) -> list[list[str]]:
         return argv_list_instances()
 
     async def _run(self, argv: list[str]):
@@ -2169,21 +2179,60 @@ class DockerGateway:
         return await _spawn_docker_cli(argv)
 
     async def list_instances(self) -> list[ManagedInstance]:
-        proc = await self._run(self.argv())
-        stdout, stderr = await _bounded_wait(
-            proc,
-            proc.communicate(),
-            self.timeout,
-            DiscoveryTimeoutError,
-            f"docker ps timed out after {self.timeout:g} s",
-        )
-        if proc.returncode != 0:
-            detail = stderr.decode(errors="replace").strip()
-            if "permission denied" in detail.lower():
-                raise GatewayError(f"permission denied running docker ps: {detail}")
-            reason = detail or f"docker ps exited with status {proc.returncode}"
-            raise GatewayError(reason)
-        return parse_ps_output(stdout.decode(errors="replace"))
+        """Run every discovery argv and merge rows by container ID.
+
+        One ``docker ps -a`` call per label (see
+        :func:`argv_list_instances`): a container carrying both labels
+        comes back from both calls, so rows are merged by container ID
+        before :func:`parse_ps_output` (which would otherwise mark the
+        doubled address as duplicated). A merged row carrying the
+        contract label keeps the contract path. All or nothing: any
+        failing or timed-out call fails the whole discovery, never a
+        partial fleet. One timeout (``self.timeout``) bounds the whole
+        discovery, not each call separately.
+        """
+        argvs = self.argv()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.timeout
+        rows_by_id: dict[str, str] = {}
+        contract_by_id: dict[str, bool] = {}
+        for argv in argvs:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise DiscoveryTimeoutError(
+                    f"docker ps timed out after {self.timeout:g} s"
+                )
+            proc = await self._run(argv)
+            stdout, stderr = await _bounded_wait(
+                proc,
+                proc.communicate(),
+                remaining,
+                DiscoveryTimeoutError,
+                f"docker ps timed out after {self.timeout:g} s",
+            )
+            if proc.returncode != 0:
+                detail = stderr.decode(errors="replace").strip()
+                if "permission denied" in detail.lower():
+                    raise GatewayError(
+                        f"permission denied running docker ps: {detail}"
+                    )
+                reason = detail or f"docker ps exited with status {proc.returncode}"
+                raise GatewayError(reason)
+            for line in stdout.decode(errors="replace").splitlines():
+                if not line.strip():
+                    continue
+                parts = line.split("\t")
+                container_id = parts[0].strip() if parts else ""
+                if not container_id:
+                    continue
+                has_contract = len(parts) == 9 and parts[4].strip() != ""
+                if container_id not in rows_by_id:
+                    rows_by_id[container_id] = line
+                    contract_by_id[container_id] = has_contract
+                elif has_contract and not contract_by_id[container_id]:
+                    rows_by_id[container_id] = line
+                    contract_by_id[container_id] = True
+        return parse_ps_output("\n".join(rows_by_id.values()))
 
     async def telemetry(self, container_id: str) -> TelemetryExec:
         """Run one telemetry exec against a container ID (never a name).

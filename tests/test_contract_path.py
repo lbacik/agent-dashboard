@@ -131,9 +131,21 @@ def _rows(state, now=1012.0):
 
 
 def test_discovery_lists_both_label_sets():
-    argv = argv_list_instances()
-    assert f"label={AGENT_ROLE_LABEL}" in argv
-    assert f"label={CONTRACT_LABEL}" in argv
+    argvs = argv_list_instances()
+    assert len(argvs) == 2
+    labels = []
+    for argv in argvs:
+        filters = [a for a in argv if a.startswith("label=")]
+        assert len(filters) == 1, argv
+        labels.append(filters[0])
+    assert sorted(labels) == sorted(
+        [f"label={AGENT_ROLE_LABEL}", f"label={CONTRACT_LABEL}"]
+    )
+    for argv in argvs:
+        assert not (
+            f"label={AGENT_ROLE_LABEL}" in argv
+            and f"label={CONTRACT_LABEL}" in argv
+        )
 
 
 def test_contract_label_wins_over_legacy():
