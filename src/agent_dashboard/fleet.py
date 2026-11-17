@@ -21,6 +21,7 @@ from .collector import (
     run_cycle,
 )
 from .contract_status import (
+    AttemptGauge,
     ContractDetail,
     contract_headline,
     contract_state_rank,
@@ -98,6 +99,20 @@ class FleetRow:
     def rank_title(self) -> str:
         """Tooltip for the rail's rank tag (``R<rank>`` or ``OFF``)."""
         return attention_rank_title(self.rank)
+
+    @property
+    def gauge(self) -> SnapshotDetail | AttemptGauge | None:
+        """The budget bar and figure cells, whichever path read the row.
+
+        Both shapes carry the same ``budget_*``, ``context_*``, ``turns_*``
+        and ``cache_*`` fields, so the rail and the fleet matrix render one
+        markup for both paths (ADR 0017): the legacy ``detail``, or the
+        contract current attempt's gauge (none without a current attempt).
+        """
+        if self.path != CONTRACT_PATH:
+            return self.detail
+        current = self.contract.current if self.contract is not None else None
+        return current.gauge if current is not None else None
 
 
 @dataclass

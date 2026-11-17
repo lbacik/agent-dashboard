@@ -22,6 +22,7 @@ from agent_dashboard.gateway import (
     argv_attempt_tail_log,
     argv_command_status,
     argv_contract_attempts_export,
+    argv_contract_attempts_export_members,
     argv_contract_attempts_list,
     argv_contract_attempts_show,
     argv_contract_exec,
@@ -153,6 +154,9 @@ def test_every_argv_producer_is_pinned():
         "argv_contract_attempts_export": argv_contract_attempts_export(
             "plain-1", "events.jsonl"
         ),
+        "argv_contract_attempts_export_members": argv_contract_attempts_export_members(
+            "plain-1", ["events.jsonl", "0002_tool_call.json"]
+        ),
         "argv_read_file": argv_read_file(
             "abc123", 98, "2026-09-27T16:33:43.385090Z", "0003_tool_call.json"
         ),
@@ -202,6 +206,7 @@ def test_every_argv_producer_is_pinned():
         "argv_contract_attempts_list",
         "argv_contract_attempts_show",
         "argv_contract_attempts_export",
+        "argv_contract_attempts_export_members",
         "argv_attempt_history",
         "argv_attempt_events",
         "argv_attempt_log",
@@ -235,6 +240,15 @@ def test_every_argv_producer_is_pinned():
         "--path",
         "events.jsonl",
     ]
+    assert producers["argv_contract_attempts_export_members"] == [
+        "attempts",
+        "export",
+        "plain-1",
+        "--path",
+        "events.jsonl",
+        "--path",
+        "0002_tool_call.json",
+    ]
     discovery = producers["argv_list_instances"]
     assert discovery == EXPECTED_DISCOVERY_ARGVS
     for argv in discovery:
@@ -250,6 +264,7 @@ def test_every_argv_producer_is_pinned():
             "argv_contract_attempts_list",
             "argv_contract_attempts_show",
             "argv_contract_attempts_export",
+            "argv_contract_attempts_export_members",
         ):
             # Agentctl-level argv: the gateway wraps it in the pinned
             # ``docker exec`` via ``argv_contract_exec`` (see the

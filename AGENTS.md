@@ -32,6 +32,10 @@ Start with `README.md`.
   agent-operator-contract package data at test time (ADR 0014).
 - Web tests assert HTML fragments through `TestClient`; there are no
   browser end-to-end tests.
+- The legacy and contract paths render the same views (rail, matrix,
+  cockpit modules, Activity panes). A data-path change never changes what
+  the operator sees; `tests/test_contract_parity.py` pins it (ADR 0017).
+  Changing a view element is a `DESIGN.md` change on both paths.
 
 ## Done
 

@@ -72,7 +72,7 @@
     <div class="vc-cockpit-id">
       <button type="button" class="drawer-back" onclick="closeDrawer()">← Fleet Matrix</button>
       <div class="vc-unit">
-        <span class="vc-unit-kicker">Unit cockpit // contract instance{% if row.backend %} · {{ row.backend }}{% endif %}</span>
+        <span class="vc-unit-kicker">Unit cockpit // {{ row.contract.repository_display if row.contract is not none else "unavailable" }}{% if row.contract is not none and row.contract.agent_version %} · v{{ row.contract.agent_version }}{% endif %}</span>
         <h2 class="drawer-title">{{ row.name }}</h2>
       </div>
       <span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>
@@ -84,59 +84,79 @@
     </div>
   </div>
   {% set c = row.contract %}
+  {# The contract cockpit keeps the module numbers, names and columns of
+     the legacy cockpit (DESIGN.md, ADR 0017): 01 Control console and 02
+     Identity & last attempt; 03 Activity and 04 Current attempt; 05 Attempt
+     statistics and 06 Recent events. Only the data source differs. #}
   <div class="vc-cockpit-grid">
-  <div class="vc-cockpit-col" data-col="contract-status">
-  <section class="drawer-section vc-module">
-    <h3 class="vc-module-bar">01 // Contract status</h3>
+  <div class="vc-cockpit-col" data-col="control">
+  {% if row.state == "running" %}
+  <section class="drawer-section ctl vc-module" id="control-console-{{ ctl_slug }}" hx-preserve>
+    <h3 class="vc-module-bar">01 // Control console</h3>
     <div class="vc-module-body">
-    <dl class="facts">
-      <div><dt>Backend</dt><dd>{% if row.backend %}{{ row.backend }}{% else %}unavailable{% endif %}</dd></div>
-      <div><dt>Repository</dt><dd>{{ c.repository_display if c is not none else "unavailable" }}</dd></div>
-      <div><dt>Agent version</dt><dd>{{ c.agent_version if c is not none and c.agent_version else "unavailable" }}</dd></div>
-      <div><dt>Instance state</dt><dd>{{ c.instance_state if c is not none else "unknown" }}</dd></div>
-      {% if c is not none and c.instance_state == "starting" and c.startup_check %}<div><dt>Startup check</dt><dd>{{ c.startup_check }}</dd></div>{% endif %}
-      <div><dt>Intake state</dt><dd>{{ c.intake_state if c is not none and c.intake_state else "unavailable" }}</dd></div>
-      {% if c is not none and c.pending_stop %}<div><dt>Stop</dt><dd>requested</dd></div>{% endif %}
-      {% if c is not none and c.stop_plan_remaining is not none %}<div><dt>Stop plan</dt><dd>{{ c.stop_plan_remaining }} remaining{% if c.stop_plan_counted is not none %} ({{ c.stop_plan_counted }} counted){% endif %}</dd></div>{% endif %}
-      {% if c is not none and c.priority_issue is not none %}<div><dt>Priority</dt><dd>#{{ c.priority_issue }}</dd></div>{% endif %}
-      {% if c is not none and c.instance_observed is not none %}<div><dt>Instance observed</dt><dd>{{ c.instance_observed.age_text }}{% if c.instance_observed.stale %} <span class="stale-tag">stale</span>{% endif %}</dd></div>{% endif %}
-      {% if c is not none and c.intake_observed is not none %}<div><dt>Intake observed</dt><dd>{{ c.intake_observed.age_text }}{% if c.intake_observed.stale %} <span class="stale-tag">stale</span>{% endif %}</dd></div>{% endif %}
-    </dl>
-    {% if c is not none and c.truncated %}<p class="hint">Truncated snapshot: older entries were trimmed.</p>{% endif %}
+    <div class="ctl-feedback" id="ctl-feedback-{{ ctl_slug }}"></div>
+    <div class="ctl-body" id="ctl-body-{{ ctl_slug }}"
+         hx-get="/instances/{{ row.name | urlencode }}/control"
+         hx-trigger="load, sse:fleet[!this.querySelector('.ctl-confirm') && !this.contains(document.activeElement)]"
+         hx-swap="innerHTML">
+      <p class="hint">Loading control…</p>
+    </div>
     </div>
   </section>
+  {% else %}
   <section class="drawer-section vc-module">
-    <h3 class="vc-module-bar">02 // Current attempt</h3>
+    <h3 class="vc-module-bar">01 // Control console</h3>
     <div class="vc-module-body">
-    {% if c is none or c.current is none %}
-    <p class="hint">No attempt in progress.</p>
+    <p class="hint">Control is offered only while the instance runs.</p>
+    </div>
+  </section>
+  {% endif %}
+  <section class="drawer-section vc-module">
+    <h3 class="vc-module-bar">02 // Identity &amp; last attempt</h3>
+    <div class="vc-module-body">
+    <h4>Identity &amp; Intake</h4>
+    <dl class="facts">
+      <div><dt>Repository</dt><dd>{{ c.repository_display if c is not none else "unavailable" }}</dd></div>
+      <div><dt>Agent version</dt><dd>{{ c.agent_version if c is not none and c.agent_version else "unavailable" }}</dd></div>
+      <div><dt>Backend</dt><dd>{% if row.backend %}{{ row.backend }}{% else %}unavailable{% endif %}</dd></div>
+      <div><dt>Instance state</dt><dd>{{ c.instance_state if c is not none else "unknown" }}{% if c is not none and c.instance_observed is not none %} <span class="age">{{ c.instance_observed.age_text }}</span>{% if c.instance_observed.stale %} <span class="stale-tag">stale</span>{% endif %}{% endif %}</dd></div>
+      {% if c is not none and c.instance_state == "starting" and c.startup_check %}<div><dt>Startup check</dt><dd>{{ c.startup_check }}</dd></div>{% endif %}
+      <div><dt>Intake</dt><dd>{{ c.intake_state if c is not none and c.intake_state else "unavailable" }}{% if c is not none and c.intake_observed is not none %} <span class="age">{{ c.intake_observed.age_text }}</span>{% if c.intake_observed.stale %} <span class="stale-tag">stale</span>{% endif %}{% endif %}</dd></div>
+      {% if c is not none and c.pending_stop %}<div><dt>Stop</dt><dd>requested</dd></div>{% endif %}
+      <div><dt>Stop plan</dt><dd>{% if c is not none and c.stop_plan_remaining is not none %}{{ c.stop_plan_remaining }} remaining{% if c.stop_plan_counted is not none %} ({{ c.stop_plan_counted }} counted){% endif %}{% else %}none{% endif %}</dd></div>
+      {% if c is not none and c.priority_issue is not none %}<div><dt>Priority</dt><dd>#{{ c.priority_issue }}</dd></div>{% endif %}
+    </dl>
+    {% if c is not none and c.truncated %}<p class="hint">Truncated snapshot: older entries were trimmed.</p>{% endif %}
+    <h4>Active attempt</h4>
+    <dl class="facts">
+      <div><dt>Attempt</dt><dd>{% if c is not none and c.current is not none %}#{{ c.current.issue_number }}{% if c.current.issue_title %} · {{ c.current.issue_title }}{% endif %} · {{ c.current.native_phase }} · started {{ c.current.started_at }}{% else %}none{% endif %}</dd></div>
+    </dl>
+    <h4>Last halt</h4>
+    {% if c is not none and c.halt is not none %}
+    <dl class="facts">
+      <div><dt>Reason</dt><dd>{{ c.halt.reason }}</dd></div>
+      <div><dt>Detail</dt><dd>{{ c.halt.detail }}</dd></div>
+      <div><dt>At</dt><dd>{{ c.halt.at }}</dd></div>
+    </dl>
     {% else %}
-    {% set cur = c.current %}
-    <p class="attempt-head">#{{ cur.issue_number }}{% if cur.issue_title %} · {{ cur.issue_title }}{% endif %}</p>
-    <dl class="facts">
-      <div><dt>Native phase</dt><dd>{{ cur.native_phase }}</dd></div>
-      <div><dt>Started at</dt><dd>{{ cur.started_at }}</dd></div>
-      <div><dt>Last activity</dt><dd>{% if cur.last_activity_at %}{{ cur.last_activity_at }}{% else %}—{% endif %}</dd></div>
-      <div><dt>Attempt observed</dt><dd>{{ cur.freshness.age_text }}{% if cur.freshness.stale %} <span class="stale-tag">stale</span>{% endif %}</dd></div>
-      <div><dt>Raw tokens</dt><dd>{{ cfig(cur.budget.raw) }}{% if cur.budget.enforced == "raw" %} <span class="enforced-tag">enforced</span>{% endif %}</dd></div>
-      <div><dt>Effective tokens</dt><dd>{{ cfig(cur.budget.effective) }}{% if cur.budget.enforced == "effective" %} <span class="enforced-tag">enforced</span>{% endif %}</dd></div>
-      {% for lim in cur.budget.limits %}
-      <div><dt>{{ lim.name }}{% if lim.is_native %} <span class="native-tag">native</span>{% endif %}</dt><dd>{{ cfig(lim.used) }} of {{ cfig(lim.limit) }}</dd></div>
-      {% endfor %}
-    </dl>
-    {% if cur.figures %}
-    <h4>Optional figures</h4>
-    <dl class="facts">
-      {% for opt in cur.figures %}
-      <div><dt>{{ opt.label }}{% if opt.is_native %} <span class="native-tag">native</span>{% endif %}</dt><dd>{{ cfig(opt.figure) }}</dd></div>
-      {% endfor %}
-    </dl>
+    <p class="hint">none</p>
     {% endif %}
+    <h4>Last finished attempt</h4>
+    {% if c is not none and c.last_finished is not none %}
+    {% set last = c.last_finished %}
+    <dl class="facts">
+      <div><dt>Issue</dt><dd>{% if last.issue_number is not none %}#{{ last.issue_number }}{% endif %}{% if last.issue_title %} · {{ last.issue_title }}{% endif %}{% if last.attention_required %} <span class="pill pill-unreachable">needs operator</span>{% endif %}</dd></div>
+      <div><dt>Outcome</dt><dd>{{ last.outcome_label or "—" }}</dd></div>
+      {% if last.finished_at %}<div><dt>Finished at</dt><dd>{{ last.finished_at }}</dd></div>{% endif %}
+      <div><dt>Pull request</dt><dd>{% if last.delivery_url %}<a href="{{ last.delivery_url }}">{% if last.delivery_number is not none %}#{{ last.delivery_number }}{% else %}{{ last.delivery_url }}{% endif %}</a>{% elif last.delivery_number is not none %}#{{ last.delivery_number }}{% else %}none{% endif %}</dd></div>
+    </dl>
+    {% else %}
+    <p class="hint">none</p>
     {% endif %}
     </div>
   </section>
   </div>
-  <div class="vc-cockpit-col" data-col="contract-activity">
+  <div class="vc-cockpit-col" data-col="telemetry">
   {% set activity_id = "activity-" ~ (row.name | replace(" ", "-") | replace(".", "-")) %}
   {% if c is not none and c.current is not none %}
   <div id="{{ activity_id }}" hx-preserve>
@@ -157,38 +177,73 @@
   </section>
   {% endif %}
   <section class="drawer-section vc-module">
-    <h3 class="vc-module-bar">04 // Last halt &amp; last finished</h3>
+    <h3 class="vc-module-bar">04 // Current attempt</h3>
     <div class="vc-module-body">
-    {% if c is not none and c.halt is not none %}
-    <h4>Last halt</h4>
-    <dl class="facts">
-      <div><dt>Reason</dt><dd>{{ c.halt.reason }}</dd></div>
-      <div><dt>Detail</dt><dd>{{ c.halt.detail }}</dd></div>
-      <div><dt>At</dt><dd>{{ c.halt.at }}</dd></div>
-    </dl>
+    {% if c is none or c.current is none %}
+    <p class="hint">No attempt in progress.</p>
     {% else %}
-    <h4>Last halt</h4>
-    <p class="hint">none</p>
+    {% set cur = c.current %}
+    {% set g = cur.gauge %}
+    <p class="attempt-head">#{{ cur.issue_number }}{% if cur.issue_title %} · {{ cur.issue_title }}{% endif %}</p>
+    {% if g.budget_has_bar %}
+    <div class="budget-bar{% if g.budget_hatched %} hatched{% endif %}" role="img" aria-label="budget {{ g.budget_used.text }} of {{ g.hard_ceiling.text }}">
+      <div class="budget-fill" style="width: {{ g.budget_used_pct }}%"></div>
+      {% if g.budget_has_tick %}<div class="budget-tick" style="left: {{ g.budget_soft_pct }}%"></div>{% endif %}
+    </div>
     {% endif %}
-    {% if c is not none and c.last_finished is not none %}
-    {% set last = c.last_finished %}
-    <h4>Last finished attempt</h4>
     <dl class="facts">
-      <div><dt>Issue</dt><dd>{% if last.issue_number is not none %}#{{ last.issue_number }}{% endif %}{% if last.issue_title %} · {{ last.issue_title }}{% endif %}{% if last.attention_required %} <span class="pill pill-unreachable">needs operator</span>{% endif %}</dd></div>
-      <div><dt>Outcome</dt><dd>{{ last.outcome_label or "—" }}</dd></div>
-      <div><dt>Delivery</dt><dd>{% if last.delivery_url %}<a href="{{ last.delivery_url }}">{% if last.delivery_number is not none %}#{{ last.delivery_number }}{% else %}{{ last.delivery_url }}{% endif %}</a>{% elif last.delivery_number is not none %}#{{ last.delivery_number }}{% else %}none{% endif %}</dd></div>
-      {% if last.finished_at %}<div><dt>Finished at</dt><dd>{{ last.finished_at }}</dd></div>{% endif %}
+      <div><dt>Budget used</dt><dd>{{ cfig(g.budget_used) }}{% if g.enforced in ("raw", "effective") %} <span class="enforced-tag">enforced</span>{% endif %}</dd></div>
+      <div><dt>Raw tokens</dt><dd>{{ cfig(g.raw) }}</dd></div>
+      <div><dt>Effective tokens</dt><dd>{{ cfig(g.effective) }}</dd></div>
+      <div><dt>Hard ceiling</dt><dd>{{ cfig(g.hard_ceiling) }}</dd></div>
+      <div><dt>Soft threshold</dt><dd>{{ cfig(g.soft_threshold) }}</dd></div>
+      <div><dt>Soft crossed</dt><dd>{% if g.soft_crossed is none %}unknown{% elif g.soft_crossed %}yes{% else %}no{% endif %}</dd></div>
+      <div><dt>Turns</dt><dd>{{ cfig(g.turns) }} (max {{ cfig(g.turns_max) }}, continuation {{ cfig(g.continuation_index) }} of {{ cfig(g.continuation_max) }})</dd></div>
+      <div><dt>Cache hit rate</dt><dd>{{ cfig(g.cache_hit) }}</dd></div>
+      <div><dt>Main context</dt><dd>{{ cfig(g.ctx_main) }} of window {{ cfig(g.ctx_window) }}, peak {{ cfig(g.ctx_peak) }}</dd></div>
+      <div><dt>Auto-compact threshold</dt><dd>{{ cfig(g.ctx_auto_compact) }}</dd></div>
+      <div><dt>Compactions</dt><dd>{{ cfig(g.compactions) }}</dd></div>
+      {% for lim in g.other_limits %}
+      <div><dt>{{ lim.name }}{% if lim.is_native %} <span class="native-tag">native</span>{% endif %}</dt><dd>{{ cfig(lim.used) }} of {{ cfig(lim.limit) }}</dd></div>
+      {% endfor %}
+      <div><dt>Phase</dt><dd>{{ cur.native_phase }}</dd></div>
+      <div><dt>Started at</dt><dd>{{ cur.started_at }}</dd></div>
+      <div><dt>Last activity</dt><dd>{% if cur.last_activity_at %}{{ cur.last_activity_at }}{% else %}—{% endif %}</dd></div>
+      <div><dt>Observed</dt><dd>{{ cur.freshness.age_text }}{% if cur.freshness.stale %} <span class="stale-tag">stale</span>{% endif %}</dd></div>
     </dl>
-    {% else %}
-    <h4>Last finished attempt</h4>
-    <p class="hint">none</p>
+    {% if g.tokens %}
+    <h4>Tokens by category</h4>
+    <dl class="facts">
+      {% for cat in g.tokens %}
+      <div><dt>{{ cat.label }} <span class="native-tag">native</span></dt><dd>{{ cfig(cat.figure) }}</dd></div>
+      {% endfor %}
+    </dl>
+    {% endif %}
+    {% if g.other_figures %}
+    <h4>Other figures</h4>
+    <dl class="facts">
+      {% for opt in g.other_figures %}
+      <div><dt>{{ opt.label }}{% if opt.is_native %} <span class="native-tag">native</span>{% endif %}</dt><dd>{{ cfig(opt.figure) }}</dd></div>
+      {% endfor %}
+    </dl>
+    {% endif %}
     {% endif %}
     </div>
   </section>
   </div>
-  <div class="vc-cockpit-col" data-col="contract-events">
+  <div class="vc-cockpit-col" data-col="history">
+  {% set slot_id = "stats-" ~ (row.name | replace(" ", "-") | replace(".", "-")) %}
   <section class="drawer-section vc-module">
-    <h3 class="vc-module-bar">05 // Recent events</h3>
+  <h3 class="vc-module-bar">05 // Attempt statistics</h3>
+  <div class="vc-module-body">
+  <div id="{{ slot_id }}" hx-preserve
+       hx-get="/instances/{{ row.name | urlencode }}/stats" hx-trigger="load" hx-swap="innerHTML">
+    <p class="hint"><a href="/instances/{{ row.name | urlencode }}/history">Attempt history</a> · Loading…</p>
+  </div>
+  </div>
+  </section>
+  <section class="drawer-section vc-module">
+    <h3 class="vc-module-bar">06 // Recent events</h3>
     <div class="vc-module-body">
     {% if c is not none and c.events %}
     <ul class="events">
@@ -204,33 +259,7 @@
     {% endif %}
     </div>
   </section>
-  {% if row.state == "running" %}
-  <section class="drawer-section ctl vc-module" id="control-console-{{ ctl_slug }}" hx-preserve>
-    <h3 class="vc-module-bar">06 // Control console</h3>
-    <div class="vc-module-body">
-    <div class="ctl-feedback" id="ctl-feedback-{{ ctl_slug }}"></div>
-    <div class="ctl-body" id="ctl-body-{{ ctl_slug }}"
-         hx-get="/instances/{{ row.name | urlencode }}/control"
-         hx-trigger="load, sse:fleet[!this.querySelector('.ctl-confirm') && !this.contains(document.activeElement)]"
-         hx-swap="innerHTML">
-      <p class="hint">Loading control…</p>
-    </div>
-    </div>
-  </section>
-  {% endif %}
   </div>
-  </div>
-  <div class="vc-cockpit-col" data-col="history">
-  {% set slot_id = "stats-" ~ (row.name | replace(" ", "-") | replace(".", "-")) %}
-  <section class="drawer-section vc-module">
-  <h3 class="vc-module-bar">05 // Attempt statistics</h3>
-  <div class="vc-module-body">
-  <div id="{{ slot_id }}" hx-preserve
-       hx-get="/instances/{{ row.name | urlencode }}/stats" hx-trigger="load" hx-swap="innerHTML">
-    <p class="hint"><a href="/instances/{{ row.name | urlencode }}/history">Attempt history</a> · Loading…</p>
-  </div>
-  </div>
-  </section>
   </div>
   {% else %}
   <div class="drawer-head">

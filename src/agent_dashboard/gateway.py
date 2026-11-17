@@ -1126,6 +1126,42 @@ def argv_contract_attempts_export(attempt_id: str, path: str) -> list[str]:
     return ["attempts", "export", attempt_id, "--path", path]
 
 
+#: Most archive members one ``attempts export`` may name (the Activity
+#: widget reads at most the running call, the last call, its response and
+#: the last model message in one exec; ADR 0017).
+MAX_EXPORT_MEMBERS = 4
+
+
+def argv_contract_attempts_export_members(
+    attempt_id: str, paths: Sequence[str]
+) -> list[str]:
+    """Agentctl argv for one ``attempts export`` of several members.
+
+    The contract grammar is ``attempts export <id> [--path <path>]...``; this
+    sends ``attempts export <attempt-id> --path <p1> [--path <p2>]...`` for
+    1 to :data:`MAX_EXPORT_MEMBERS` distinct relative paths, each checked
+    like :func:`argv_contract_attempts_export`. Anything else raises
+    :class:`ValueError` before any argv exists.
+    """
+    from .contract_attempt import validate_attempt_id_shape, validate_export_path
+
+    validate_attempt_id_shape(attempt_id)
+    if isinstance(paths, str):
+        raise ValueError("export paths must be a sequence of paths, not a string")
+    members = list(paths)
+    if not 1 <= len(members) <= MAX_EXPORT_MEMBERS:
+        raise ValueError(
+            f"export needs 1 to {MAX_EXPORT_MEMBERS} paths, got {len(members)}"
+        )
+    if len(set(members)) != len(members):
+        raise ValueError("export paths must be distinct")
+    argv = ["attempts", "export", attempt_id]
+    for path in members:
+        validate_export_path(path)
+        argv += ["--path", path]
+    return argv
+
+
 def argv_attempt_history(container_id: str) -> list[str]:
     """Argv for one Attempt log history exec: every attempt summary at once.
 
@@ -2658,6 +2694,32 @@ class DockerGateway:
         :class:`ValueError` before anything is spawned.
         """
         agentctl_argv = argv_contract_attempts_export(attempt_id, path)
+        override = timeout if timeout is not None else self.contract_export_timeout
+        return await self.contract_exec(
+            container_id,
+            agentctl_argv,
+            exec_user=exec_user,
+            operation="attempts-export",
+            timeout=override,
+        )
+
+    async def contract_attempt_export_members(
+        self,
+        container_id: str,
+        exec_user: str,
+        attempt_id: str,
+        paths: Sequence[str],
+        *,
+        timeout: float | None = None,
+    ) -> ControlExec:
+        """Run one ``attempts export <attempt-id> --path <p>...`` tar read.
+
+        Like :meth:`contract_attempt_export` (same bound, same reporting),
+        for up to :data:`MAX_EXPORT_MEMBERS` members in one exec. A bad
+        container ID, exec user, Attempt ID or path list raises
+        :class:`ValueError` before anything is spawned.
+        """
+        agentctl_argv = argv_contract_attempts_export_members(attempt_id, paths)
         override = timeout if timeout is not None else self.contract_export_timeout
         return await self.contract_exec(
             container_id,

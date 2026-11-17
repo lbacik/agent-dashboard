@@ -277,6 +277,15 @@ def _read_event(entry: Any, seq: int) -> LogEvent:
     )
 
 
+def read_log_event(entry: Any, seq: int) -> LogEvent:
+    """One ordered row from a decoded event entry (public for other readers).
+
+    ``entry`` carries ``timestamp``, ``level``, ``event`` and ``detail``
+    like an Attempt log line; never raises (see :func:`_read_event`).
+    """
+    return _read_event(entry, seq)
+
+
 def _counts(payload: dict[str, Any], events: tuple[LogEvent, ...]) -> dict[str, Any]:
     """Validated stream counters, falling back to what was actually parsed."""
 

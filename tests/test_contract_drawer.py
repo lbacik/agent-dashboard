@@ -3,9 +3,11 @@
 Renders the drawer for every pinned ``status`` fixture through replayed
 contract ``status`` answers, plus synthetic variants for the edges the
 package fixtures do not cover (every basis and unit, unknown enums,
-staleness, truncation, native and unknown names). The Activity widget is
-covered too: native phase, last activity and the attempt's events, with
-no Last call pane and no progress link.
+staleness, truncation, native and unknown names). The cockpit keeps the
+legacy module layout (ADR 0017). The Activity widget's snapshot-only
+fallback is covered too (native phase, last activity and the attempt's
+events) for when the Attempt archive cannot be read; the archive-fed Now /
+Last call panes live in ``test_contract_parity``.
 """
 
 from __future__ import annotations
@@ -68,10 +70,32 @@ def _instance(name: str = "web-1", container: str = "abc123") -> ManagedInstance
    )
 
 
-def _replay_client(results: list[dict], *, now: float | None = None) -> TestClient:
-    """A client whose contract instances replay the given results (one cycle)."""
+def _export_failure(attempt_id: str = "#42/1") -> dict:
+    """One failed ``attempts export events.jsonl`` reply (archive unreadable)."""
+    envelope = {
+        "contract": "1.0",
+        "ok": False,
+        "error": {"code": "internal", "message": "archive unavailable", "retryable": False},
+    }
+    return {
+        "argv": ["--contract", "1", "attempts", "export", attempt_id, "--path", "events.jsonl"],
+        "exit_code": 1,
+        "stdout": json.dumps(envelope).encode(),
+        "stderr": b"",
+    }
+
+
+def _replay_client(
+    results: list[dict], *, now: float | None = None, extra: list[dict] | None = None
+) -> TestClient:
+    """A client whose contract instances replay the given results (one cycle).
+
+    ``extra`` recordings answer later execs (e.g. Activity archive reads).
+    """
     at = time.time() if now is None else now
-    runner = ReplayProcessRunner([_recording(result) for result in results])
+    runner = ReplayProcessRunner(
+        [_recording(result) for result in results] + list(extra or [])
+    )
     gateway = DockerGateway(process_runner=runner)
     instances = [
         _instance(f"web-{index}", f"abc{index:03d}") for index in range(len(results))
@@ -417,15 +441,14 @@ def test_drawer_states_headlines_and_modules():
         body = client.get("/instances/web-0").text
         assert headline in body, name
         for module in (
-            "01 // Contract status",
-            "02 // Current attempt",
+            "01 // Control console",
+            "02 // Identity &amp; last attempt",
             "03 // Activity",
-            "04 // Last halt",
-            "05 // Recent events",
+            "04 // Current attempt",
             "05 // Attempt statistics",
+            "06 // Recent events",
         ):
             assert module in body, (name, module)
-        assert "Contract status" in body
         # #181: attempt history and statistics are available on the contract
         # path; only the control console stays unavailable.
         assert "/instances/web-0/history" in body
@@ -434,18 +457,15 @@ def test_drawer_states_headlines_and_modules():
 
 
 def test_contract_cockpit_grid_has_three_columns_in_order():
-    """The contract cockpit shares the three-wrapper grid: DOM order pins
-    the two-track placement (activity spans, events dock under status)."""
+    """The contract cockpit shares the legacy three-column grid: DOM order
+    pins the two-track placement (telemetry spans, history docks under
+    control), and every column sits inside the grid."""
     client = _replay_client([_result("status-active")], now=time.time())
     body = client.get("/instances/web-0").text
     assert 'class="vc-cockpit-grid"' in body
     grid = body.partition('class="vc-cockpit-grid"')[2]
-    assert grid.index('data-col="contract-status"') < grid.index(
-        'data-col="contract-activity"'
-    )
-    assert grid.index('data-col="contract-activity"') < grid.index(
-        'data-col="contract-events"'
-    )
+    assert grid.index('data-col="control"') < grid.index('data-col="telemetry"')
+    assert grid.index('data-col="telemetry"') < grid.index('data-col="history"')
 
 
 def test_drawer_draining_headline_prefers_pending_stop():
@@ -458,7 +478,7 @@ def test_drawer_unknown_state_still_renders():
     result["instance"]["state"] = "warping"
     client = _replay_client([result], now=time.time())
     body = client.get("/instances/web-0").text
-    assert "01 // Contract status" in body
+    assert "02 // Identity &amp; last attempt" in body
     assert "unknown" in body
     assert "/instances/web-0/history" in body
 
@@ -466,11 +486,13 @@ def test_drawer_unknown_state_still_renders():
 def test_drawer_budget_enforced_and_limits():
     client = _replay_client([_result("status-active")], now=time.time())
     body = client.get("/instances/web-0").text
-    assert "1,834,221 tokens" in body
-    assert "412,530 tokens" in body
-    # The backend enforces effective tokens: exactly one enforced tag.
+    # Token figures in the Current attempt layout omit the unit word.
+    assert "1,834,221" in body
+    assert "412,530" in body
+    # The backend enforces effective tokens: Budget used carries the tag.
     assert body.count("enforced-tag") == 1
     assert "Effective tokens" in body
+    assert "Hard ceiling" in body and "2,000,000" in body
     # Every limit shows used against limit, with both bases.
     assert "$3.41" in body and "$20.00" in body
     assert "1,325 s" in body and "7,200 s" in body
@@ -484,7 +506,7 @@ def test_drawer_enforced_none_marks_neither():
     result["current_attempt"]["budget"]["enforced_tokens"] = "none"
     client = _replay_client([result], now=time.time())
     body = client.get("/instances/web-0").text
-    assert "1,834,221 tokens" in body
+    assert "1,834,221" in body
     assert "enforced-tag" not in body
 
 
@@ -502,7 +524,7 @@ def test_drawer_optional_figures_and_unknown_states():
 def test_drawer_assumed_basis_cost_and_native_names():
     client = _replay_client([_result("status-simple-coding-agent")], now=time.time())
     body = client.get("/instances/web-0").text
-    assert "200,000 tokens" in body
+    assert "200,000" in body  # context window, assumed
     assert '<span class="basis">assumed</span>' in body
     assert "$2.15" in body
     assert "native.queue_depth" in body
@@ -519,7 +541,10 @@ def test_drawer_unknown_basis_and_unit_render_unknown():
     }
     client = _replay_client([result], now=time.time())
     body = client.get("/instances/web-0").text
-    assert body.count("figure-unknown") == 2
+    elapsed = body.partition("Elapsed time</dt>")[2].partition("</div>")[0]
+    assert "figure-unknown" in elapsed
+    turns = body.partition("<dt>Turns</dt>")[2].partition("</div>")[0]
+    assert 'continuation <span class="figure figure-unknown"' in turns
     assert "forthcoming" not in body
     assert "fortnights" not in body
 
@@ -611,7 +636,11 @@ def test_drawer_active_loads_contract_activity():
 
 
 def test_activity_shows_phase_last_activity_and_attempt_events():
-    client = _replay_client([_result("status-active")], now=time.time())
+    client = _replay_client(
+        [_result("status-active")],
+        now=time.time(),
+        extra=[_export_failure(), _export_failure()],
+    )
     body = client.get("/instances/web-0/activity").text
     assert body is not None
     assert "run_step" in body
@@ -619,7 +648,9 @@ def test_activity_shows_phase_last_activity_and_attempt_events():
     assert "2026-11-06T09:11:58Z" in body
     assert "claim_opened" in body
     assert "claimed issue #42" in body
-    # No Attempt-log views: no Last call pane, no log or progress links.
+    # The archive was unreadable: the fallback says why, with no panes.
+    assert "Tool calls unavailable" in body
+    assert "archive unavailable" in body
     assert "Last call" not in body
     assert "call log" not in body
     assert "response log" not in body
@@ -627,7 +658,11 @@ def test_activity_shows_phase_last_activity_and_attempt_events():
 
 
 def test_activity_summary_names_phase():
-    client = _replay_client([_result("status-active")], now=time.time())
+    client = _replay_client(
+        [_result("status-active")],
+        now=time.time(),
+        extra=[_export_failure(), _export_failure()],
+    )
     body = client.get("/instances/web-0/activity").text
     assert 'hx-swap-oob="true"' in body
     assert "<strong>run_step</strong>" in body
@@ -659,7 +694,9 @@ def test_activity_attempt_scoped_events_only():
             "text": "archive sealed for #41/1",
         },
     ]
-    client = _replay_client([result], now=time.time())
+    client = _replay_client(
+        [result], now=time.time(), extra=[_export_failure(), _export_failure()]
+    )
     body = client.get("/instances/web-0/activity").text
     assert "claimed issue #42" in body
     assert "archive sealed" not in body

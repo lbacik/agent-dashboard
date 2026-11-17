@@ -127,6 +127,89 @@ class OptionalFigureView:
     figure: FigureView = field(default_factory=FigureView)
 
 
+#: ``native.*`` figure names the Current attempt layout reads in the
+#: telemetry v1 places (simple-coding-agent's names, ADR 0017). A backend
+#: without them shows those rows as unknown; nothing is invented.
+NATIVE_SOFT_THRESHOLD = "native.soft_threshold_tokens"
+NATIVE_AUTO_COMPACT = "native.auto_compact_threshold"
+NATIVE_COMPACTIONS = "native.compactions"
+NATIVE_CONTINUATION_MAX = "native.continuation_max"
+NATIVE_TOKEN_CATEGORIES = (
+    "native.input_tokens",
+    "native.cache_read_input_tokens",
+    "native.cache_creation_input_tokens",
+    "native.output_tokens",
+)
+
+#: Optional figures the Current attempt layout shows in a named row; every
+#: other reported figure is listed under "Other figures".
+_GAUGE_FIGURES = frozenset(
+    {
+        "turns",
+        "continuations",
+        "cache_hit_rate",
+        "context_used",
+        "context_peak",
+        "context_window",
+        NATIVE_SOFT_THRESHOLD,
+        NATIVE_AUTO_COMPACT,
+        NATIVE_COMPACTIONS,
+        NATIVE_CONTINUATION_MAX,
+        *NATIVE_TOKEN_CATEGORIES,
+    }
+)
+
+
+@dataclass(frozen=True)
+class AttemptGauge:
+    """The current attempt in the cockpit's Current attempt layout.
+
+    The same rows, bar and matrix cells the telemetry v1 path shows
+    (``DrawerDetail``/``SnapshotDetail``), read from the Status Snapshot
+    budget and figures, so a contract instance looks like a legacy one
+    (ADR 0017). Token figures omit the unit word (the row names the
+    quantity); every other figure keeps its unit. Rows the snapshot cannot
+    fill read ``unknown``; nothing is derived that the backend did not
+    report.
+    """
+
+    enforced: str = UNKNOWN
+    budget_used: FigureView = field(default_factory=FigureView)
+    raw: FigureView = field(default_factory=FigureView)
+    effective: FigureView = field(default_factory=FigureView)
+    hard_ceiling: FigureView = field(default_factory=FigureView)
+    soft_threshold: FigureView = field(default_factory=FigureView)
+    soft_crossed: bool | None = None
+    budget_used_pct: float | None = None
+    budget_soft_pct: float | None = None
+    budget_has_bar: bool = False
+    budget_has_tick: bool = False
+    budget_hatched: bool = False
+    turns: FigureView = field(default_factory=FigureView)
+    turns_max: FigureView = field(default_factory=FigureView)
+    continuation_index: FigureView = field(default_factory=FigureView)
+    continuation_max: FigureView = field(default_factory=FigureView)
+    cache_hit: FigureView = field(default_factory=FigureView)
+    ctx_main: FigureView = field(default_factory=FigureView)
+    ctx_window: FigureView = field(default_factory=FigureView)
+    ctx_peak: FigureView = field(default_factory=FigureView)
+    ctx_auto_compact: FigureView = field(default_factory=FigureView)
+    compactions: FigureView = field(default_factory=FigureView)
+    # Enforced limits other than the enforced token budget and turns.
+    other_limits: tuple[BudgetLimitView, ...] = ()
+    tokens: tuple[OptionalFigureView, ...] = ()
+    other_figures: tuple[OptionalFigureView, ...] = ()
+    # Fleet matrix cells (legacy ``SnapshotDetail`` shapes).
+    budget_text: str = UNAVAILABLE
+    budget_basis: str = ""
+    context_text: str = UNAVAILABLE
+    context_basis: str = ""
+    turns_text: str = UNAVAILABLE
+    turns_basis: str = ""
+    cache_text: str = UNAVAILABLE
+    cache_basis: str = ""
+
+
 @dataclass(frozen=True)
 class SectionFreshness:
     """One section's ``observed_at`` age and whether it reads as stale."""
@@ -149,6 +232,7 @@ class AttemptView:
     freshness: SectionFreshness = field(default_factory=SectionFreshness)
     budget: BudgetView = field(default_factory=BudgetView)
     figures: tuple[OptionalFigureView, ...] = ()
+    gauge: AttemptGauge = field(default_factory=AttemptGauge)
     events: tuple[ContractEventView, ...] = ()
     events_total: int = 0
 
@@ -767,6 +851,162 @@ def _read_budget(
     )
 
 
+def _gauge_view(fig: Any) -> FigureView:
+    """A figure for the Current attempt layout: tokens without the unit word."""
+    view = figure_view(fig)
+    if view.state == "value" and view.unit == "tokens":
+        return FigureView(
+            view.text.removesuffix(" tokens"), view.basis, view.unit, view.state, view.reason
+        )
+    return view
+
+
+def _fig_number(fig: Any) -> int | float | None:
+    """The numeric value of a usable figure (a known basis and unit), else none."""
+    if figure_view(fig).state != "value":
+        return None
+    return fig.value
+
+
+def _pct(part: int | float, whole: int | float) -> float:
+    return round(min(100.0, max(0.0, part / whole * 100.0)), 1)
+
+
+def _cell(view: FigureView) -> tuple[str, str]:
+    """One fleet-matrix cell: the bare text and its basis (``""`` when none)."""
+    if view.state != "value":
+        return UNAVAILABLE, ""
+    return view.text, view.basis
+
+
+def read_attempt_gauge(
+    budget: contract_status_lib.Budget, figures: dict[str, Any]
+) -> AttemptGauge:
+    """Read one current attempt into the cockpit's Current attempt layout.
+
+    The bar fills the enforced token budget (``raw_tokens`` or
+    ``effective_tokens`` limit) against its ceiling, with the soft
+    threshold tick from ``native.soft_threshold_tokens`` when reported; it
+    is hatched when the used figure is estimated. Never raises.
+    """
+    enforced = budget.enforced_tokens
+    if enforced not in ("raw", "effective", "none"):
+        enforced = UNKNOWN
+    token_limit_name = {"raw": "raw_tokens", "effective": "effective_tokens"}.get(enforced)
+    token_limit = None
+    turns_limit = None
+    other_limits: list[BudgetLimitView] = []
+    for entry in budget.limits:
+        name = entry.name if isinstance(entry.name, str) and entry.name else UNKNOWN
+        if token_limit_name is not None and name == token_limit_name and token_limit is None:
+            token_limit = entry
+        elif name == "turns" and turns_limit is None:
+            turns_limit = entry
+        else:
+            other_limits.append(
+                BudgetLimitView(
+                    name=name,
+                    is_native=_is_native_name(name),
+                    used=figure_view(entry.used),
+                    limit=figure_view(entry.limit),
+                )
+            )
+
+    if token_limit is not None:
+        used_fig = token_limit.used
+        hard_fig = token_limit.limit
+    else:
+        used_fig = {"raw": budget.raw_tokens, "effective": budget.effective_tokens}.get(
+            enforced
+        )
+        hard_fig = None
+    soft_fig = figures.get(NATIVE_SOFT_THRESHOLD)
+
+    used_value = _fig_number(used_fig)
+    hard_value = _fig_number(hard_fig)
+    soft_value = _fig_number(soft_fig)
+    used_pct = soft_pct = None
+    has_bar = has_tick = False
+    if used_value is not None and hard_value is not None and hard_value > 0:
+        used_pct = _pct(used_value, hard_value)
+        has_bar = True
+        if soft_value is not None and soft_value > 0:
+            soft_pct = _pct(soft_value, hard_value)
+            has_tick = True
+    soft_crossed = (
+        used_value >= soft_value
+        if used_value is not None and soft_value is not None and soft_value > 0
+        else None
+    )
+    used_view = _gauge_view(used_fig)
+    hatched = used_view.state == "value" and used_view.basis == "estimated"
+
+    turns_fig = turns_limit.used if turns_limit is not None else figures.get("turns")
+    turns_view = _gauge_view(turns_fig)
+    turns_max = _gauge_view(turns_limit.limit if turns_limit is not None else None)
+    cache_view = _gauge_view(figures.get("cache_hit_rate"))
+    ctx_main = _gauge_view(figures.get("context_used"))
+
+    if has_bar:
+        hard_view = _gauge_view(hard_fig)
+        budget_text = f"{used_view.text} / {hard_view.text}"
+        budget_basis = used_view.basis
+    else:
+        budget_text, budget_basis = _cell(used_view)
+    context_text, context_basis = _cell(ctx_main)
+    turns_text, turns_basis = _cell(turns_view)
+    cache_text, cache_basis = _cell(cache_view)
+
+    tokens = tuple(
+        OptionalFigureView(
+            name=name,
+            label=name.removeprefix("native."),
+            is_native=True,
+            figure=_gauge_view(figures[name]),
+        )
+        for name in NATIVE_TOKEN_CATEGORIES
+        if name in figures
+    )
+    other_figures = tuple(
+        row for row in _optional_figures(figures) if row.name not in _GAUGE_FIGURES
+    )
+    return AttemptGauge(
+        enforced=enforced,
+        budget_used=used_view,
+        raw=_gauge_view(budget.raw_tokens),
+        effective=_gauge_view(budget.effective_tokens),
+        hard_ceiling=_gauge_view(hard_fig),
+        soft_threshold=_gauge_view(soft_fig) if soft_fig is not None else FigureView(),
+        soft_crossed=soft_crossed,
+        budget_used_pct=used_pct,
+        budget_soft_pct=soft_pct,
+        budget_has_bar=has_bar,
+        budget_has_tick=has_tick,
+        budget_hatched=hatched,
+        turns=turns_view,
+        turns_max=turns_max,
+        continuation_index=_gauge_view(figures.get("continuations")),
+        continuation_max=_gauge_view(figures.get(NATIVE_CONTINUATION_MAX)),
+        cache_hit=cache_view,
+        ctx_main=ctx_main,
+        ctx_window=_gauge_view(figures.get("context_window")),
+        ctx_peak=_gauge_view(figures.get("context_peak")),
+        ctx_auto_compact=_gauge_view(figures.get(NATIVE_AUTO_COMPACT)),
+        compactions=_gauge_view(figures.get(NATIVE_COMPACTIONS)),
+        other_limits=tuple(other_limits),
+        tokens=tokens,
+        other_figures=other_figures,
+        budget_text=budget_text,
+        budget_basis=budget_basis,
+        context_text=context_text,
+        context_basis=context_basis,
+        turns_text=turns_text,
+        turns_basis=turns_basis,
+        cache_text=cache_text,
+        cache_basis=cache_basis,
+    )
+
+
 def read_contract_snapshot(
     result: Any, *, now: float | None = None, poll_interval: float = 5.0
 ) -> ContractDetail | None:
@@ -821,6 +1061,7 @@ def read_contract_snapshot(
             freshness=_fresh(current.observed_at),
             budget=_read_budget(current.budget),
             figures=_optional_figures(dict(current.figures)),
+            gauge=read_attempt_gauge(current.budget, dict(current.figures)),
             events=attempt_events,
             events_total=attempt_total,
         )
