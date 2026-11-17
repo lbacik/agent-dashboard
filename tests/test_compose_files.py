@@ -108,6 +108,20 @@ def test_base_keeps_state_on_a_named_volume(tmp_path):
     assert service["environment"]["XDG_STATE_HOME"] == "/state"
 
 
+def assert_cache_volume(config, service):
+    mounts = [
+        (m["type"], m["source"], m["target"]) for m in service.get("volumes", [])
+    ]
+    assert ("volume", "cache", "/cache") in mounts
+    assert "cache" in config["volumes"]
+    assert service["environment"]["XDG_CACHE_HOME"] == "/cache"
+
+
+def test_base_keeps_cache_on_a_named_volume(tmp_path):
+    config, service = resolved_service(tmp_path, BASE)
+    assert_cache_volume(config, service)
+
+
 def test_base_is_hardened(tmp_path):
     _, service = resolved_service(tmp_path, BASE)
     assert service["read_only"] is True
@@ -166,6 +180,11 @@ def test_overlay_turns_lan_mode_on_for_the_proxy(tmp_path):
     assert service["read_only"] is True
 
 
+def test_overlay_keeps_the_cache_volume(tmp_path):
+    config, service = resolved_service(tmp_path, BASE, LAN, env=LAN_ENV)
+    assert_cache_volume(config, service)
+
+
 def test_overlay_joins_the_external_proxy_network(tmp_path):
     config, service = resolved_service(tmp_path, BASE, LAN, env=LAN_ENV)
     assert set(service["networks"]) == {"default", "proxy"}
@@ -202,6 +221,61 @@ def test_dockerfile_creates_state_owned_by_appuser_before_dropping_root():
     before = "\n".join(lines[:user_line])
     assert "mkdir -p /state" in before
     assert "chown appuser:appuser /state" in before
+
+
+def dockerfile_stages() -> list[str]:
+    """One entry per build stage; the comment prelude is not a stage."""
+    stages: list[str] = []
+    current: list[str] | None = None
+    for line in DOCKERFILE.read_text().splitlines():
+        if line.strip().upper().startswith("FROM "):
+            if current is not None:
+                stages.append("\n".join(current))
+            current = [line]
+        elif current is not None:
+            current.append(line)
+    if current is not None:
+        stages.append("\n".join(current))
+    return stages
+
+
+def test_dockerfile_builds_the_venv_in_a_builder_stage():
+    stages = dockerfile_stages()
+    assert len(stages) >= 2
+    assert "AS builder" in stages[0]
+    assert "uv sync --locked --no-dev" in stages[0]
+
+
+def test_dockerfile_installs_git_only_in_the_builder_stage():
+    stages = dockerfile_stages()
+    assert "git" in stages[0]
+    runtime = "\n".join(stages[1:]).lower()
+    assert "git" not in runtime
+
+
+def test_dockerfile_stages_share_the_python_base_and_venv_path():
+    stages = dockerfile_stages()
+    assert len(stages) >= 2
+    for stage in stages[:2]:
+        first = next(
+            line.strip() for line in stage.splitlines() if line.strip()
+        )
+        assert first.startswith("FROM python:${PYTHON_VERSION}-slim"), first
+    assert "WORKDIR /app" in stages[0]
+    assert "WORKDIR /app" in stages[1]
+    assert "COPY --from=builder" in stages[1]
+    assert "/app" in stages[1].split("COPY --from=builder", 1)[1].split("\n")[0]
+
+
+def test_dockerfile_creates_cache_owned_by_appuser_before_dropping_root():
+    lines = [line.strip() for line in DOCKERFILE.read_text().splitlines()]
+    user_line = lines.index("USER appuser")
+    before = "\n".join(lines[:user_line])
+    assert "mkdir -p /state /cache" in before or "mkdir -p /cache" in before
+    assert "chown appuser:appuser /state /cache" in before or (
+        "chown appuser:appuser /cache" in before
+    )
+    assert "chmod 0700 /state /cache" in before or "chmod 0700 /cache" in before
 
 
 def test_dockerfile_does_not_buffer_stdout():

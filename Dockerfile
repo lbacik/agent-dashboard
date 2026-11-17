@@ -3,7 +3,26 @@
 # same host (ADR 0012). See docker-compose.yml.
 # Multi-arch: TARGETARCH selects the Docker static client binary (amd64/arm64).
 ARG PYTHON_VERSION=3.13
-FROM python:${PYTHON_VERSION}-slim AS base
+FROM python:${PYTHON_VERSION}-slim AS builder
+
+# Builder stage: resolves and installs the application venv. uv.lock pins an
+# agent-operator-contract release as a git dependency (ADR 0014), so fetching
+# it needs git alongside the TLS certificates. Nothing from this stage ships
+# in the final image except /app below.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+WORKDIR /app
+
+# Dependency layer first for build caching. uv.lock pins every version;
+# `uv sync --locked` fails loudly when pyproject.toml and uv.lock drift.
+COPY pyproject.toml uv.lock README.md ./
+COPY src ./src
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && uv sync --locked --no-dev
+
+ARG PYTHON_VERSION=3.13
+FROM python:${PYTHON_VERSION}-slim AS runtime
 
 ARG DOCKER_VERSION=28.3.0
 ARG TARGETARCH
@@ -28,20 +47,18 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Dependency layer first for build caching. uv.lock pins every version;
-# `uv sync --locked` fails loudly when pyproject.toml and uv.lock drift.
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-COPY pyproject.toml uv.lock README.md ./
-COPY src ./src
-RUN uv sync --locked --no-dev \
-    && chown -R appuser:appuser /app
+# The venv stays at the same path it was built at, so its interpreter paths
+# and console scripts stay valid. Sources travel with it: the project is
+# installed editable, pointing back at /app/src.
+COPY --from=builder --chown=appuser:appuser /app /app
 
-# State directory (Control audit, Operator account store), the compose
-# `state` volume's mount point. A fresh named volume copies this owner, so
-# appuser can write to it although the root filesystem is read-only.
-RUN mkdir -p /state \
-    && chown appuser:appuser /state \
-    && chmod 0700 /state
+# State directory (Control audit, Operator account store) and Sealed Attempt
+# Archive cache directory: the compose `state` and `cache` volumes' mount
+# points. A fresh named volume copies this owner, so appuser can write to
+# them although the root filesystem is read-only.
+RUN mkdir -p /state /cache \
+    && chown appuser:appuser /state /cache \
+    && chmod 0700 /state /cache
 
 ENV PATH="/app/.venv/bin:${PATH}"
 # Unbuffered stdout: startup lines reach `docker logs` when they are written.

@@ -28,11 +28,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # Control audit and Operator account store (XDG_STATE_HOME below).
       - state:/state
+      # Sealed Attempt Archive cache (XDG_CACHE_HOME below, ADR 0016).
+      - cache:/cache
     # Socket access for the non-root appuser: the host's `docker` group GID
     # differs per machine, so it comes from .env (see .env.example).
     group_add:
       - "${DOCKER_GID:-999}"
-    # Hardening: nothing outside /state and /tmp is writable, no Linux
+    # Hardening: nothing outside /state, /cache and /tmp is writable, no Linux
     # capabilities, no privilege gain through setuid binaries.
     read_only: true
     tmpfs:
@@ -49,6 +51,7 @@ services:
       AGENT_DASHBOARD_ALLOW_NON_LOOPBACK: "1"
       AGENT_DASHBOARD_PORT: "8000"
       XDG_STATE_HOME: /state
+      XDG_CACHE_HOME: /cache
       AGENT_DASHBOARD_ALLOWED_HOSTS: "${AGENT_DASHBOARD_ALLOWED_HOSTS:-}"
       AGENT_DASHBOARD_DISABLE_HOST_GUARD: "${AGENT_DASHBOARD_DISABLE_HOST_GUARD:-}"
       AGENT_DASHBOARD_POLL_INTERVAL: "${AGENT_DASHBOARD_POLL_INTERVAL:-}"
@@ -64,3 +67,4 @@ services:
 
 volumes:
   state:
+  cache:

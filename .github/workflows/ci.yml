@@ -24,6 +24,29 @@ jobs:
       - name: Test
         run: uv run pytest
 
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bring up the container stack
+        run: |
+          cp .env.example .env
+          GID="$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock alpine stat -c %g /var/run/docker.sock)"
+          echo "Docker socket GID: ${GID}"
+          DOCKER_GID="${GID}" docker compose up -d --build --wait
+      - name: Check the health endpoint
+        run: curl -fsS http://127.0.0.1:8000/healthz
+      - name: Check the sealed archive cache directory
+        run: |
+          docker compose exec -T dashboard python -B -c "import os; assert os.environ.get('XDG_CACHE_HOME') == '/cache', os.environ.get('XDG_CACHE_HOME')"
+          docker compose exec -T dashboard sh -c 'test -d /cache && test "$(stat -c "%U %a" /cache)" = "appuser 700"'
+      - name: Show compose logs on failure
+        if: failure()
+        run: docker compose logs
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
   version-tag:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
