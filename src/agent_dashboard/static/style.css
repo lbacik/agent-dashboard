@@ -933,8 +933,17 @@ dl.facts dd { margin: 0; }
 .drawer dl.facts dt .sub-kind { display: block; font-size: 0.78rem; }
 
 /* Instance cockpit grid: Control & Identity, live telemetry and 90-day
-   statistics sit side by side above 1360px; below that the columns wrap
-   (two, then one below 960px) with no horizontal page overflow. */
+   statistics sit side by side above 1360px. Between 1050px and 1360px the
+   grid has two tracks: the telemetry column spans both rows on the right
+   while the history column sits directly under the control column on the
+   left (grid-template-rows: auto 1fr keeps the spanning column's extra
+   height in row 2, so 05 starts right under 02 with the normal grid gap).
+   Below 1050px the cockpit is one column in module order 01 to 06. The
+   two-column range starts where the drawer (viewport minus the 280px rail
+   and gaps, about 1035px for two 22rem columns) still fits two 22rem
+   columns, rounded up to 1050px for scrollbar safety; narrower viewports
+   stay single-column. Columns keep min-width 0 with no horizontal page
+   overflow. */
 .vc-cockpit-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -945,10 +954,17 @@ dl.facts dd { margin: 0; }
 .vc-cockpit-col { min-width: 0; display: flex; flex-direction: column; gap: 0.75rem; }
 .vc-cockpit-col > [id^="activity-"] { min-width: 0; }
 @media (max-width: 1360px) {
-  .vc-cockpit-grid { grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); }
+  .vc-cockpit-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto 1fr;
+  }
+  .vc-cockpit-grid > .vc-cockpit-col:nth-child(2) { grid-column: 2; grid-row: 1 / span 2; }
+  .vc-cockpit-grid > .vc-cockpit-col:nth-child(3) { grid-column: 1; grid-row: 2; }
 }
-@media (max-width: 960px) {
-  .vc-cockpit-grid { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 1049px) {
+  .vc-cockpit-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
+  .vc-cockpit-grid > .vc-cockpit-col:nth-child(2),
+  .vc-cockpit-grid > .vc-cockpit-col:nth-child(3) { grid-column: auto; grid-row: auto; }
 }
 
 ul.events { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }

@@ -13,11 +13,14 @@
    headline, history/live links and the dismiss controls; below it the
    `.vc-cockpit-grid` lays out three columns of numbered modules (prototype
    variant C): 01 Control console and 02 Identity & last attempt; 03 Activity
-   and 04 Current attempt; 05 Attempt statistics and 06 Recent events. Each
-   module is a `.vc-module` card with a mono `.vc-module-bar` title (see
-   style.css breakpoints). Every module renders in every state, so a number
-   always names the same module (03 Activity is a placeholder without a
-   current attempt). #}
+   and 04 Current attempt; 05 Attempt statistics and 06 Recent events. Above
+   1360px the three columns sit side by side; with two tracks (1050-1360px)
+   the telemetry column spans both rows on the right while the history column
+   sits directly under the control column on the left; below 1050px the
+   cockpit is one column in module order 01 to 06 (see style.css). Each
+   module is a `.vc-module` card with a mono `.vc-module-bar` title. Every
+   module renders in every state, so a number always names the same module
+   (03 Activity is a placeholder without a current attempt). #}
 {% macro fig(f) -%}
 <span class="figure">{{ f.text }}{% if f.basis and f.basis != f.text %} <span class="basis">{{ f.basis }}</span>{% endif %}</span>
 {%- endmacro %}

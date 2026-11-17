@@ -448,9 +448,19 @@ def test_cockpit_grid_style_rules():
     css = client.get("/static/style.css").text
     assert "repeat(3, minmax(0, 1fr))" in css
     assert "1360px" in css
-    assert "960px" in css
-    assert "repeat(auto-fit, minmax(22rem, 1fr))" in css
+    assert "1049px" in css
+    # The cockpit no longer relies on auto-fit: two explicit tracks.
+    assert "repeat(auto-fit, minmax(22rem, 1fr))" not in css
+    assert "repeat(2, minmax(0, 1fr))" in css
     assert "vc-cockpit-grid" in css
+    # Two-track placement: the telemetry column spans both rows on the
+    # right, the history column sits under the control column, and the
+    # spanning column's extra height goes to row 2.
+    assert "grid-template-rows: auto 1fr" in css
+    assert "grid-row: 1 / span 2" in css
+    assert "grid-column: 2" in css
+    assert "grid-column: 1" in css
+    assert "grid-row: 2" in css
     # Columns shrink instead of pushing the page sideways.
     assert "minmax(0, 1fr)" in css
     assert ".vc-cockpit-col { min-width: 0;" in css
