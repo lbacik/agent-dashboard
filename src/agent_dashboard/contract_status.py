@@ -219,6 +219,14 @@ class ContractDetail:
     last_halt_at: str | None = None
     pending_stop: bool = False
     stop_plan_remaining: int | None = None
+    stop_plan_counted: int | None = None
+    stop_plan_request_id: str | None = None
+    priority_issue: int | None = None
+    priority_request_id: str | None = None
+    # Operator Capabilities from ``identity.capabilities`` in the latest good
+    # snapshot: ``stop-after`` offers ``stop --after``, ``next-issue`` offers
+    # ``next issue`` and ``operator-handoff`` offers ``handoff now``.
+    capabilities: tuple[str, ...] = ()
     current_issue: int | None = None
     current_phase: str | None = None
     last_finished_issue: int | None = None
@@ -407,6 +415,48 @@ def contract_timeline_summary(
     return f"{len(items)} commands · latest {head} ({ack})"
 
 
+def _contract_follow_progress(
+    *, action: str, request_id: str, stop_plan: Any, priority: Any
+) -> str | None:
+    """The progress line for a tracked contract command (spec: contract path).
+
+    From the intake section whose ``request_id`` matches the card's: the
+    stop plan reads ``"<remaining> left and <counted> counted"`` and the
+    priority reads ``"issue #<n> pending"``. A section without a
+    ``request_id`` field never matches (newer agents always stamp one); a
+    mismatched ID or a missing section means no progress line.
+    """
+    if action == "stop_after":
+        section = stop_plan
+    elif action == "next_issue":
+        section = priority
+    else:
+        return None
+    if section is None:
+        return None
+    if isinstance(section, dict):
+        entry = dict(section)
+    else:
+        entry = {
+            key: getattr(section, key, None)
+            for key in ("request_id", "remaining", "counted", "issue")
+        }
+    if entry.get("request_id") != request_id:
+        return None
+    if action == "stop_after":
+        remaining = entry.get("remaining")
+        if isinstance(remaining, bool) or not isinstance(remaining, int):
+            return None
+        counted = entry.get("counted")
+        if isinstance(counted, bool) or not isinstance(counted, int):
+            return f"{remaining} left"
+        return f"{remaining} left and {counted} counted"
+    number = entry.get("issue")
+    if isinstance(number, bool) or not isinstance(number, int):
+        return None
+    return f"issue #{number} pending"
+
+
 def follow_contract_command(
     *,
     action: str,
@@ -417,21 +467,26 @@ def follow_contract_command(
     reach: str,
     row_container_id: str | None,
     row_exists: bool,
+    stop_plan: Any = None,
+    priority: Any = None,
 ) -> Any:
     """Locate one accepted contract command in the latest good snapshot (pure).
 
-    Reads only the snapshot's ``recent_commands`` and the row's Reach and
-    container ID: never Docker, never the Control audit. The outcome set
-    mirrors :func:`control.follow_command` (``following``, ``terminal``,
-    ``paused``, ``waiting``, ``evicted``, ``gone``); the terminal set is
-    :data:`CONTRACT_TERMINAL_ACKS`. The ``action`` argument is accepted for
-    call-shape parity with the legacy path and is otherwise unused: a
-    contract snapshot has no per-action progress section.
+    Reads only the snapshot's ``recent_commands`` and intake sections plus
+    the row's Reach and container ID: never Docker, never the Control audit.
+    The outcome set mirrors :func:`control.follow_command` (``following``,
+    ``terminal``, ``paused``, ``waiting``, ``evicted``, ``gone``); the
+    terminal set is :data:`CONTRACT_TERMINAL_ACKS`. ``stop_plan`` and
+    ``priority`` are the intake sections (mappings or parsed records) that
+    feed the following cards' progress lines when their ``request_id``
+    matches the card's.
     """
     from .control import EVICTED_BODY as LEGACY_EVICTED_BODY
     from .control import GONE_BODY, REACH_REASONS, WAITING_BODY, FollowResult
 
-    _ = action
+    progress = _contract_follow_progress(
+        action=action, request_id=request_id, stop_plan=stop_plan, priority=priority
+    )
     if not row_exists or row_container_id != card_container_id:
         return FollowResult(
             outcome="gone",
@@ -445,13 +500,15 @@ def follow_contract_command(
     if reach != "live":
         reason = REACH_REASONS.get(reach, f"the snapshot is {reach}")
         body = record.detail if record is not None and record.detail else WAITING_BODY
+        paused = f"following paused: {reason}"
+        paused_progress = paused if progress is None else f"{progress} · {paused}"
         return FollowResult(
             outcome="paused",
             acknowledgement=record.acknowledgement if record is not None else None,
             title="Accepted",
             tone="info",
             body=body,
-            progress=f"following paused: {reason}",
+            progress=paused_progress,
             following=True,
         )
     if record is not None:
@@ -485,7 +542,7 @@ def follow_contract_command(
             title="Accepted",
             tone="info",
             body=body,
-            progress=None,
+            progress=progress,
             following=True,
         )
     sequences = [entry.sequence for entry in records if entry.sequence is not None]
@@ -768,6 +825,32 @@ def read_contract_snapshot(
             events_total=attempt_total,
         )
 
+    raw_capabilities = getattr(snapshot.identity, "capabilities", ())
+    if isinstance(raw_capabilities, (list, tuple)):
+        capabilities = tuple(
+            cap for cap in raw_capabilities if isinstance(cap, str) and cap
+        )
+    else:
+        capabilities = ()
+
+    stop_plan = snapshot.intake.stop_plan
+    if stop_plan is not None:
+        stop_plan_remaining = stop_plan.remaining
+        stop_plan_counted = stop_plan.counted
+        stop_plan_request_id = stop_plan.request_id
+    else:
+        stop_plan_remaining = None
+        stop_plan_counted = None
+        stop_plan_request_id = None
+
+    intake_priority = snapshot.intake.priority
+    if intake_priority is not None:
+        priority_issue = intake_priority.issue
+        priority_request_id = intake_priority.request_id
+    else:
+        priority_issue = None
+        priority_request_id = None
+
     halt_view: HaltView | None = None
     if halt is not None:
         halt_view = HaltView(reason=halt.reason, detail=halt.detail, at=halt.at)
@@ -816,11 +899,12 @@ def read_contract_snapshot(
         last_halt_detail=halt.detail if halt is not None else None,
         last_halt_at=halt.at if halt is not None else None,
         pending_stop=snapshot.intake.pending_stop is not None,
-        stop_plan_remaining=(
-            snapshot.intake.stop_plan.remaining
-            if snapshot.intake.stop_plan is not None
-            else None
-        ),
+        stop_plan_remaining=stop_plan_remaining,
+        stop_plan_counted=stop_plan_counted,
+        stop_plan_request_id=stop_plan_request_id,
+        priority_issue=priority_issue,
+        priority_request_id=priority_request_id,
+        capabilities=capabilities,
         current_issue=current.issue_number if current is not None else None,
         current_phase=current.native_phase if current is not None else None,
         last_finished_issue=last.issue_number if last is not None else None,

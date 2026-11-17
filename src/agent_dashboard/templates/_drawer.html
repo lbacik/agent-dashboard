@@ -97,7 +97,8 @@
       {% if c is not none and c.instance_state == "starting" and c.startup_check %}<div><dt>Startup check</dt><dd>{{ c.startup_check }}</dd></div>{% endif %}
       <div><dt>Intake state</dt><dd>{{ c.intake_state if c is not none and c.intake_state else "unavailable" }}</dd></div>
       {% if c is not none and c.pending_stop %}<div><dt>Stop</dt><dd>requested</dd></div>{% endif %}
-      {% if c is not none and c.stop_plan_remaining is not none %}<div><dt>Stop plan</dt><dd>{{ c.stop_plan_remaining }} remaining</dd></div>{% endif %}
+      {% if c is not none and c.stop_plan_remaining is not none %}<div><dt>Stop plan</dt><dd>{{ c.stop_plan_remaining }} remaining{% if c.stop_plan_counted is not none %} ({{ c.stop_plan_counted }} counted){% endif %}</dd></div>{% endif %}
+      {% if c is not none and c.priority_issue is not none %}<div><dt>Priority</dt><dd>#{{ c.priority_issue }}</dd></div>{% endif %}
       {% if c is not none and c.instance_observed is not none %}<div><dt>Instance observed</dt><dd>{{ c.instance_observed.age_text }}{% if c.instance_observed.stale %} <span class="stale-tag">stale</span>{% endif %}</dd></div>{% endif %}
       {% if c is not none and c.intake_observed is not none %}<div><dt>Intake observed</dt><dd>{{ c.intake_observed.age_text }}{% if c.intake_observed.stale %} <span class="stale-tag">stale</span>{% endif %}</dd></div>{% endif %}
     </dl>

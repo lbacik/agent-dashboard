@@ -196,16 +196,27 @@ def control_slug(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9-]", "-", name)
 
 
-#: Control actions the dashboard offers on live contract instances: the
-#: core mutations (spec "Control actions (contract path)"). Legacy-only
-#: actions (``stop_after``, ``handoff``, ``next_issue``) stay on the legacy
-#: path; the legacy minimum-version table does not apply.
-CONTRACT_ACTION_ORDER = ("stop", "resume")
+#: Control actions the dashboard offers on live contract instances, in
+#: composer order (spec "Control actions (contract path)"): the two core
+#: mutations plus the capability-gated ones. Recovery (``recovery_retry``,
+#: ``recovery_release``) and ``errors_reset`` are never offered.
+CONTRACT_ACTION_ORDER = ("stop", "stop_after", "resume", "handoff", "next_issue")
 
-#: Exact ``agentctl`` preview per contract action (no parameters).
+#: Exact ``agentctl`` preview per contract action (``N`` / ``<n>`` filled live).
 CONTRACT_ACTION_COMMANDS = {
     "stop": "stop",
+    "stop_after": "stop --after N",
     "resume": "resume",
+    "handoff": "handoff now",
+    "next_issue": "next issue <n>",
+}
+
+#: The Operator Capability each gated contract action needs in
+#: ``identity.capabilities``; core actions (``stop``, ``resume``) need none.
+CONTRACT_CAPABILITY_FOR_ACTION = {
+    "stop_after": "stop-after",
+    "next_issue": "next-issue",
+    "handoff": "operator-handoff",
 }
 
 
@@ -213,15 +224,20 @@ def contract_availability(
     *,
     reach: str,
     mode: ControlMode | None = None,
+    capabilities: Any = None,
 ) -> ControlAvailability:
     """Build the console view model for one live contract instance.
 
     The dashboard-wide control mode and request protection still apply;
-    Reach gates the composer like the legacy path. On a live instance both
-    core mutations are enabled with no repository or version precondition:
-    the target binding (container ID plus Target Repository, ADR 0006)
-    is checked server-side at submit time, and the agent remains the
-    authority for anything the snapshot does not say.
+    Reach gates the composer like the legacy path. On a live instance the
+    two core mutations are always offered, and each gated action only when
+    the latest good snapshot advertises its capability in
+    ``identity.capabilities``: ``stop-after`` offers ``stop --after``,
+    ``next-issue`` offers ``next issue`` and ``operator-handoff`` offers
+    ``handoff now``. Unadvertised actions are hidden, never inferred from
+    the backend name or image. The target binding (container ID plus Target
+    Repository, ADR 0006) is checked server-side at submit time, and the
+    agent remains the authority for anything the snapshot does not say.
     """
     active_mode = mode if mode is not None else ControlMode(available=True)
     if not active_mode.available:
@@ -230,6 +246,12 @@ def contract_availability(
         return ControlAvailability(
             unavailable=REACH_REASONS.get(reach, f"the snapshot is {reach}")
         )
+    if isinstance(capabilities, str):
+        advertised: set[str] = set()
+    elif isinstance(capabilities, (list, tuple, set, frozenset)):
+        advertised = {cap for cap in capabilities if isinstance(cap, str)}
+    else:
+        advertised = set()
     actions = tuple(
         ControlAction(
             key=key,
@@ -241,6 +263,8 @@ def contract_availability(
             command=CONTRACT_ACTION_COMMANDS[key],
         )
         for key in CONTRACT_ACTION_ORDER
+        if CONTRACT_CAPABILITY_FOR_ACTION.get(key) is None
+        or CONTRACT_CAPABILITY_FOR_ACTION[key] in advertised
     )
     return ControlAvailability(unavailable=None, actions=actions)
 
