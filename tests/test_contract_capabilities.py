@@ -24,18 +24,16 @@ from fastapi.testclient import TestClient
 from agent_dashboard.app import create_app
 from agent_dashboard.collector import run_cycle
 from agent_dashboard.config import Settings
+from agent_dashboard.contract_reply import validate_contract_request_id
 from agent_dashboard.control import contract_availability
 from agent_dashboard.control_audit import audit_path
-from agent_dashboard.contract_reply import validate_contract_request_id
 from agent_dashboard.fleet import FleetState
 from agent_dashboard.gateway import (
     CONTRACT_PATH,
-    ControlTimeoutError,
     ManagedInstance,
     argv_contract_exec,
     argv_contract_mutation,
     validate_contract_n,
-    validate_control_issue,
     validate_control_n,
 )
 
@@ -284,7 +282,7 @@ def test_review_stop_after_boundary_values():
 )
 def test_argv_pins_request_id_and_expect_repo(action, kwargs, expected_tail):
     request_id = "dash-9f8e7d6c5b4a3210"
-    argv = argv_contract_mutation(request_id and action, request_id, REPO, **kwargs)
+    argv = argv_contract_mutation(action, request_id, REPO, **kwargs)
     assert argv == [
         *expected_tail,
         "--request-id",
@@ -410,13 +408,8 @@ def test_submit_sends_gated_params_and_tracks_them():
             "issue": None,
         }
     ]
-    expected = " ".join(
-        argv_contract_exec(
-            CID, argv_contract_mutation("stop_after", RID, REPO, n=2)
-        )
-    )
-    assert gateway.contract_argvs == [expected.split(" ") and expected.split(" ") or []]
-    assert gateway.contract_argvs == [expected.split(" ")]
+    expected = argv_contract_exec(CID, argv_contract_mutation("stop_after", RID, REPO, n=2))
+    assert gateway.contract_argvs == [expected]
     # The follow-up track URL carries the gated parameter.
     assert "n=2" in response.text
     assert "stop --after 2" in response.text

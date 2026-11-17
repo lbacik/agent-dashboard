@@ -365,7 +365,7 @@ def test_submit_unsupported_card():
     response = submit(client, submit_form())
     assert response.status_code == 200
     assert "Not supported" in response.text
-    assert "Nothing was stored" in response.text
+    assert "not supported by this instance; nothing stored" in response.text.lower()
     entries = audit_entries()
     assert entries[1]["error_code"] == "unsupported"
 
