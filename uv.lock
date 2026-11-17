@@ -11,7 +11,7 @@ constraints = [{ name = "certifi", specifier = ">=2026.10.19" }]
 
 [[package]]
 name = "agent-dashboard"
-version = "0.4.1"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "agent-operator-contract" },
