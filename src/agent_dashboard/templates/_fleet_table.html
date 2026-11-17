@@ -47,6 +47,23 @@
 {% macro filter_attrs(row) -%}
 {%- if row.state == "running" %} data-vc-online="1"{% if row.rank <= 4 %} data-vc-alerts="1"{% endif %}{% if row.detail is not none and row.detail.attempt_kind == "active" %} data-vc-working="1"{% elif row.path == "contract" and row.contract is not none and row.contract.instance_state in ("active", "draining") %} data-vc-working="1"{% endif %}{% else %} data-vc-offline="1"{% endif -%}
 {%- endmacro %}
+{# Budget, Main context, Turns and Cache hit rate cells: one markup for
+   both paths (``row.gauge`` is the legacy SnapshotDetail or the contract
+   AttemptGauge, which share these fields; ADR 0017). #}
+{% macro figure_cells(g) -%}
+      <td>
+        {% if g.budget_has_bar %}
+        <div class="budget-bar{% if g.budget_hatched %} hatched{% endif %}" role="img" aria-label="budget {{ g.budget_text }}">
+          <div class="budget-fill" style="width: {{ g.budget_used_pct }}%"></div>
+          {% if g.budget_has_tick %}<div class="budget-tick" style="left: {{ g.budget_soft_pct }}%"></div>{% endif %}
+        </div>
+        {% endif %}
+        <div class="figure">{{ g.budget_text }}{% if g.budget_basis %} <span class="basis">{{ g.budget_basis }}</span>{% endif %}</div>
+      </td>
+      <td><div class="figure">{{ g.context_text }}{% if g.context_basis %} <span class="basis">{{ g.context_basis }}</span>{% endif %}</div></td>
+      <td><div class="figure">{{ g.turns_text }}{% if g.turns_basis %} <span class="basis">{{ g.turns_basis }}</span>{% endif %}</div></td>
+      <td><div class="figure">{{ g.cache_text }}{% if g.cache_basis %} <span class="basis">{{ g.cache_basis }}</span>{% endif %}</div></td>
+{%- endmacro %}
 {% macro rail_item(row, attempt) -%}
 <li class="vc-rail-row"{{ filter_attrs(row) }}{% if row.state != "running" and row.name != selected %} hidden{% endif %}>
   <button type="button" class="vc-rail-item {{ stripe_class(row) }}{% if row.name == selected %} is-selected{% endif %}"{% if row.name == selected %} aria-current="true"{% endif %}
@@ -64,10 +81,11 @@
       {% if row.path == "contract" %}<span class="vc-rail-repo">{{ row.contract.repository_display if row.contract is not none else "unavailable" }}</span>{% else %}<span class="vc-rail-repo">{{ row.detail.repository_display }}</span>{% endif %}
       <span class="vc-rail-attempt">{{ attempt }}</span>
     </span>
-    {% if row.state == "running" and row.detail is not none and row.detail.budget_has_bar %}
-    <span class="budget-bar vc-mini-bar{% if row.detail.budget_hatched %} hatched{% endif %}" aria-hidden="true">
-      <span class="budget-fill" style="width: {{ row.detail.budget_used_pct }}%"></span>
-      {% if row.detail.budget_has_tick %}<span class="budget-tick" style="left: {{ row.detail.budget_soft_pct }}%"></span>{% endif %}
+    {% set bar = row.gauge %}
+    {% if row.state == "running" and bar is not none and bar.budget_has_bar %}
+    <span class="budget-bar vc-mini-bar{% if bar.budget_hatched %} hatched{% endif %}" aria-hidden="true">
+      <span class="budget-fill" style="width: {{ bar.budget_used_pct }}%"></span>
+      {% if bar.budget_has_tick %}<span class="budget-tick" style="left: {{ bar.budget_soft_pct }}%"></span>{% endif %}
     </span>
     {% endif %}
     <span class="vc-rail-headline">{{ row.headline }}</span>
@@ -159,12 +177,16 @@
       <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.reach != "live" and row.age_text %} <span class="age">{{ row.age_text }} ago</span>{% endif %}</td>
       <td>{% if row.contract is not none and row.contract.intake_state %}{{ row.contract.intake_state }}{% if row.contract.pending_stop %} · Stop requested{% endif %}{% if row.contract.stop_plan_remaining is not none %} · Stop planned ({{ row.contract.stop_plan_remaining }} remaining){% endif %}{% if row.contract.priority_issue is not none %} · Next #{{ row.contract.priority_issue }}{% endif %}{% else %}<span class="hint">n/a</span>{% endif %}</td>
       <td>{{ row.contract.attempt_text if row.contract is not none else "—" }}</td>
+      {% if row.gauge is not none %}{{ figure_cells(row.gauge) }}{% else %}
       <td><div class="figure"><span class="hint">n/a</span></div></td>
       <td><div class="figure"><span class="hint">n/a</span></div></td>
       <td><div class="figure"><span class="hint">n/a</span></div></td>
       <td><div class="figure"><span class="hint">n/a</span></div></td>
+      {% endif %}
       <td><span class="hint">n/a</span></td>
-      <td class="row-actions"><div class="row-actions-inner"><span class="hint">n/a</span></div></td>
+      <td class="row-actions"><div class="row-actions-inner">
+        <a class="btn" href="/instances/{{ row.name | urlencode }}/history" onclick="event.stopPropagation()">{{ logs_icon() }} Logs</a>
+      </div></td>
     </tr>
     {% else %}
     <tr class="fleet-row {{ stripe_class(row) }}"
@@ -178,18 +200,7 @@
       <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.reach != "live" and row.age_text %} <span class="age">{{ row.age_text }} ago</span>{% endif %}</td>
       <td>{{ row.detail.intake_text }}{% if row.detail.intake_stale %} <span class="stale-tag">stale</span>{% endif %}{% for chip in row.control_chips %} <span class="ctl-chip{% if row.detail.control_stale %} is-stale{% endif %}">{{ chip }}</span>{% endfor %}</td>
       <td>{{ row.detail.attempt_text }}{% if row.detail.attempt_stale %} <span class="stale-tag">stale</span>{% endif %}</td>
-      <td>
-        {% if row.detail.budget_has_bar %}
-        <div class="budget-bar{% if row.detail.budget_hatched %} hatched{% endif %}" role="img" aria-label="budget {{ row.detail.budget_text }}">
-          <div class="budget-fill" style="width: {{ row.detail.budget_used_pct }}%"></div>
-          {% if row.detail.budget_has_tick %}<div class="budget-tick" style="left: {{ row.detail.budget_soft_pct }}%"></div>{% endif %}
-        </div>
-        {% endif %}
-        <div class="figure">{{ row.detail.budget_text }}{% if row.detail.budget_basis %} <span class="basis">{{ row.detail.budget_basis }}</span>{% endif %}</div>
-      </td>
-      <td><div class="figure">{{ row.detail.context_text }}{% if row.detail.context_basis %} <span class="basis">{{ row.detail.context_basis }}</span>{% endif %}</div></td>
-      <td><div class="figure">{{ row.detail.turns_text }}{% if row.detail.turns_basis %} <span class="basis">{{ row.detail.turns_basis }}</span>{% endif %}</div></td>
-      <td><div class="figure">{{ row.detail.cache_text }}{% if row.detail.cache_basis %} <span class="basis">{{ row.detail.cache_basis }}</span>{% endif %}</div></td>
+      {{ figure_cells(row.gauge) }}
       <td>{{ row.detail.errors_text }}{% if row.detail.errors_stale %} <span class="stale-tag">stale</span>{% endif %}</td>
       <td class="row-actions"><div class="row-actions-inner">
         <a class="btn" href="/instances/{{ row.name | urlencode }}/history" onclick="event.stopPropagation()">{{ logs_icon() }} Logs</a>

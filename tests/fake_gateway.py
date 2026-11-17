@@ -11,6 +11,7 @@ version".
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import tarfile
@@ -29,6 +30,7 @@ from agent_dashboard.gateway import (
     TelemetryTimeoutError,
     argv_command_status,
     argv_contract_attempts_export,
+    argv_contract_attempts_export_members,
     argv_contract_attempts_show,
     argv_contract_command,
     argv_contract_exec,
@@ -99,6 +101,10 @@ class FakeGateway:
         ] = {}
         self.contract_show_calls: list[tuple[str, str, str]] = []
         self.contract_export_calls: list[tuple[str, str, str, str]] = []
+        # Attempt archives served by ``contract_attempt_export_members``:
+        # (container ID, Attempt ID) -> {member path: bytes}.
+        self._contract_archives: dict[tuple[str, str], dict[str, bytes]] = {}
+        self.contract_members_calls: list[tuple[str, str, str, tuple[str, ...]]] = []
         self._histories: dict[str, TelemetryExec | Exception] = {}
         self._events: dict[str, TelemetryExec | Exception] = {}
         self._logs: dict[str, TelemetryExec | Exception] = {}
@@ -814,6 +820,84 @@ class FakeGateway:
         self._contract_export_queues[(container_id, attempt_id, path)] = list(
             scripted
         )
+
+    def set_contract_archive(
+        self, container_id: str, attempt_id: str, files: dict[str, bytes]
+    ) -> None:
+        """Serve these archive members to ``contract_attempt_export_members``."""
+        self._contract_archives[(container_id, attempt_id)] = dict(files)
+
+    async def contract_attempt_export_members(
+        self,
+        container_id: str,
+        exec_user: str,
+        attempt_id: str,
+        paths,
+        *,
+        timeout: float | None = None,
+    ) -> ControlExec:
+        """A real ``attempts export`` tar of the requested scripted members.
+
+        The argv is validated like the real one; the tar starts with a
+        manifest listing exactly the requested members with their true size
+        and ``sha256``. An unknown Attempt or member answers a ``not_found``
+        envelope (exit 1), as the producer does.
+        """
+        _ = timeout
+        agentctl_argv = argv_contract_attempts_export_members(attempt_id, paths)
+        argv = argv_contract_exec(container_id, agentctl_argv, exec_user=exec_user)
+        self.contract_argvs.append(argv)
+        self.contract_members_calls.append(
+            (container_id, exec_user, attempt_id, tuple(paths))
+        )
+        archive = self._contract_archives.get((container_id, attempt_id))
+        if archive is None or any(path not in archive for path in paths):
+            envelope = {
+                "contract": "1.0",
+                "ok": False,
+                "error": {"code": "not_found", "message": "no such archive member",
+                          "retryable": False},
+            }
+            return ControlExec(
+                stdout=json.dumps(envelope).encode(), stderr=b"", returncode=1
+            )
+        files = [
+            {
+                "kind": "events" if path == "events.jsonl" else "other",
+                "path": path,
+                "size": len(archive[path]),
+                "media_type": "application/octet-stream",
+                "sha256": hashlib.sha256(archive[path]).hexdigest(),
+            }
+            for path in paths
+        ]
+        manifest = {
+            "contract": "1.0",
+            "attempt": {
+                "attempt_id": attempt_id,
+                "issue": {"number": 1, "title": "Scripted"},
+                "started_at": "2026-11-06T08:00:00Z",
+                "finished_at": None,
+                "lifecycle_state": "running",
+                "attention_required": False,
+                "sealed": False,
+                "sealed_at": None,
+                "outcome": None,
+                "delivery": None,
+            },
+            "files": files,
+        }
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            raw = json.dumps(manifest).encode()
+            info = tarfile.TarInfo("manifest.json")
+            info.size = len(raw)
+            tar.addfile(info, io.BytesIO(raw))
+            for path in paths:
+                info = tarfile.TarInfo(path)
+                info.size = len(archive[path])
+                tar.addfile(info, io.BytesIO(archive[path]))
+        return ControlExec(stdout=buf.getvalue(), stderr=b"", returncode=0)
 
     async def contract_attempt_show(
         self,

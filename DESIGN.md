@@ -75,6 +75,22 @@ An unknown basis renders `unknown` too. The token count the backend
 enforces carries an `enforced` tag (`.enforced-tag`); `native.*` names
 and events carry a `native` tag (`.native-tag`).
 
+In the cockpit's 04 Current attempt module, token figures omit the unit
+word (`3,931,510 measured`): the module keeps the legacy rows (Budget used,
+Hard ceiling, Soft threshold, Turns, Main context, ...), each row names its
+quantity, and the bar above them fills the enforced token budget. Other
+units keep their formatting.
+
+## One view for both paths
+
+A legacy instance and a contract instance render the same views: the
+rail item with its budget bar, the fleet matrix row with its Budget, Main
+context, Turns and Cache hit rate cells, the cockpit's six numbered
+modules in their columns, and the Activity widget's Now / Last call panes
+(ADR 0017). Only the data source differs. Adding, removing or renaming a
+view element means changing it on both paths, and
+`tests/test_contract_parity.py` changes with it.
+
 ## Instrument chrome (prototype variant C)
 
 - **Top bar**: white, `border-top: 3px solid var(--accent)`, mono. Three

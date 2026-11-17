@@ -1,17 +1,18 @@
-{# Contract Activity widget fragment: the active attempt's native phase,
-   its last activity, and its recent Contract Events. Loaded into the
-   drawer's `.activity-body` on every poll cycle; the one-line state
-   travels out-of-band into the (possibly collapsed) summary slot, so the
-   header stays live while collapsed. The Status Snapshot already carries
-   everything shown here, so unlike the legacy widget this fragment needs
-   no gateway exec and offers no Attempt-log links: the Attempt log, the
-   Last call pane and the progress page cannot feed a contract instance. #}
+{# Contract Activity fallback: the snapshot-only view of the active
+   attempt (native phase, last activity, the attempt's Contract Events).
+   A contract instance normally renders `_activity.html`, the same Now /
+   Last call panes as a legacy instance, read from its Attempt Archive
+   (ADR 0017); this fragment answers only when that archive cannot be read
+   (`archive_error` says why) or no attempt is in progress. The one-line
+   state travels out-of-band into the (possibly collapsed) summary slot, so
+   the header stays live while collapsed. #}
 <span id="{{ summary_id }}" class="activity-sum" hx-swap-oob="true">{% if error %}unavailable{% elif contract is not none and contract.current is not none %}<strong>{{ contract.current.native_phase }}</strong>{% if last_activity_age %} · last activity {{ last_activity_age }}{% endif %}{% else %}no attempt in progress{% endif %}</span>
 {% if error %}
 <p class="hint">{{ error }}</p>
 {% elif contract is not none and contract.current is not none %}
 {% set cur = contract.current %}
 <div class="activity-contract">
+  {% if archive_error %}<p class="hint">Tool calls unavailable: {{ archive_error }}</p>{% endif %}
   <dl class="facts">
     <div><dt>Native phase</dt><dd>{{ cur.native_phase }}</dd></div>
     <div><dt>Last activity</dt><dd>{% if cur.last_activity_at %}{{ cur.last_activity_at }}{% if last_activity_age %} ({{ last_activity_age }}){% endif %}{% else %}—{% endif %}</dd></div>

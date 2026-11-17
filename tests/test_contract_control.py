@@ -653,8 +653,9 @@ def test_command_timeline_shows_newest_ten_with_origin_chips():
 def test_contract_console_slot_renders_in_drawer():
     client, _, _ = make_contract_client()
     body = client.get("/instances/web-0").text
-    assert "06 // Control console" in body
-    assert "01 // Contract status" in body
+    # The same module numbers as the legacy cockpit (ADR 0017).
+    assert "01 // Control console" in body
+    assert "02 // Identity &amp; last attempt" in body
     assert "ctl-body-" in body
     assert "Control console, attempt statistics" not in body
 

@@ -7,7 +7,14 @@
    pane keys per call (`activity-now-<file>`,
    `activity-last-call-<file>`, `activity-last-response-<file>`), so a
    pane keeps its position while it shows the same call and starts at
-   the top when a new call replaces it. #}
+   the top when a new call replaces it.
+   The widget serves both paths with one markup (ADR 0017): a legacy
+   instance's links open the Attempt log at the Evidence file
+   (`log_file_query`), a contract instance's open its Attempt page, whose
+   manifest previews every Evidence file. #}
+{% macro file_link(file) -%}
+{{ log_url }}{% if log_file_query %}?q={{ file | urlencode }}{% endif %}
+{%- endmacro %}
 <span id="{{ summary_id }}" class="activity-sum" hx-swap-oob="true">{% if error %}unavailable{% elif activity.state == "tool" %}<strong>{{ activity.current[-1].evidence.tool }}</strong> running {{ cur_elapsed }}{% elif activity.state == "model" %}model working · {{ since_elapsed }}{% if activity.last_call %} · last: {{ activity.last_call.evidence.tool }}{% endif %}{% else %}no events yet{% endif %}</span>
 {% if error %}
 <p class="hint">{{ error }}{% if log_url %} <a href="{{ log_url }}">Open the Attempt log</a>{% endif %}</p>
@@ -22,7 +29,7 @@
       <strong>{{ cur.evidence.tool }}</strong>{% if cur.evidence.thread %} <span class="stale-tag">[{{ cur.evidence.thread }}]</span>{% endif %}
       <span class="age">running {{ cur_elapsed }}{% if a.current | length > 1 %} · {{ a.current | length - 1 }} more in parallel{% endif %}</span>
     </span>
-    <a class="activity-link" href="{{ log_url }}?q={{ cur.evidence.file | urlencode }}" title="Open in the Attempt log">log</a>
+    <a class="activity-link" href="{{ file_link(cur.evidence.file) }}" title="Open in the Attempt log">log</a>
     {% elif a.state == "model" %}
     <span class="activity-now-main"><strong>Model is working</strong> <span class="age">{{ since_elapsed }} since the last event</span></span>
     {% else %}
@@ -44,8 +51,8 @@
     <strong>{{ a.last_call.evidence.tool }}</strong>{% if a.last_call.evidence.thread %} <span class="stale-tag">[{{ a.last_call.evidence.thread }}]</span>{% endif %}
     <span class="age">{{ a.last_call.time_text }} · took {{ call_took }} · {{ call_ago }} ago</span>
     {% if res_error %}<span class="pill pill-unreachable">error</span>{% endif %}
-    <a class="activity-link" href="{{ log_url }}?q={{ a.last_call.evidence.file | urlencode }}" title="Open the call in the Attempt log">call log</a>
-    <a class="activity-link" href="{{ log_url }}?q={{ a.last_result.evidence.file | urlencode }}" title="Open the response in the Attempt log">response log</a>
+    <a class="activity-link" href="{{ file_link(a.last_call.evidence.file) }}" title="Open the call in the Attempt log">call log</a>
+    <a class="activity-link" href="{{ file_link(a.last_result.evidence.file) }}" title="Open the response in the Attempt log">response log</a>
   </div>
   <div class="activity-io-grid">
     <div>

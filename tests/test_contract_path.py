@@ -715,11 +715,11 @@ def test_drawer_shows_the_contract_capsule_without_legacy_widgets():
     )
     page = client.get("/instances/web-1")
     assert page.status_code == 200
-    assert "Contract status" in page.text
+    assert "Identity &amp; last attempt" in page.text
     assert "coding-agent" in page.text
     assert "Idle: waiting for a ready issue" in page.text
     # Attempt history, statistics and the control console are available on
-    # the contract path; activity stays legacy-only.
+    # the contract path; an idle instance has no activity to poll.
     assert "/instances/web-1/history" in page.text
     assert "/instances/web-1/stats" in page.text
     assert "/instances/web-1/control" in page.text

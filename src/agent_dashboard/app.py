@@ -77,6 +77,7 @@ from .charts import (
     undated_count,
 )
 from .config import Settings
+from .contract_activity import EVENTS_PATH, fetch_members, read_archive_events
 from .contract_attempt import (
     ARTIFACT_PREVIEW_CAP,
     artifact_render_kind,
@@ -819,6 +820,57 @@ def create_app(
                 },
             )
 
+        async def preview_view(activity, read, now) -> dict:
+            """The panes' previews and timings, whatever path read the files.
+
+            ``read`` is awaited with an Evidence file name and returns its
+            bytes and whether they were cut. Shared by both paths so the
+            widget renders one markup for legacy and contract instances.
+            """
+            view: dict = {}
+            try:
+                if activity.state == "tool":
+                    current = activity.current[-1]
+                    content, _ = await read(current.evidence.file)
+                    view["cur_head"], view["cur_body"] = call_preview(
+                        current.evidence.tool, content
+                    )
+                    view["cur_elapsed"] = elapsed_text(
+                        current.timestamp_text, now=now
+                    )
+                elif activity.state == "model" and activity.since is not None:
+                    view["since_elapsed"] = elapsed_text(
+                        activity.since.timestamp_text, now=now
+                    )
+                if activity.last_call is not None and activity.last_result is not None:
+                    call_content, _ = await read(activity.last_call.evidence.file)
+                    res_content, res_truncated = await read(
+                        activity.last_result.evidence.file
+                    )
+                    view["call_head"], view["call_body"] = call_preview(
+                        activity.last_call.evidence.tool, call_content
+                    )
+                    view["res_head"], view["res_body"], view["res_error"] = (
+                        result_preview(
+                            activity.last_call.evidence.tool, res_content, res_truncated
+                        )
+                    )
+                    view["call_took"] = elapsed_text(
+                        activity.last_call.timestamp_text,
+                        activity.last_result.timestamp_text,
+                    )
+                    view["call_ago"] = elapsed_text(
+                        activity.last_result.timestamp_text, now=now
+                    )
+                if activity.last_message is not None:
+                    message, _ = await read(activity.last_message.evidence.file)
+                    view["message"] = (
+                        message.decode("utf-8", errors="replace").strip()[:400]
+                    )
+            except (GatewayError, ValueError, FileNotFoundError) as exc:
+                view["file_error"] = str(exc)
+            return view
+
         drawer = row.drawer if row is not None else None
         if is_contract_row(row):
             contract = row.contract if row is not None else None
@@ -830,7 +882,75 @@ def create_app(
             if seen is not None:
                 age = max(0.0, datetime.now(UTC).timestamp() - seen.timestamp())
                 age_text = f"{format_age(age)} ago"
-            return contract_page(contract, error=None, last_activity_age=age_text)
+            assert row is not None
+            attempt_id = current.attempt_id
+
+            def export(paths):
+                async def _once():
+                    return await gw.contract_attempt_export_members(
+                        row.container_id, row.exec_user, attempt_id, paths
+                    )
+
+                return fetch_members(_once, paths, attempt_id=attempt_id)
+
+            # The same Now / Last call panes as a legacy instance (ADR 0017),
+            # read from the Attempt Archive: its events, then the (at most
+            # four) Evidence files they name, in one more exec. When the
+            # archive cannot be read, the snapshot-only widget stays.
+            try:
+                events = await export([EVENTS_PATH])
+            except (GatewayError, ValueError) as exc:
+                events = None
+                archive_error = f"Could not read the Attempt archive: {exc}"
+            else:
+                archive_error = events.error
+            if events is None or not events.ok or events.members is None:
+                return contract_page(
+                    contract,
+                    error=None,
+                    last_activity_age=age_text,
+                    archive_error=archive_error,
+                )
+            activity = find_activity(read_archive_events(events.members[EVENTS_PATH]))
+            wanted: list[str] = []
+            for ev in (
+                activity.current[-1] if activity.state == "tool" else None,
+                activity.last_call,
+                activity.last_result,
+                activity.last_message,
+            ):
+                if ev is not None and ev.evidence is not None:
+                    if ev.evidence.file not in wanted:
+                        wanted.append(ev.evidence.file)
+            files: dict[str, bytes] = {}
+            file_error: str | None = None
+            if wanted:
+                try:
+                    fetched = await export(wanted)
+                except (GatewayError, ValueError) as exc:
+                    file_error = str(exc)
+                else:
+                    if fetched.ok and fetched.members is not None:
+                        files = fetched.members
+                    else:
+                        file_error = fetched.error
+
+            async def read_member(file: str) -> tuple[bytes, bool]:
+                if file not in files:
+                    raise FileNotFoundError(
+                        file_error or f"{file} is not in the Attempt archive"
+                    )
+                data = files[file]
+                return data[:ACTIVITY_EVIDENCE_CAP], len(data) > ACTIVITY_EVIDENCE_CAP
+
+            view = await preview_view(activity, read_member, datetime.now(UTC))
+            return page(
+                activity=activity,
+                log_url=contract_attempt_url(name, attempt_id),
+                log_file_query=False,
+                error=None,
+                **view,
+            )
         if row is None or row.state != "running" or drawer is None:
             return page(error="Instance is not running.")
         issue = (
@@ -853,60 +973,18 @@ def create_app(
         if not log.ok:
             return page(error=log.error or "layout not recognised", log_url=log_url)
         activity = find_activity(log.events)
-        now = datetime.now(UTC)
-        view: dict = {
-            "activity": activity,
-            "log_url": log_url,
-            "error": None,
-        }
-        try:
-            if activity.state == "tool":
-                current = activity.current[-1]
-                content, _ = await activity_evidence(
-                    row.container_id, number, dash, current.evidence.file
-                )
-                view["cur_head"], view["cur_body"] = call_preview(
-                    current.evidence.tool, content
-                )
-                view["cur_elapsed"] = elapsed_text(
-                    current.timestamp_text, now=now
-                )
-            elif activity.state == "model" and activity.since is not None:
-                view["since_elapsed"] = elapsed_text(
-                    activity.since.timestamp_text, now=now
-                )
-            if activity.last_call is not None and activity.last_result is not None:
-                call_content, _ = await activity_evidence(
-                    row.container_id, number, dash, activity.last_call.evidence.file
-                )
-                res_content, res_truncated = await activity_evidence(
-                    row.container_id, number, dash, activity.last_result.evidence.file
-                )
-                view["call_head"], view["call_body"] = call_preview(
-                    activity.last_call.evidence.tool, call_content
-                )
-                view["res_head"], view["res_body"], view["res_error"] = (
-                    result_preview(
-                        activity.last_call.evidence.tool, res_content, res_truncated
-                    )
-                )
-                view["call_took"] = elapsed_text(
-                    activity.last_call.timestamp_text,
-                    activity.last_result.timestamp_text,
-                )
-                view["call_ago"] = elapsed_text(
-                    activity.last_result.timestamp_text, now=now
-                )
-            if activity.last_message is not None:
-                message, _ = await activity_evidence(
-                    row.container_id, number, dash, activity.last_message.evidence.file
-                )
-                view["message"] = (
-                    message.decode("utf-8", errors="replace").strip()[:400]
-                )
-        except (GatewayError, ValueError, FileNotFoundError) as exc:
-            view["file_error"] = str(exc)
-        return page(**view)
+
+        async def read_evidence(file: str) -> tuple[bytes, bool]:
+            return await activity_evidence(row.container_id, number, dash, file)
+
+        view = await preview_view(activity, read_evidence, datetime.now(UTC))
+        return page(
+            activity=activity,
+            log_url=log_url,
+            log_file_query=True,
+            error=None,
+            **view,
+        )
 
     @app.get("/instances/{name}/stats", response_class=HTMLResponse)
     async def instance_stats(request: Request, name: str) -> Response:
