@@ -286,6 +286,7 @@ def create_app(
         control_enabled=getattr(cfg, "control", True),
         host=cfg.host,
         lan_mode=lan_mode,
+        unauthenticated_control=bool(getattr(cfg, "unauthenticated_control", False)),
     )
     if gateway is not None:
         gw = gateway
@@ -362,6 +363,7 @@ def create_app(
             "request": request,
             "poll_interval": int(cfg.poll_interval),
             "control_available": request.app.state.control_mode.available,
+            "control_unauthenticated": request.app.state.control_mode.unauthenticated,
             "lan_mode": lan_mode,
             "operator": getattr(request.state, "operator", None),
         }

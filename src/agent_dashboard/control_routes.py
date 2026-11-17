@@ -442,7 +442,8 @@ def _validate_submit(form: dict[str, str]) -> tuple[dict | None, str | None]:
 def _operator_name(request: Request) -> str | None:
     """The audit's ``operator``: the account name in LAN mode, null outside (7.3).
 
-    The sign-in session ID and the client address are never recorded.
+    The sign-in session ID is never recorded; the client address goes into
+    ``client`` only under Control without sign-in (``_audit_identity``).
     """
     settings = getattr(request.app.state, "settings", None)
     if not bool(getattr(settings, "lan_mode", False)):
@@ -450,6 +451,21 @@ def _operator_name(request: Request) -> str | None:
     operator = getattr(request.state, "operator", None)
     name = getattr(operator, "name", None)
     return name if isinstance(name, str) and name else None
+
+
+def _audit_identity(request: Request) -> dict:
+    """Who issued the action, for every Control audit entry.
+
+    Always ``operator`` (7.3). With Control without sign-in on a non-loopback
+    bind (ADR 0015) also ``client``: the direct TCP peer address, never
+    ``X-Forwarded-For``.
+    """
+    identity: dict = {"operator": _operator_name(request)}
+    mode = getattr(request.app.state, "control_mode", None)
+    if getattr(mode, "unauthenticated", False):
+        peer = request.client
+        identity["client"] = peer.host if peer is not None else None
+    return identity
 
 
 def _request_mode(request: Request, mode: ControlMode) -> ControlMode:
@@ -733,7 +749,7 @@ async def _review_contract(request, name, row, templates, form, action_raw):
                 instance=name,
                 reason="validation" if status == 422 else "action_unavailable",
                 error=message,
-                operator=_operator_name(request),
+                **_audit_identity(request),
                 container_id=None,
                 expected_repository=None,
                 action=action,
@@ -761,7 +777,7 @@ async def _review_contract(request, name, row, templates, form, action_raw):
                 instance=name,
                 reason="action_unavailable",
                 error=error,
-                operator=_operator_name(request),
+                **_audit_identity(request),
                 container_id=None,
                 expected_repository=None,
                 action=action,
@@ -903,7 +919,7 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
                 instance=name,
                 reason="validation",
                 error=validation_message,
-                operator=_operator_name(request),
+                **_audit_identity(request),
                 request_id=audit_request,
                 container_id=form.get("container_id", ""),
                 expected_repository=form.get("repository", ""),
@@ -960,7 +976,7 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
                 instance=name,
                 reason="stale_binding",
                 error=STALE_BINDING_MESSAGE,
-                operator=_operator_name(request),
+                **_audit_identity(request),
                 request_id=request_id,
                 container_id=container_id,
                 expected_repository=repository,
@@ -989,7 +1005,7 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
                 instance=name,
                 reason="action_unavailable",
                 error=message,
-                operator=_operator_name(request),
+                **_audit_identity(request),
                 request_id=request_id,
                 container_id=container_id,
                 expected_repository=repository,
@@ -1021,7 +1037,7 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
                     instance=name,
                     reason="busy",
                     error=BUSY_MESSAGE,
-                    operator=_operator_name(request),
+                    **_audit_identity(request),
                     request_id=request_id,
                     container_id=container_id,
                     expected_repository=repository,
@@ -1043,7 +1059,7 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
     backend = getattr(row, "backend", None)
     common = {
         "instance": name,
-        "operator": _operator_name(request),
+        **_audit_identity(request),
         "request_id": request_id,
         "container_id": container_id,
         "expected_repository": repository,
@@ -1833,7 +1849,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason=reason,
                     error=fragment,
-                    operator=_operator_name(request),
+                    **_audit_identity(request),
                     container_id=None,
                     expected_repository=None,
                     action=candidate_action,
@@ -1894,7 +1910,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason="validation",
                     error=validation_message,
-                    operator=_operator_name(request),
+                    **_audit_identity(request),
                     container_id=None,
                     expected_repository=None,
                     action=candidate_action,
@@ -1929,7 +1945,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason="action_unavailable",
                     error=error,
-                    operator=_operator_name(request),
+                    **_audit_identity(request),
                     container_id=None,
                     expected_repository=None,
                     action=action,
@@ -1953,7 +1969,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason="action_unavailable",
                     error=error,
-                    operator=_operator_name(request),
+                    **_audit_identity(request),
                     container_id=None,
                     expected_repository=None,
                     action=action,
@@ -2100,7 +2116,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason=reason,
                     error=fragment,
-                    operator=_operator_name(request),
+                    **_audit_identity(request),
                     container_id=None,
                     expected_repository=None,
                     action=candidate_action,
@@ -2146,7 +2162,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason="validation",
                     error=validation_message,
-                    operator=_operator_name(request),
+                    **_audit_identity(request),
                     request_id=audit_request_id,
                     container_id=form.get("container_id", ""),
                     expected_repository=form.get("repository", ""),
@@ -2190,7 +2206,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                     instance=name,
                     reason="stale_binding",
                     error=STALE_BINDING_MESSAGE,
-                    operator=_operator_name(request),
+                    **_audit_identity(request),
                     request_id=request_id,
                     container_id=container_id,
                     expected_repository=repository,
@@ -2220,7 +2236,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                 expect_repo = None
         common = {
             "instance": name,
-            "operator": _operator_name(request),
+            **_audit_identity(request),
             "request_id": request_id,
             "container_id": container_id,
             "expected_repository": repository,
@@ -2248,7 +2264,7 @@ def register_control_routes(app, templates: Jinja2Templates) -> None:
                         instance=name,
                         reason="busy",
                         error=BUSY_MESSAGE,
-                        operator=_operator_name(request),
+                        **_audit_identity(request),
                         request_id=request_id,
                         container_id=container_id,
                         expected_repository=repository,

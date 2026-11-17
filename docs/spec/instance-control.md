@@ -247,7 +247,7 @@ Append-only JSONL at `$XDG_STATE_HOME/agent-dashboard/control-audit.jsonl`; when
 | `error` | Human text: the refusal message, the agent's rejection reason, or the timeout message |
 | `duration_ms` | Exec duration, on outcome entries |
 
-There is no client address: requests always come from loopback.
+There is no client address: requests always come from loopback. (Control without sign-in on a non-loopback bind adds `client`; see ADR 0015.)
 
 **Write order** (ADR 0007):
 

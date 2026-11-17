@@ -4,9 +4,10 @@
 #
 # - Read-only fleet view on a trusted LAN, without sign-in (ADR 0002): this
 #   file alone. Control actions are unavailable, because the process binds
-#   0.0.0.0 outside LAN mode. LAN exposure is opt-in via .env (copied from
-#   .env.example): DASHBOARD_BIND=<lan-ip>, AGENT_DASHBOARD_ALLOWED_HOSTS.
-#   Defaults publish on loopback only.
+#   0.0.0.0 outside LAN mode, unless AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL=on
+#   offers them without sign-in (ADR 0015). LAN exposure is opt-in via .env
+#   (copied from .env.example): DASHBOARD_BIND=<lan-ip>,
+#   AGENT_DASHBOARD_ALLOWED_HOSTS. Defaults publish on loopback only.
 # - LAN mode behind a reverse proxy on the same host (ADR 0012): add the
 #   docker-compose.lan.yml overlay (COMPOSE_FILE in .env), which publishes
 #   on loopback only and turns sign-in on.
@@ -55,6 +56,7 @@ services:
       AGENT_DASHBOARD_MAX_CONCURRENT_EXECS: "${AGENT_DASHBOARD_MAX_CONCURRENT_EXECS:-}"
       AGENT_DASHBOARD_CONTROL: "${AGENT_DASHBOARD_CONTROL:-}"
       AGENT_DASHBOARD_CONTROL_EXEC_TIMEOUT: "${AGENT_DASHBOARD_CONTROL_EXEC_TIMEOUT:-}"
+      AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL: "${AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL:-}"
       AGENT_DASHBOARD_LAN_MODE: "${AGENT_DASHBOARD_LAN_MODE:-}"
       AGENT_DASHBOARD_TRUSTED_PROXIES: "${AGENT_DASHBOARD_TRUSTED_PROXIES:-}"
       AGENT_DASHBOARD_SIGN_IN_IDLE_TIMEOUT: "${AGENT_DASHBOARD_SIGN_IN_IDLE_TIMEOUT:-}"

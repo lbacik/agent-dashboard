@@ -41,7 +41,7 @@
     </div>
     <div class="topbar-chips">
       {% if poll_interval is defined %}<span class="topbar-chip">Stream <strong>{{ poll_interval }}s</strong></span>{% endif %}
-      {% if control_available is defined %}<span class="topbar-chip">Control <strong>{{ "on" if control_available else "off" }}</strong></span>{% endif %}
+      {% if control_available is defined %}{% if control_available and control_unauthenticated %}<span class="topbar-chip" title="Anyone who can reach this dashboard can issue Control actions (AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL=on)">Control <strong>on · no sign-in</strong></span>{% else %}<span class="topbar-chip">Control <strong>{{ "on" if control_available else "off" }}</strong></span>{% endif %}{% endif %}
       {% if operator is defined and operator is not none %}<span class="topbar-chip" title="Signed in since {{ operator.since }} UTC">Operator <strong>{{ operator.name }} · {{ operator.role }}</strong></span>{% endif %}
     </div>
     {% block topbar_actions %}{% endblock %}

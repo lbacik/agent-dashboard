@@ -178,7 +178,8 @@ first match wins:
 1. control is off (above);
 2. outside LAN mode, the dashboard is bound to a non-loopback address
    (`--allow-non-loopback`, the Docker install below): Control actions
-   beyond loopback need [LAN mode](#lan-mode);
+   beyond loopback need [LAN mode](#lan-mode), or
+   [Control without sign-in](#control-without-sign-in-on-a-trusted-lan);
 3. in LAN mode, the signed-in account has the `viewer` Role: "your account can
    view but not issue Control actions".
 
@@ -199,8 +200,30 @@ The directory is created on first write (mode `0700`, file `0600`). Every
 entry is also mirrored to stdout as one `control-audit <json>` line, for
 journald or `docker logs`. There is no rotation: one or two lines per click.
 Each entry carries `operator`: the signed-in account's name in LAN mode,
-`null` outside it. The Operator account store, `accounts.sqlite3`, lives in
-the same directory.
+`null` outside it; under Control without sign-in also `client`. The
+Operator account store, `accounts.sqlite3`, lives in the same directory.
+
+### Control without sign-in on a trusted LAN
+
+On a LAN you trust, `--unauthenticated-control on` (or
+`AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL=on`, default `off`) offers Control
+actions on a non-loopback bind outside LAN mode, over plain `http://`, with
+no sign-in ([ADR 0015](docs/adr/0015-control-without-sign-in-on-a-trusted-lan.md)).
+**Anyone who can reach the port can then stop, resume or redirect your
+agents**, through a root-equivalent Docker socket; with
+`AGENT_DASHBOARD_DISABLE_HOST_GUARD=1` a DNS-rebinding web page can too, so
+prefer setting `AGENT_DASHBOARD_ALLOWED_HOSTS`. LAN mode with a TLS reverse
+proxy stays the recommended way.
+
+- It needs the non-loopback bind opt-in as before
+  (`AGENT_DASHBOARD_ALLOW_NON_LOOPBACK=1`; the container sets it).
+- With LAN mode on it is a startup error; on a loopback bind it changes
+  nothing; `--control off` still wins.
+- The top bar shows `Control on · no sign-in`, and startup prints
+  `agent-dashboard: Control actions are on without sign-in: anyone who can
+  reach <host>:<port> can issue them (...)`.
+- Control audit entries keep `operator: null` and gain `client`, the
+  direct peer address of the browser.
 
 ## Running on the host
 
@@ -388,7 +411,9 @@ deployment that relied on it keeps running read-only and prints at startup:
 `agent-dashboard: Control actions are unavailable:
 AGENT_DASHBOARD_DISABLE_HOST_GUARD=1 no longer enables them on a non-loopback
 bind. Turn on LAN mode instead (README: "Migrating from
-AGENT_DASHBOARD_DISABLE_HOST_GUARD")`. To get Control actions back:
+AGENT_DASHBOARD_DISABLE_HOST_GUARD")`. To get Control actions back, either
+set `AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL=on` on a trusted LAN (no sign-in,
+see [Control without sign-in](#control-without-sign-in-on-a-trusted-lan)), or:
 
 1. Turn on [LAN mode](#lan-mode) (`AGENT_DASHBOARD_LAN_MODE=on`) and set
    `AGENT_DASHBOARD_ALLOWED_HOSTS`.
@@ -477,9 +502,10 @@ Environment variables (`.env`):
 | `DASHBOARD_PORT` | `8000` | Host port mapped to the container's `8000`. |
 | `DOCKER_GID` | `999` | GID owning `/var/run/docker.sock` on the daemon host (see below). Passed as `group_add` so the non-root container user can reach the socket, whose GID differs per host. |
 | `AGENT_DASHBOARD_ALLOWED_HOSTS` | _(empty)_ | Host header allow-list: the names or addresses operators type in the browser, comma-separated. For the read-only view, the Pi's hostname and/or LAN IP; with the LAN overlay, the name in `VIRTUAL_HOST`. `localhost` / `127.0.0.1` always stay allowed; `*` is never accepted. |
-| `AGENT_DASHBOARD_DISABLE_HOST_GUARD` | _(empty)_ | `1` turns the `Host` check off. It does not enable Control actions. |
+| `AGENT_DASHBOARD_DISABLE_HOST_GUARD` | _(empty)_ | `1` turns the `Host` check off. It does not enable Control actions (`AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL` does). |
 | `AGENT_DASHBOARD_POLL_INTERVAL` / `AGENT_DASHBOARD_EXEC_TIMEOUT` / `AGENT_DASHBOARD_MAX_CONCURRENT_EXECS` | _(built-in defaults)_ | Optional gateway tuning, passed through to the dashboard. |
 | `AGENT_DASHBOARD_CONTROL` / `AGENT_DASHBOARD_CONTROL_EXEC_TIMEOUT` | _(on, 15 s)_ | See [Control actions](#control-actions). |
+| `AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL` | _(off)_ | `on` offers Control actions without sign-in on the published port; trusted LAN only. See [Control without sign-in](#control-without-sign-in-on-a-trusted-lan). |
 | `AGENT_DASHBOARD_LAN_MODE` / `AGENT_DASHBOARD_TRUSTED_PROXIES` / `AGENT_DASHBOARD_SIGN_IN_IDLE_TIMEOUT` / `AGENT_DASHBOARD_SIGN_IN_MAX_AGE` | _(LAN mode off)_ | See [LAN mode](#lan-mode). The overlay sets `AGENT_DASHBOARD_LAN_MODE=on` itself. |
 | `COMPOSE_FILE` / `PROXY_NETWORK` / `VIRTUAL_HOST` / `LETSENCRYPT_HOST` | _(unset)_ | The LAN overlay; see [below](#lan-mode-behind-a-reverse-proxy). |
 
