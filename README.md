@@ -544,8 +544,10 @@ explicit opt-in the dashboard still refuses a non-loopback bind, so the
 host-process install is unchanged. No shared Docker network or exposed agent
 ports are needed to reach agents: the dashboard never connects to them over
 the network. The `/state` volume holds the Control audit and the Operator
-account store; apart from it and a `/tmp` tmpfs, the container's filesystem
-is read-only.
+account store; the `cache` volume holds the Sealed Attempt Archive cache
+(`XDG_CACHE_HOME=/cache`, [ADR
+0016](docs/adr/0016-sealed-archive-cache-on-its-own-volume.md)); apart from
+them and a `/tmp` tmpfs, the container's filesystem is read-only.
 
 ### LAN mode behind a reverse proxy
 
