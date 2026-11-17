@@ -511,6 +511,19 @@ def test_track_progress_lines_come_from_matching_intake_sections():
     assert "3 left and 2 counted" not in response.text
 
 
+def test_track_progress_line_needs_a_stamped_request_id():
+    result = _intake_snapshot()
+    result["intake"]["stop_plan"] = {"sequence": 5, "remaining": 3, "counted": 2}
+    client, _, _ = make_client(result)
+    stop_query = (
+        f"action=stop_after&n=2&container_id={CID}&repository={REPO}"
+        "&request_id=dash-aaaaaaaaaaaaaaaa&sequence=5"
+    )
+    response = client.get(f"/instances/web-0/control/track?{stop_query}")
+    assert response.status_code == 200
+    assert "3 left and 2 counted" not in response.text
+
+
 # --- Intake cell and drawer ------------------------------------------------------
 
 

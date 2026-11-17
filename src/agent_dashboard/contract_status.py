@@ -441,7 +441,7 @@ def _contract_follow_progress(
             key: getattr(section, key, None)
             for key in ("request_id", "remaining", "counted", "issue")
         }
-    if "request_id" in entry and entry.get("request_id") != request_id:
+    if entry.get("request_id") != request_id:
         return None
     if action == "stop_after":
         remaining = entry.get("remaining")
