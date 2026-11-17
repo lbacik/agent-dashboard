@@ -238,17 +238,13 @@ def test_dockerfile_healthcheck_probes_healthz():
 
 
 def test_compose_config_inherits_the_healthcheck(tmp_path):
+    # `docker compose config` renders the Compose files only, never the
+    # image, so the Dockerfile HEALTHCHECK cannot show up here. The
+    # container inherits it at run time as long as Compose neither
+    # disables nor overrides it, which is what this pins.
     for files, env in (
         ((BASE,), {}),
         ((BASE, LAN), LAN_ENV),
     ):
         _, service = resolved_service(tmp_path, *files, env=env)
-        healthcheck = service.get("healthcheck")
-        assert healthcheck is not None, files
-        assert healthcheck["interval"] == "30s", files
-        assert healthcheck["timeout"] == "5s", files
-        assert healthcheck["retries"] == 3, files
-        assert healthcheck["start_period"] == "15s", files
-        probe = " ".join(healthcheck["test"])
-        assert "/healthz" in probe, files
-        assert "curl" not in probe, files
+        assert "healthcheck" not in service, files
