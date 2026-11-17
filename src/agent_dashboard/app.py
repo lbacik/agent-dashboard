@@ -585,6 +585,17 @@ def create_app(
             pass
         return exec_result, None
 
+    @app.api_route("/healthz", methods=["GET", "HEAD"])
+    async def healthz() -> PlainTextResponse:
+        """Process liveness for the container healthcheck: always 200 ``ok``.
+
+        Registered in both modes and anonymous in LAN mode (the gate
+        exempts this exact path). It makes no Docker call, reads no
+        account store or fleet state, and writes no ``auth`` line and no
+        Control audit entry. The ``Host`` check still applies.
+        """
+        return PlainTextResponse("ok")
+
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> Response:
         """Fleet table plus the instance drawer.

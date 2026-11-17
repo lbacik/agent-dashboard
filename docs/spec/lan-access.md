@@ -35,7 +35,7 @@ In this effort:
 
 Out of scope (see the map): the public internet, multiple Docker hosts, organisation-wide SSO, passkeys, changing one's own password in the UI, an admin page, TLS in the dashboard process, proxy recipes, a published image, showing who issued a command in the UI. Nothing changes in simple-coding-agent (section 13).
 
-Unchanged outside LAN mode: no sign-in, no sign-in session, no new route answers (section 5.1), Control actions only on a loopback bind (ADR 0001, ADR 0007). The default install, loopback plus SSH tunnel, behaves as today apart from the scheme-agnostic `Origin` check (section 4.2) and the migration of section 2.4.
+Unchanged outside LAN mode: no sign-in, no sign-in session, no new route answers except the process-liveness probe `GET /healthz` (section 3.1), Control actions only on a loopback bind (ADR 0001, ADR 0007). The default install, loopback plus SSH tunnel, behaves as today apart from the scheme-agnostic `Origin` check (section 4.2) and the migration of section 2.4.
 
 ## 2. Settings and startup
 
@@ -87,9 +87,11 @@ One stdout line each, after the checks pass:
 
 ## 3. Routes
 
-### 3.1 New routes (LAN mode only)
+### 3.1 New routes
 
-Outside LAN mode none of them is registered, so they answer 404 like any unknown path.
+`/login`, `/logout`, `/set-password` and `/whoami` are registered only in
+LAN mode: outside it they answer 404 like any unknown path. `/healthz` is
+registered in both modes.
 
 | Method | Route | Anonymous | Section |
 |---|---|---|---|
@@ -99,8 +101,17 @@ Outside LAN mode none of them is registered, so they answer 404 like any unknown
 | GET | `/set-password` | yes | 8.3 |
 | POST | `/set-password` | yes | 6.5 |
 | GET | `/whoami` | no | 5.6 |
+| GET | `/healthz` | yes | 3.1 |
 
-`/static/*` is anonymous too. Every other route needs a sign-in session in LAN mode. No health endpoint is added.
+`/static/*` is anonymous too. Every other route needs a sign-in session in LAN mode.
+
+`GET /healthz` is the process-liveness probe (not fleet or gateway
+readiness): it answers 200 `ok` (`text/plain`; `HEAD` likewise) with no
+sign-in session in either mode, behind the `Host` check. It makes no Docker call, reads no
+account store or fleet state, and returns no version, fleet or account
+data; it writes no `auth` line and no Control audit entry. The gate
+exemption is the exact path `/healthz`: `/healthz/…`, `/healthzx` and the
+like stay gated.
 
 ### 3.2 Middleware order (LAN mode)
 

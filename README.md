@@ -431,8 +431,15 @@ Setup on the Docker host (e.g. a Raspberry Pi 5, arm64):
 ```sh
 cp .env.example .env   # then edit: DOCKER_GID, DASHBOARD_BIND, AGENT_DASHBOARD_ALLOWED_HOSTS
 docker compose build
-docker compose up -d
+docker compose up -d --wait
 ```
+
+The image declares a `HEALTHCHECK` that probes the process-liveness
+endpoint `GET /healthz` (`200 ok`, no sign-in needed), so `docker compose
+ps` reports the container `healthy` once the dashboard serves requests and
+`docker compose up -d --wait` returns at that point. It reports process
+liveness only: a `healthy` container can still show a discovery error when
+the socket GID is wrong (see `DOCKER_GID` below).
 
 The deployment runs as the fixed Compose project `fleet-dashboard`
 (top-level `name:` in `docker-compose.yml`), whatever directory the
