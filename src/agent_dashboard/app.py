@@ -347,13 +347,17 @@ def create_app(
         )
         _cleanup_conn.close()
     extra_hosts = getattr(cfg, "allowed_hosts", frozenset()) or frozenset()
+    # Starlette runs the last-added middleware first, so add the innermost
+    # first: the Host check (spec 3.2 step 1) must wrap the sign-in gate
+    # (step 2) and the security headers. Adding the guard last makes it
+    # the outermost check.
+    if lan_mode:
+        app.add_middleware(SecurityHeadersMiddleware)
+        app.add_middleware(SignInGateMiddleware)
     if getattr(cfg, "host_check", True):
         app.add_middleware(
             HostGuardMiddleware, allowed_hosts=set(ALLOWED_HOSTS) | set(extra_hosts)
         )
-    if lan_mode:
-        app.add_middleware(SecurityHeadersMiddleware)
-        app.add_middleware(SignInGateMiddleware)
     app.mount("/static", RevalidatedStaticFiles(directory=STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 

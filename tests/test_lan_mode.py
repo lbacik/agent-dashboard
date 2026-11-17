@@ -1195,3 +1195,152 @@ def test_lan_mode_end_to_end_through_cli(monkeypatch, tmp_path, capsys):
     assert last["outcome"] == "refused"
     assert last["reason"] == "not_permitted"
     assert last["operator"] == "vera"
+
+
+# --- middleware order (spec 3.2, #205) --------------------------------------------
+#
+# Starlette runs the last-added middleware first, so the Host check must be
+# registered after the sign-in gate to run before it. A disallowed Host gets
+# 403 "forbidden: unexpected Host header" on every path, with or without a
+# session, instead of the gate's 303/401.
+
+
+def _order_app(tmp_path, monkeypatch, **settings_kwargs):
+    """A LAN mode app for the order tests, allow-list ``dash.lan``."""
+    from test_passwords import CheapHasher
+
+    from agent_dashboard.app import create_app
+    from agent_dashboard.config import Settings
+    from agent_dashboard.fleet import FleetState
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    kwargs = {"lan_mode": True, "allowed_hosts": frozenset({"dash.lan"})}
+    kwargs.update(settings_kwargs)
+    return create_app(
+        state=FleetState(),
+        settings=Settings(**kwargs),
+        gateway=FakeGateway(),
+        start_poller=False,
+        password_hasher=CheapHasher(),
+    )
+
+
+def _order_session_cookie(app, tmp_path):
+    """A valid sign-in session cookie, signed in through the allowed host."""
+    from fastapi.testclient import TestClient
+    from test_passwords import CheapHasher
+
+    from agent_dashboard import account_store
+    from agent_dashboard.passwords import normalize_password
+
+    conn = account_store.open_store(now=time.time())
+    try:
+        account_store.create_account(
+            conn, "alice", "controller", now=time.time()
+        )
+        conn.execute(
+            "UPDATE accounts SET password_hash = ? WHERE name = ?",
+            (CheapHasher().hash(normalize_password("correct horse battery staple")), "alice"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    allowed = TestClient(app, base_url="http://localhost")
+    response = allowed.post(
+        "/login",
+        data={"account": "alice", "password": "correct horse battery staple"},
+        headers={"Origin": "http://localhost"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, response.text
+    cookies = response.headers.get_list("set-cookie")
+    assert cookies
+    return cookies[0].split(";", 1)[0]
+
+
+def _disallowed_requests():
+    """(method, path, kwargs) covered by the order test on a disallowed Host."""
+    return [
+        ("GET", "/", {}),
+        ("GET", "/stream", {}),
+        (
+            "POST",
+            "/instances/work/control/review",
+            {"data": {"action": "stop"}},
+        ),
+        ("GET", "/login", {}),
+        ("GET", "/static/style.css", {}),
+    ]
+
+
+@pytest.mark.parametrize("method,path,extra", _disallowed_requests())
+def test_host_check_runs_before_sign_in_gate(tmp_path, monkeypatch, method, path, extra):
+    """Disallowed Host without a session: Host 403, not the gate's 303/401."""
+    from fastapi.testclient import TestClient
+
+    app = _order_app(tmp_path, monkeypatch)
+    client = TestClient(app, base_url="http://evil.test")
+    response = client.request(method, path, follow_redirects=False, **extra)
+    assert response.status_code == 403
+    assert response.text == "forbidden: unexpected Host header"
+
+
+@pytest.mark.parametrize("method,path,extra", _disallowed_requests())
+def test_host_check_runs_before_gate_with_session(
+    tmp_path, monkeypatch, method, path, extra
+):
+    """Disallowed Host with a valid session: still the Host 403."""
+    from fastapi.testclient import TestClient
+
+    app = _order_app(tmp_path, monkeypatch)
+    cookie = _order_session_cookie(app, tmp_path)
+    client = TestClient(app, base_url="http://evil.test")
+    headers = dict(extra.pop("headers", {}))
+    headers["Cookie"] = cookie
+    response = client.request(
+        method, path, headers=headers, follow_redirects=False, **extra
+    )
+    assert response.status_code == 403
+    assert response.text == "forbidden: unexpected Host header"
+
+
+def test_allowed_host_gate_responses_unchanged(tmp_path, monkeypatch):
+    """Allowed Host without a session: the gate answers as before."""
+    from fastapi.testclient import TestClient
+
+    app = _order_app(tmp_path, monkeypatch)
+    client = TestClient(app, base_url="http://dash.lan")
+    page = client.get("/", follow_redirects=False)
+    assert page.status_code == 303
+    assert page.headers["location"] == "/login?next=%2F"
+    stream = client.get("/stream", follow_redirects=False)
+    assert stream.status_code == 401
+    assert stream.text == "Sign-in required."
+    htmx = client.get(
+        "/",
+        headers={"HX-Request": "true", "HX-Current-URL": "http://dash.lan/"},
+        follow_redirects=False,
+    )
+    assert htmx.status_code == 401
+    assert htmx.headers["hx-redirect"] == "/login?next=%2F"
+    control = client.post(
+        "/instances/work/control/review",
+        data={"action": "stop"},
+        follow_redirects=False,
+    )
+    assert control.status_code == 401
+    assert control.text == "Sign-in required."
+
+
+def test_host_check_off_leaves_gate(tmp_path, monkeypatch):
+    """With host_check off, a disallowed Host reaches the gate (no 403)."""
+    from fastapi.testclient import TestClient
+
+    app = _order_app(tmp_path, monkeypatch, host_check=False)
+    client = TestClient(app, base_url="http://evil.test")
+    page = client.get("/", follow_redirects=False)
+    assert page.status_code == 303
+    assert page.headers["location"] == "/login?next=%2F"
+    stream = client.get("/stream", follow_redirects=False)
+    assert stream.status_code == 401
+    assert stream.text == "Sign-in required."
