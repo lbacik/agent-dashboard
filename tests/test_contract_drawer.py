@@ -433,6 +433,21 @@ def test_drawer_states_headlines_and_modules():
         assert "Live #" not in body
 
 
+def test_contract_cockpit_grid_has_three_columns_in_order():
+    """The contract cockpit shares the three-wrapper grid: DOM order pins
+    the two-track placement (activity spans, events dock under status)."""
+    client = _replay_client([_result("status-active")], now=time.time())
+    body = client.get("/instances/web-0").text
+    assert 'class="vc-cockpit-grid"' in body
+    grid = body.partition('class="vc-cockpit-grid"')[2]
+    assert grid.index('data-col="contract-status"') < grid.index(
+        'data-col="contract-activity"'
+    )
+    assert grid.index('data-col="contract-activity"') < grid.index(
+        'data-col="contract-events"'
+    )
+
+
 def test_drawer_draining_headline_prefers_pending_stop():
     client = _replay_client([_result("status-draining")], now=time.time())
     assert "Stop requested" in client.get("/instances/web-0").text

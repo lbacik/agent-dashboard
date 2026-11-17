@@ -104,7 +104,12 @@ and events carry a `native` tag (`.native-tag`).
   status headline box, Logs/Live links and close. Below it three columns
   of numbered module cards (`.vc-module` + `.vc-module-bar`):
   01 Control console, 02 Identity & last attempt; 03 Activity,
-  04 Current attempt; 05 Attempt statistics, 06 Recent events.
+  04 Current attempt; 05 Attempt statistics, 06 Recent events. Above
+  1360px the three columns sit side by side; with two tracks
+  (1050–1360px) the telemetry column spans both rows on the right while
+  the history column sits directly under the control column on the left
+  (rows `auto 1fr`, so 05 starts right under 02); below 1050px the
+  cockpit is one column in module order 01 to 06.
 
 ## Theme: light only (for now)
 
