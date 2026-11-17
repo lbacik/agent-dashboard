@@ -254,11 +254,11 @@ def test_review_resume_confirmation_pins_exact_argv():
     assert "ctl-tone-primary" in response.text
 
 
-def test_review_rejects_non_core_action():
+def test_review_rejects_action_outside_contract_set():
     client, _, _ = make_contract_client()
-    response = review(client, {"action": "handoff"})
+    response = review(client, {"action": "recovery_retry"})
     assert response.status_code == 422
-    assert "stop, resume" in response.text
+    assert "stop, stop_after, resume, handoff, next_issue" in response.text
     entries = audit_entries()
     assert len(entries) == 1
     assert entries[0]["outcome"] == "refused"
@@ -283,6 +283,8 @@ def test_submit_stop_accepted_card_follows_with_track():
             "request_id": RID,
             "expect_repo": REPO,
             "exec_user": "agent",
+            "n": None,
+            "issue": None,
         }
     ]
     assert gateway.contract_argvs == [
@@ -423,13 +425,24 @@ def test_submit_ambiguous_is_retried_once_with_same_request_id():
     )
     real = gateway.contract_mutation
 
-    async def _swap(container_id, action, *, request_id, expect_repo, exec_user="agent"):
+    async def _swap(
+        container_id,
+        action,
+        *,
+        request_id,
+        expect_repo,
+        exec_user="agent",
+        n=None,
+        issue=None,
+    ):
         out = await real(
             container_id,
             action,
             request_id=request_id,
             expect_repo=expect_repo,
             exec_user=exec_user,
+            n=n,
+            issue=issue,
         )
         gateway.set_contract_mutation(CID, _ok_envelope(RID), returncode=0)
         return out
@@ -451,7 +464,16 @@ def test_submit_timeout_is_retried_once_with_same_request_id():
     real = gateway.contract_mutation
     seen: list[list[str]] = []
 
-    async def _flaky(container_id, action, *, request_id, expect_repo, exec_user="agent"):
+    async def _flaky(
+        container_id,
+        action,
+        *,
+        request_id,
+        expect_repo,
+        exec_user="agent",
+        n=None,
+        issue=None,
+    ):
         seen.append(
             argv_contract_exec(
                 container_id,
@@ -467,6 +489,8 @@ def test_submit_timeout_is_retried_once_with_same_request_id():
             request_id=request_id,
             expect_repo=expect_repo,
             exec_user=exec_user,
+            n=n,
+            issue=issue,
         )
 
     gateway.contract_mutation = _flaky  # type: ignore[method-assign]
@@ -640,7 +664,7 @@ def test_contract_console_slot_renders_in_drawer():
 
 def test_refused_submit_carries_protocol_and_backend():
     client, _, _ = make_contract_client()
-    response = submit(client, submit_form(action="handoff"))
+    response = submit(client, submit_form(action="recovery_retry"))
     assert response.status_code == 422
     entries = audit_entries()
     assert len(entries) == 1

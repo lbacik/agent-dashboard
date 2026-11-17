@@ -691,9 +691,13 @@ class FakeGateway:
         request_id: str,
         expect_repo: str,
         exec_user: str = AGENT_USER,
+        n: int | str | None = None,
+        issue: int | str | None = None,
     ) -> ControlExec:
         """One scripted contract mutation exec, validated like the real gateway."""
-        agentctl_argv = argv_contract_mutation(action, request_id, expect_repo)
+        agentctl_argv = argv_contract_mutation(
+            action, request_id, expect_repo, n=n, issue=issue
+        )
         argv = argv_contract_exec(container_id, agentctl_argv, exec_user=exec_user)
         if self.control_in_flight(container_id):
             raise ControlBusyError(
@@ -707,6 +711,8 @@ class FakeGateway:
                 "request_id": request_id,
                 "expect_repo": expect_repo,
                 "exec_user": exec_user,
+                "n": n,
+                "issue": issue,
             }
         )
         return await self._run_scripted_control(container_id, self._contract_scripts)

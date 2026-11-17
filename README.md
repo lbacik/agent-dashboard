@@ -152,21 +152,34 @@ status" button, re-reads an outcome without sending anything.
 
 **Contract instances.** On a live contract instance the Control console
 (`06 // Control console` in the drawer) offers the two core actions,
-`stop` and `resume`, under the same dashboard-wide control mode, request
-protection, LAN-mode Roles and container-ID plus repository check (the
-legacy minimum-version table does not apply). Every request carries a
+`stop` and `resume`, plus the capability-gated actions the latest good
+snapshot advertises in `identity.capabilities`: `stop --after N` (1–999,
+needs `stop-after`), `next issue <n>` (needs `next-issue`) and
+`handoff now` (needs `operator-handoff`). A coding-agent instance
+(`stop-after`, `next-issue`) never offers `handoff now`; unadvertised
+actions are hidden, never inferred from the backend name or image, and
+recovery (`recovery_retry`, `recovery_release`) plus `errors_reset` are
+never offered. The same dashboard-wide control mode, request protection,
+LAN-mode Roles and container-ID plus repository check apply (the legacy
+minimum-version table does not apply). Every request carries a
 `--contract 1` argv of the pinned shape
-(`stop|resume --request-id <dash-…> --expect-repo <owner/name>`,
+(`stop|resume`, `stop --after N`, `next issue <n>`, `handoff now`, each
+with space-separated `--request-id <dash-…> --expect-repo <owner/name>`,
 `--expect-repo` always sent) with a consumer-generated request ID, and
 the confirmation shows the exact argv, the instance, the Target Repository
-and the request ID. Every reply ends in a feedback card: an accepted command
-is followed through the snapshot's `recent_commands` until its
-Acknowledgement is terminal (`completed`, `superseded`, `not_fulfilled`);
-an ambiguous outcome (agent unreachable, Docker 125–127, a timeout, or an
-unreadable reply) is re-sent once with the same request ID within the 15 s
-mutation budget, then reported as Outcome unknown with Retry (same ID) and
-Check status. The timeline shows the newest 10 `recent_commands` with
-`dashboard`/`CLI` origin chips.
+and the request ID. An action the snapshot no longer advertises is refused
+with "not supported by this instance; nothing stored". Every reply ends in
+a feedback card: an accepted command is followed through the snapshot's
+`recent_commands` until its Acknowledgement is terminal (`completed`,
+`superseded`, `not_fulfilled`), with progress lines from the intake
+sections (`<remaining> left [and <counted> counted]` from `stop_plan`,
+`issue #<n> pending` from `priority`) when their `request_id` matches the
+card's; the Fleet table's Intake cell shows open/closed, a pending stop, a
+stop plan and a priority. An ambiguous outcome (agent unreachable, Docker
+125–127, a timeout, or an unreadable reply) is re-sent once with the same
+request ID within the 15 s mutation budget, then reported as Outcome
+unknown with Retry (same ID) and Check status. The timeline shows the
+newest 10 `recent_commands` with `dashboard`/`CLI` origin chips.
 
 **Switching control off.** Control defaults to on. Pass `--control off`
 (or set `AGENT_DASHBOARD_CONTROL=off`) for read-only mode: every drawer

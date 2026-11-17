@@ -898,13 +898,6 @@ async def _review_contract(request, name, row, templates, form, action_raw):
             409,
         )
 
-    params: dict[str, int] = {}
-    if action == "stop_after":
-        assert n_value is not None
-        params = {"n": n_value}
-    elif action == "next_issue":
-        assert issue_value is not None
-        params = {"issue": issue_value}
     display_command = _display_command(action, n=n_value, issue=issue_value)
     request_id = "dash-" + secrets.token_hex(8)
     argv = argv_contract_exec(
@@ -1094,6 +1087,9 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
     request_id = values["request_id"]
     retry = values["retry"]
     command = values["command"]
+    n_value = values["n_value"]
+    issue_value = values["issue_value"]
+    params = values["params"]
     submit_url = f"/instances/{quote(name, safe='')}/control/submit"
     status_url = f"/instances/{quote(name, safe='')}/control/status"
 
@@ -1125,7 +1121,7 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
                 container_id=container_id,
                 expected_repository=repository,
                 action=action,
-                params={},
+                params=params,
                 command=command,
                 agent_version=_agent_version(row),
                 retry=retry,
@@ -1154,7 +1150,7 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
                 container_id=container_id,
                 expected_repository=repository,
                 action=action,
-                params={},
+                params=params,
                 command=command,
                 agent_version=_agent_version(row),
                 retry=retry,
@@ -1186,7 +1182,7 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
                     container_id=container_id,
                     expected_repository=repository,
                     action=action,
-                    params={},
+                    params=params,
                     command=command,
                     agent_version=_agent_version(row),
                     expect_repo_guard=True,
@@ -1208,7 +1204,7 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
         "container_id": container_id,
         "expected_repository": repository,
         "action": action,
-        "params": {},
+        "params": params,
         "command": command,
         "agent_version": _agent_version(row),
         "expect_repo_guard": True,
@@ -1249,6 +1245,8 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
                 request_id=request_id,
                 expect_repo=repository,
                 exec_user=exec_user,
+                n=n_value,
+                issue=issue_value,
             )
         except ControlBusyError:
             raise
@@ -1368,8 +1366,8 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
     track_url = track_url_for(
         name,
         action=action,
-        n_value=None,
-        issue_value=None,
+        n_value=n_value,
+        issue_value=issue_value,
         container_id=container_id,
         repository=repository,
         request_id=request_id,
@@ -1447,6 +1445,8 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
                 repository=repository,
                 request_id=request_id,
                 submit_url=submit_url,
+                n_value=n_value,
+                issue_value=issue_value,
             ),
         )
     elif cls == CONTRACT_REJECTION:
@@ -1463,10 +1463,8 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
             outcome_note=outcome_note,
         )
     elif cls == CONTRACT_UNSUPPORTED:
-        error = (
-            f"Not supported: {error_text or 'the instance does not support this action'}. "
-            "Nothing was stored."
-        )
+        reason = error_text or "the instance does not support this action"
+        error = f"Not supported: {reason} (not supported by this instance; nothing stored)."
         _outcome("rejected", error)
         feedback = render_card(
             templates,
@@ -1530,6 +1528,8 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
                 repository=repository,
                 request_id=request_id,
                 submit_url=submit_url,
+                n_value=n_value,
+                issue_value=issue_value,
             ),
             status_fields=_contract_status_fields(
                 action=action,
@@ -1537,6 +1537,8 @@ async def _submit_contract(request, name: str, row, templates, form, gateway):
                 repository=repository,
                 request_id=request_id,
                 status_url=status_url,
+                n_value=n_value,
+                issue_value=issue_value,
             ),
         )
     return HTMLResponse(
@@ -1560,6 +1562,7 @@ async def _track_contract(request, name: str, row, templates):
     status_url = f"/instances/{quote(name, safe='')}/control/status"
     contract = getattr(row, "contract", None)
     recent = getattr(contract, "commands", None)
+    stop_plan, priority = _contract_intake_sections(contract)
     result = follow_contract_command(
         action=values["action"],
         request_id=values["request_id"],
@@ -1569,6 +1572,8 @@ async def _track_contract(request, name: str, row, templates):
         reach=row.reach,
         row_container_id=row.container_id,
         row_exists=True,
+        stop_plan=stop_plan,
+        priority=priority,
     )
     return HTMLResponse(
         follow_card(templates, name, values, result, status_url=status_url),
@@ -1615,6 +1620,8 @@ async def _status_contract(request, name: str, row, templates, form, gateway):
     repository = values["repository"]
     request_id = values["request_id"]
     command = values["command"]
+    n_value = values["n_value"]
+    issue_value = values["issue_value"]
     submit_url = f"/instances/{quote(name, safe='')}/control/submit"
     status_url = f"/instances/{quote(name, safe='')}/control/status"
 
@@ -1634,6 +1641,8 @@ async def _status_contract(request, name: str, row, templates, form, gateway):
                 repository=repository,
                 request_id=request_id,
                 submit_url=submit_url,
+                n_value=n_value,
+                issue_value=issue_value,
             ),
             status_fields=_contract_status_fields(
                 action=action,
@@ -1641,6 +1650,8 @@ async def _status_contract(request, name: str, row, templates, form, gateway):
                 repository=repository,
                 request_id=request_id,
                 status_url=status_url,
+                n_value=n_value,
+                issue_value=issue_value,
             ),
         )
 
@@ -1714,6 +1725,7 @@ async def _status_contract(request, name: str, row, templates, form, gateway):
         # line still comes from the snapshot's related section.
         contract = getattr(row, "contract", None)
         recent = getattr(contract, "commands", None)
+        stop_plan, priority = _contract_intake_sections(contract)
         result = follow_contract_command(
             action=action,
             request_id=request_id,
@@ -1723,6 +1735,8 @@ async def _status_contract(request, name: str, row, templates, form, gateway):
             reach=row.reach,
             row_container_id=row.container_id,
             row_exists=True,
+            stop_plan=stop_plan,
+            priority=priority,
         )
         if result.outcome == "terminal":
             return HTMLResponse(
@@ -1739,8 +1753,8 @@ async def _status_contract(request, name: str, row, templates, form, gateway):
             )
         status_values = {
             "action": action,
-            "n_value": None,
-            "issue_value": None,
+            "n_value": n_value,
+            "issue_value": issue_value,
             "container_id": container_id,
             "repository": repository,
             "request_id": request_id,
@@ -1785,6 +1799,8 @@ async def _status_contract(request, name: str, row, templates, form, gateway):
                     repository=repository,
                     request_id=request_id,
                     submit_url=submit_url,
+                    n_value=n_value,
+                    issue_value=issue_value,
                 ),
             ),
             status_code=200,
