@@ -785,13 +785,22 @@ def validate_container_id(container_id: str) -> str:
 CONTROL_ACTIONS = frozenset({"stop", "stop_after", "resume", "handoff", "next_issue"})
 
 #: Contract-path Control actions the dashboard offers on live contract
-#: instances: the core mutations (spec "Control actions (contract path)").
-#: Legacy-only actions (``stop_after``, ``handoff``, ``next_issue``) stay on
-#: the legacy path.
-CONTRACT_CONTROL_ACTIONS = frozenset({"stop", "resume"})
+#: instances: the two core mutations plus the capability-gated ones (spec
+#: "Control actions (contract path)"). ``stop_after`` needs the
+#: ``stop-after`` capability, ``next_issue`` needs ``next-issue`` and
+#: ``handoff`` needs ``operator-handoff``; unadvertised actions are hidden.
+#: Recovery and errors-reset operations are never offered.
+CONTRACT_CONTROL_ACTIONS = frozenset(
+    {"stop", "stop_after", "resume", "handoff", "next_issue"}
+)
 
 #: ``stop --after`` takes 1-99 attempts, no leading zeros.
 CONTROL_N_RE = re.compile(r"[1-9][0-9]?\Z")
+
+#: ``stop --after`` on the contract path takes 1-999 attempts, no leading
+#: zeros (the contract range; the legacy path keeps 1-99).
+CONTRACT_N_RE = re.compile(r"[1-9][0-9]{0,2}\Z")
+MAX_CONTRACT_N = 999
 
 #: ``next issue`` takes an int32 issue number, no leading zeros.
 CONTROL_ISSUE_RE = re.compile(r"[1-9][0-9]{0,9}\Z")
@@ -842,6 +851,16 @@ def _validate_control_int(
 def validate_control_n(n: int | str) -> int:
     """Return the ``stop --after`` attempt count (1-99), else raise."""
     return _validate_control_int(n, CONTROL_N_RE, 99, "attempts before stopping")
+
+
+def validate_contract_n(n: int | str) -> int:
+    """Return the contract ``stop --after`` attempt count (1-999), else raise.
+
+    The legacy path keeps 1-99; only the contract path accepts up to 999.
+    """
+    return _validate_control_int(
+        n, CONTRACT_N_RE, MAX_CONTRACT_N, "attempts before stopping"
+    )
 
 
 def validate_control_issue(issue: int | str) -> int:
@@ -948,24 +967,50 @@ def argv_command_status(container_id: str, request_id: str) -> list[str]:
 
 
 def argv_contract_mutation(
-    action: str, request_id: str, expect_repo: str
+    action: str,
+    request_id: str,
+    expect_repo: str,
+    *,
+    n: int | str | None = None,
+    issue: int | str | None = None,
 ) -> list[str]:
-    """Agentctl argv for one contract mutation: ``stop`` or ``resume``.
+    """Agentctl argv for one contract mutation.
 
-    The shape is pinned: ``[action, "--request-id", id, "--expect-repo",
-    repo]`` with space-separated flags (contract section 3.1), and
-    ``--expect-repo`` is always present. The request ID must fit the
-    contract pattern (``dash-`` IDs the dashboard generates do); the
-    repository must be ``owner/name``. A bad value raises
-    :class:`ValueError` before any argv exists.
+    The shape is pinned with space-separated flags (contract section 3.1),
+    and ``--expect-repo`` is always present:
+
+    - ``stop`` / ``resume``: ``[action, "--request-id", id, "--expect-repo",
+      repo]``;
+    - ``stop_after``: ``["stop", "--after", N, "--request-id", id,
+      "--expect-repo", repo]`` with N in 1-999;
+    - ``next_issue``: ``["next", "issue", I, "--request-id", id,
+      "--expect-repo", repo]``;
+    - ``handoff``: ``["handoff", "now", "--request-id", id, "--expect-repo",
+      repo]``.
+
+    The request ID must fit the contract pattern (``dash-`` IDs the
+    dashboard generates do); the repository must be ``owner/name``. A bad
+    value raises :class:`ValueError` before any argv exists.
     """
     from .contract_reply import validate_contract_request_id
 
     if not isinstance(action, str) or action not in CONTRACT_CONTROL_ACTIONS:
         raise ValueError(f"invalid contract control action: {action!r}")
     validate_contract_request_id(request_id)
+    if action == "stop_after":
+        tail = ["stop", "--after", str(validate_contract_n(n))]
+    elif action == "next_issue":
+        tail = ["next", "issue", str(validate_control_issue(issue))]
+    elif action == "handoff":
+        if n is not None or issue is not None:
+            raise ValueError(f"contract control action {action!r} takes no parameter")
+        tail = ["handoff", "now"]
+    else:
+        if n is not None or issue is not None:
+            raise ValueError(f"contract control action {action!r} takes no parameter")
+        tail = [action]
     validate_expect_repo(expect_repo)
-    return [action, "--request-id", request_id, "--expect-repo", expect_repo]
+    return [*tail, "--request-id", request_id, "--expect-repo", expect_repo]
 
 
 def argv_contract_command(request_id: str) -> list[str]:
@@ -2735,19 +2780,23 @@ class DockerGateway:
         request_id: str,
         expect_repo: str,
         exec_user: str = AGENT_USER,
+        n: int | str | None = None,
+        issue: int | str | None = None,
     ) -> ControlExec:
-        """Run one contract mutation (``stop``/``resume``) in the control slot.
+        """Run one contract mutation in the control slot.
 
-        The agentctl argv is pinned
-        (``stop|resume --request-id <id> --expect-repo <owner/name>`` with
-        space-separated flags); ``--expect-repo`` is always present and the
-        legacy minimum-version table does not apply. Shares the
-        per-container control slot with :meth:`control`: a second call for
-        the same container raises :class:`ControlBusyError`. The bound is
-        the contract's mutation policy (15 s). No automatic retry here:
+        The agentctl argv is pinned (``stop``/``resume``/``stop --after
+        N``/``next issue I``/``handoff now``, each with space-separated
+        ``--request-id`` and ``--expect-repo``); ``--expect-repo`` is always
+        present and the legacy minimum-version table does not apply. Shares
+        the per-container control slot with :meth:`control`: a second call
+        for the same container raises :class:`ControlBusyError`. The bound
+        is the contract's mutation policy (15 s). No automatic retry here:
         the caller retries ambiguous outcomes with the same request ID.
         """
-        agentctl_argv = argv_contract_mutation(action, request_id, expect_repo)
+        agentctl_argv = argv_contract_mutation(
+            action, request_id, expect_repo, n=n, issue=issue
+        )
         return await self._run_single_contract(
             container_id, agentctl_argv, exec_user=exec_user, operation=action
         )

@@ -62,6 +62,7 @@ from .contract_status import (
 from .control import (
     ACTION_COMMANDS,
     ACTION_LABELS,
+    CONTRACT_CAPABILITY_FOR_ACTION,
     GONE_BODY,
     MISSING,
     TERMINAL_TITLES,
@@ -95,6 +96,7 @@ from .gateway import (
     argv_contract_mutation,
     argv_control,
     validate_container_id,
+    validate_contract_n,
     validate_control_action,
     validate_control_issue,
     validate_control_n,
@@ -483,7 +485,11 @@ def _row_availability(row, request: Request):
     """The console view model for one fleet row and the signed-in Operator."""
     mode = _request_mode(request, request.app.state.control_mode)
     if getattr(row, "path", "legacy") == "contract":
-        return contract_availability(reach=row.reach, mode=mode)
+        contract = getattr(row, "contract", None)
+        capabilities = getattr(contract, "capabilities", ())
+        return contract_availability(
+            reach=row.reach, mode=mode, capabilities=capabilities
+        )
     control = MISSING if row.control_raw_missing else row.control_raw
     return control_availability(
         reach=row.reach,
@@ -621,13 +627,17 @@ def _contract_exec_user(row) -> str | None:
 def _validate_contract_submit(form: dict[str, str]) -> tuple[dict | None, str | None]:
     """Validate every contract submit field, including the contract request ID.
 
-    Returns ``(values, None)`` with the parsed action, container ID,
-    repository, request ID, retry flag and human command, or ``(None,
-    message)`` with the first failure in field order. Only ``stop`` and
-    ``resume`` are accepted; ``n``/``issue`` must be absent. A failure
-    answers 422 with a Refused card; it never reaches argv.
+    Returns ``(values, None)`` with the parsed action, parameter, container
+    ID, repository, request ID, retry flag and human command, or ``(None,
+    message)`` with the first failure in field order. All five contract
+    actions are accepted here (the review gates on capabilities; a
+    capability withdrawn since the snapshot surfaces as an ``unsupported``
+    card, not a refusal). A failure answers 422 with a Refused card; it
+    never reaches argv.
     """
     action_raw = form.get("action", "")
+    n_raw = form.get("n", "")
+    issue_raw = form.get("issue", "")
     container_raw = form.get("container_id", "")
     repository_raw = form.get("repository", "")
     request_id_raw = form.get("request_id", "")
@@ -638,9 +648,26 @@ def _validate_contract_submit(form: dict[str, str]) -> tuple[dict | None, str | 
         action = action_raw
     except ValueError:
         return None, (
-            f"Invalid action: {action_raw!r} (expected one of stop, resume)."
+            f"Invalid action: {action_raw!r} "
+            "(expected one of stop, stop_after, resume, handoff, next_issue)."
         )
-    if form.get("n", "") or form.get("issue", ""):
+    n_value: int | None = None
+    issue_value: int | None = None
+    if action == "stop_after":
+        try:
+            n_value = validate_contract_n(n_raw)
+        except ValueError:
+            return None, (
+                f"Invalid attempts before stopping: {n_raw!r} (expected 1–999)."
+            )
+    elif action == "next_issue":
+        try:
+            issue_value = validate_control_issue(issue_raw)
+        except ValueError:
+            return None, (
+                f"Invalid issue number: {issue_raw!r} (expected 1–2147483647)."
+            )
+    elif n_raw or issue_raw:
         return None, f"Action {action!r} takes no parameter."
     try:
         container_id = validate_container_id(container_raw)
@@ -660,14 +687,24 @@ def _validate_contract_submit(form: dict[str, str]) -> tuple[dict | None, str | 
         retry = True
     else:
         return None, f"Invalid retry flag: {retry_raw!r} (expected 1)."
+    params: dict[str, int] = {}
+    if action == "stop_after":
+        assert n_value is not None
+        params = {"n": n_value}
+    elif action == "next_issue":
+        assert issue_value is not None
+        params = {"issue": issue_value}
     return (
         {
             "action": action,
+            "n_value": n_value,
+            "issue_value": issue_value,
             "container_id": container_id,
             "repository": repository,
             "request_id": request_id,
             "retry": retry,
-            "command": action,
+            "params": params,
+            "command": _display_command(action, n=n_value, issue=issue_value),
         },
         None,
     )
@@ -682,8 +719,27 @@ def _validate_contract_track(query: dict[str, str]) -> tuple[dict | None, str | 
     action_raw = query.get("action", "")
     if not isinstance(action_raw, str) or action_raw not in CONTRACT_CONTROL_ACTIONS:
         return None, (
-            f"Invalid action: {action_raw!r} (expected one of stop, resume)."
+            f"Invalid action: {action_raw!r} "
+            "(expected one of stop, stop_after, resume, handoff, next_issue)."
         )
+    n_value: int | None = None
+    issue_value: int | None = None
+    if action_raw == "stop_after":
+        try:
+            n_value = validate_contract_n(query.get("n", ""))
+        except ValueError:
+            return None, (
+                f"Invalid attempts before stopping: {query.get('n', '')!r} "
+                "(expected 1–999)."
+            )
+    elif action_raw == "next_issue":
+        try:
+            issue_value = validate_control_issue(query.get("issue", ""))
+        except ValueError:
+            return None, (
+                f"Invalid issue number: {query.get('issue', '')!r} "
+                "(expected 1–2147483647)."
+            )
     try:
         container_id = validate_container_id(query.get("container_id", ""))
     except ValueError:
@@ -704,8 +760,8 @@ def _validate_contract_track(query: dict[str, str]) -> tuple[dict | None, str | 
     return (
         {
             "action": action_raw,
-            "n_value": None,
-            "issue_value": None,
+            "n_value": n_value,
+            "issue_value": issue_value,
             "container_id": container_id,
             "repository": query.get("repository", ""),
             "request_id": request_id,
@@ -723,25 +779,47 @@ def _audit_path(row) -> dict:
 
 
 async def _review_contract(request, name, row, templates, form, action_raw):
-    """Step 2 confirmation for a contract mutation (``stop``/``resume``).
+    """Step 2 confirmation for a contract mutation.
 
-    Request protection already ran; this validates the action (422, composer
-    re-rendered), the instance's controls available (403, console line), the
-    action enabled (409, composer with the disabled reason) and the Target
-    Repository plus exec user (409: ``--expect-repo`` is always sent, so
-    review refuses without them). Then 200 with the confirmation showing
-    the exact argv, the instance, the Target Repository and a newly
-    generated request ID. Each refusal writes one ``refused`` entry with
-    the contract protocol; a 200 writes nothing and runs no exec.
+    Request protection already ran; this validates the action and its
+    parameter (422, composer re-rendered), the instance's controls available
+    (403, console line), the action offered by the snapshot's capabilities
+    (409 when hidden, composer with the reason) and the Target Repository
+    plus exec user (409: ``--expect-repo`` is always sent, so review refuses
+    without them). Then 200 with the confirmation showing the exact argv,
+    the instance, the Target Repository and a newly generated request ID.
+    Each refusal writes one ``refused`` entry with the contract protocol; a
+    200 writes nothing and runs no exec.
     """
     action: str | None = None
+    n_value: int | None = None
+    issue_value: int | None = None
     validation_message: str | None = None
     if not isinstance(action_raw, str) or action_raw not in CONTRACT_CONTROL_ACTIONS:
         validation_message = (
-            f"Invalid action: {action_raw!r} (expected one of stop, resume)."
+            f"Invalid action: {action_raw!r} "
+            "(expected one of stop, stop_after, resume, handoff, next_issue)."
         )
     else:
         action = action_raw
+        n_raw = form.get("n", "")
+        issue_raw = form.get("issue", "")
+        if action == "stop_after":
+            try:
+                n_value = validate_contract_n(n_raw)
+            except ValueError:
+                validation_message = (
+                    f"Invalid attempts before stopping: {n_raw!r} (expected 1–999)."
+                )
+        elif action == "next_issue":
+            try:
+                issue_value = validate_control_issue(issue_raw)
+            except ValueError:
+                validation_message = (
+                    f"Invalid issue number: {issue_raw!r} (expected 1–2147483647)."
+                )
+        elif n_raw or issue_raw:
+            validation_message = f"Action {action!r} takes no parameter."
 
     def composer_error(message: str, status: int):
         _write_refused(
@@ -763,6 +841,8 @@ async def _review_contract(request, name, row, templates, form, action_raw):
         context = _composer_context_for(request, name, row)
         context["review_error"] = message
         context["entered_action"] = action
+        context["entered_n"] = form.get("n", "")
+        context["entered_issue"] = form.get("issue", "")
         return templates.TemplateResponse(request, "_control.html", context, status_code=status)
 
     if validation_message is not None:
@@ -792,7 +872,12 @@ async def _review_contract(request, name, row, templates, form, action_raw):
         return templates.TemplateResponse(request, "_control.html", context, status_code=403)
 
     selected = next((a for a in availability.actions if a.key == action), None)
-    if selected is not None and not selected.enabled:
+    if selected is None:
+        label = ACTION_LABELS.get(action, action)
+        return composer_error(
+            f"{label} is unavailable: not supported by this instance", 409
+        )
+    if not selected.enabled:
         label = ACTION_LABELS.get(action, action)
         return composer_error(f"{label} is unavailable: {selected.reason}", 409)
 
@@ -813,13 +898,23 @@ async def _review_contract(request, name, row, templates, form, action_raw):
             409,
         )
 
+    params: dict[str, int] = {}
+    if action == "stop_after":
+        assert n_value is not None
+        params = {"n": n_value}
+    elif action == "next_issue":
+        assert issue_value is not None
+        params = {"issue": issue_value}
+    display_command = _display_command(action, n=n_value, issue=issue_value)
     request_id = "dash-" + secrets.token_hex(8)
     argv = argv_contract_exec(
         row.container_id,
-        argv_contract_mutation(action, request_id, expect_repo),
+        argv_contract_mutation(
+            action, request_id, expect_repo, n=n_value, issue=issue_value
+        ),
         exec_user=exec_user,
     )
-    tone = "danger" if action == "stop" else "primary"
+    tone = "danger" if action in DANGER_ACTIONS else "primary"
     return templates.TemplateResponse(
         request,
         "_control_confirm.html",
@@ -828,14 +923,14 @@ async def _review_contract(request, name, row, templates, form, action_raw):
             "slug": control_slug(name),
             "action": action,
             "action_label": ACTION_LABELS.get(action, action),
-            "display_command": action,
+            "display_command": display_command,
             "argv_text": " ".join(argv),
             "request_id": request_id,
             "container_id": row.container_id,
             "repository": repository,
             "expect_repo": expect_repo,
-            "n_value": None,
-            "issue_value": None,
+            "n_value": n_value,
+            "issue_value": issue_value,
             "tone": tone,
             "submit_url": f"/instances/{quote(name, safe='')}/control/submit",
             "console_url": f"/instances/{quote(name, safe='')}/control",
@@ -858,12 +953,14 @@ def _contract_retry_fields(
     repository: str,
     request_id: str,
     submit_url: str,
+    n_value: int | None = None,
+    issue_value: int | None = None,
 ) -> dict:
     """Hidden fields for a contract card's Retry form (same request ID)."""
     return {
         "action": action,
-        "n_value": None,
-        "issue_value": None,
+        "n_value": n_value,
+        "issue_value": issue_value,
         "container_id": container_id,
         "repository": repository,
         "request_id": request_id,
@@ -878,17 +975,64 @@ def _contract_status_fields(
     repository: str,
     request_id: str,
     status_url: str,
+    n_value: int | None = None,
+    issue_value: int | None = None,
 ) -> dict:
     """Hidden fields for a contract card's Check status form."""
     return {
         "action": action,
-        "n_value": None,
-        "issue_value": None,
+        "n_value": n_value,
+        "issue_value": issue_value,
         "container_id": container_id,
         "repository": repository,
         "request_id": request_id,
         "status_url": status_url,
     }
+
+
+def _contract_offered_actions(contract) -> list[str]:
+    """The contract action keys the snapshot's capabilities offer, in order.
+
+    The two core mutations are always offered; each gated action needs its
+    capability in ``identity.capabilities``. Anything else (including
+    recovery and errors-reset operations) is never offered.
+    """
+    from .control import CONTRACT_ACTION_ORDER
+
+    raw = getattr(contract, "capabilities", ())
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        advertised = {cap for cap in raw if isinstance(cap, str)}
+    else:
+        advertised = set()
+    return [
+        key
+        for key in CONTRACT_ACTION_ORDER
+        if CONTRACT_CAPABILITY_FOR_ACTION.get(key) is None
+        or CONTRACT_CAPABILITY_FOR_ACTION[key] in advertised
+    ]
+
+
+def _contract_intake_sections(contract) -> tuple[dict | None, dict | None]:
+    """The stop-plan and priority sections for progress lines (tolerant).
+
+    Each is a small mapping with the section's ``request_id`` plus the
+    progress values, or none when the snapshot names no request ID there.
+    """
+    stop_plan: dict | None = None
+    priority: dict | None = None
+    if contract is not None:
+        if getattr(contract, "stop_plan_request_id", None) is not None:
+            stop_plan = {
+                "request_id": contract.stop_plan_request_id,
+                "remaining": contract.stop_plan_remaining,
+                "counted": contract.stop_plan_counted,
+            }
+        if getattr(contract, "priority_request_id", None) is not None:
+            priority = {
+                "request_id": contract.priority_request_id,
+                "issue": contract.priority_issue,
+            }
+    return stop_plan, priority
 
 
 async def _submit_contract(request, name: str, row, templates, form, gateway):
