@@ -55,6 +55,7 @@ class Settings:
     sign_in_idle_timeout: float = DEFAULT_SIGN_IN_IDLE_TIMEOUT
     sign_in_max_age: float = DEFAULT_SIGN_IN_MAX_AGE
     host_check: bool = True
+    unauthenticated_control: bool = False
 
 
 def is_loopback(host: str) -> bool:
@@ -116,6 +117,26 @@ def parse_control(value: str | None) -> bool:
         return False
     raise ValueError(
         f"invalid control value: {value!r} (expected on/off, "
+        "or a truthy/falsy spelling like true/false, yes/no, 1/0)"
+    )
+
+
+def parse_unauthenticated_control(value: str | None) -> bool:
+    """Parse the ``unauthenticated_control`` setting (ADR 0015).
+
+    ``None`` (or blank) means the default (off). Anything else than an
+    on/off or truthy/falsy spelling is a startup error, so a typo never
+    silently changes who may issue Control actions.
+    """
+    if value is None or not value.strip():
+        return False
+    text = value.strip().lower()
+    if text in TRUTHY:
+        return True
+    if text in FALSY:
+        return False
+    raise ValueError(
+        f"invalid unauthenticated-control value: {value!r} (expected on/off, "
         "or a truthy/falsy spelling like true/false, yes/no, 1/0)"
     )
 
@@ -270,6 +291,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="LAN mode on/off (default off).",
     )
     parser.add_argument(
+        "--unauthenticated-control",
+        default=None,
+        help=(
+            "Control actions without sign-in on a non-loopback bind, on/off "
+            "(default off; outside LAN mode only)."
+        ),
+    )
+    parser.add_argument(
         "--trusted-proxies",
         default=None,
         help="Comma-separated trusted proxy addresses/CIDR blocks.",
@@ -381,6 +410,11 @@ def load_settings(argv: list[str] | None = None) -> Settings:
     lan_mode = parse_lan_mode(
         args.lan_mode if args.lan_mode is not None else _env("LAN_MODE")
     )
+    unauthenticated_control = parse_unauthenticated_control(
+        args.unauthenticated_control
+        if args.unauthenticated_control is not None
+        else _env("UNAUTHENTICATED_CONTROL")
+    )
     trusted_proxies = parse_trusted_proxies(
         args.trusted_proxies
         if args.trusted_proxies is not None
@@ -421,6 +455,12 @@ def load_settings(argv: list[str] | None = None) -> Settings:
     )
     host_check = os.environ.get("AGENT_DASHBOARD_DISABLE_HOST_GUARD") != "1"
 
+    if lan_mode and unauthenticated_control:
+        raise ValueError(
+            "AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL=on cannot be combined "
+            "with LAN mode: in LAN mode every Control action needs a sign-in "
+            "session"
+        )
     if lan_mode:
         # --allow-non-loopback is ignored in LAN mode: any bind is accepted.
         if host_check and not allowed_hosts:
@@ -452,4 +492,5 @@ def load_settings(argv: list[str] | None = None) -> Settings:
         sign_in_idle_timeout=sign_in_idle_timeout,
         sign_in_max_age=sign_in_max_age,
         host_check=host_check,
+        unauthenticated_control=unauthenticated_control,
     )

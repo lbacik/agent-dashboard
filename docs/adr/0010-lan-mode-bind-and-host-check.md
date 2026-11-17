@@ -66,6 +66,10 @@ the bind rules and the per-request checks are redrawn around it.
 
 ## Consequences
 
+- Partly superseded by
+  [ADR 0015](0015-control-without-sign-in-on-a-trusted-lan.md):
+  `AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL=on` lifts the non-loopback
+  "Controls unavailable" reason outside LAN mode.
 - Supersedes [ADR 0008](0008-disabled-host-guard-allows-control-actions.md).
   A test deployment that set `AGENT_DASHBOARD_DISABLE_HOST_GUARD=1` on a
   non-loopback bind keeps running but turns read-only, with the

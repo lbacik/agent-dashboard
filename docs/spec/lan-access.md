@@ -18,6 +18,8 @@ Inputs, all resolved on the map:
 
 The ADR the map's destination asks for, superseding the loopback posture of ADR 0001/0002 and ADR 0008, is ADR 0010 together with ADR 0012. No further ADR is needed. Where ADR 0010 says LAN mode refuses to start without an Operator account, ADR 0013 (decided later) holds instead: LAN mode starts without one and says so on stdout (section 2.3).
 
+> **Revised by [ADR 0015](../adr/0015-control-without-sign-in-on-a-trusted-lan.md):** `unauthenticated_control` offers Control actions without sign-in on a non-loopback bind outside LAN mode (sections 2.1–2.4, 7.3, 8.2 below carry it).
+
 Settled while writing this spec (ticket "Write the LAN access spec"): the setting names and defaults in section 2 (`--lan-mode on|off`; sign-in session lifetimes in seconds, like the other timeouts), the growing delay (1 s doubling to a 60 s cap, kept in memory), a persistent cookie whose `Max-Age` is the remaining absolute lifetime, uvicorn's own proxy-header handling switched off, the store file and its schema, the CLI output and exit codes, the gated URL `/whoami`, the stdout `auth` lines, the response headers of the sign-in pages, and the compose files.
 
 ## 1. Scope
@@ -49,6 +51,7 @@ CLI flag plus `AGENT_DASHBOARD_*` env with the existing precedence (flag > env >
 | `trusted_proxies` | `--trusted-proxies` / `AGENT_DASHBOARD_TRUSTED_PROXIES` | empty | Comma-separated IPv4/IPv6 addresses and CIDR blocks, mixed, parsed with `ipaddress.ip_network(entry, strict=False)`. Blank entries and `*` are dropped; any other entry that does not parse is a startup error naming it. Read in both modes, used only in LAN mode (section 4.4). |
 | `sign_in_idle_timeout` | `--sign-in-idle-timeout` / `AGENT_DASHBOARD_SIGN_IN_IDLE_TIMEOUT` | `1800.0` s | At least 300 s (the store refreshes activity once a minute, section 6.2); NaN or smaller is a startup error. |
 | `sign_in_max_age` | `--sign-in-max-age` / `AGENT_DASHBOARD_SIGN_IN_MAX_AGE` | `43200.0` s | At least `sign_in_idle_timeout` and at most 604800 s (7 days); otherwise a startup error. |
+| `unauthenticated_control` | `--unauthenticated-control on\|off` / `AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL` | `off` | Parsed like `lan_mode`; any other value is a startup error. Outside LAN mode only (ADR 0015). Does not replace `--allow-non-loopback` and does not need `host_check`. |
 | `host_check` | env `AGENT_DASHBOARD_DISABLE_HOST_GUARD` (no flag) | on | Off only when the variable is exactly `1`, as today. Moves from `os.environ` reads in `app.py`/`control.py` into `Settings`. It now only turns off the `Host` check, in either mode (ADR 0010). |
 
 `--host` help changes from "loopback only" to "Bind address (loopback unless LAN mode or --allow-non-loopback)". `--allow-non-loopback` keeps its meaning outside LAN mode and is ignored in LAN mode.
@@ -58,6 +61,7 @@ CLI flag plus `AGENT_DASHBOARD_*` env with the existing precedence (flag > env >
 In order; each failure prints `agent-dashboard: error: <message>` to stderr and exits 2, as the existing `ValueError` path in `cli.py` does.
 
 1. Every setting parses (section 2.1).
+1a. Not both `lan_mode` and `unauthenticated_control`. Message: "AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL=on cannot be combined with LAN mode: in LAN mode every Control action needs a sign-in session".
 2. Outside LAN mode: the existing loopback refusal (`ensure_loopback`), unchanged.
 3. In LAN mode: any bind address is accepted.
 4. In LAN mode, unless `host_check` is off: `AGENT_DASHBOARD_ALLOWED_HOSTS` holds at least one entry after parsing. Message: "LAN mode needs AGENT_DASHBOARD_ALLOWED_HOSTS: the host names or addresses operators use to reach the dashboard, comma-separated (or AGENT_DASHBOARD_DISABLE_HOST_GUARD=1 to turn the Host check off)".
@@ -71,6 +75,7 @@ One stdout line each, after the checks pass:
 
 - LAN mode on: `agent-dashboard: LAN mode is on: every request needs a sign-in session (bind <host>:<port>, Host check <on|off>, trusted proxies <list or none>)`.
 - LAN mode with no account that can sign in (no account, or none with a password): `agent-dashboard: no Operator account can sign in yet. Create one on the host: agent-dashboard account add <name> --role controller (in the container: docker compose exec dashboard agent-dashboard account add <name> --role controller)`. LAN mode still starts (ADR 0013).
+- Control without sign-in in force (non-loopback bind, `unauthenticated_control` on): `agent-dashboard: Control actions are on without sign-in: anyone who can reach <host>:<port> can issue them (AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL=on, Host check <on|off>)`. It replaces the migration line.
 - Migration (section 2.4) when it applies.
 
 ### 2.4 Dashboard control mode and the ADR 0008 migration
@@ -80,7 +85,7 @@ One stdout line each, after the checks pass:
 | Mode | First matching reason |
 |---|---|
 | any | `control` off: `control is off (AGENT_DASHBOARD_CONTROL=off, read-only mode)` (unchanged) |
-| outside LAN mode | bound to a non-loopback address: `the dashboard is bound to a non-loopback address (<host>); Control actions beyond loopback need LAN mode (AGENT_DASHBOARD_LAN_MODE=on)` |
+| outside LAN mode | bound to a non-loopback address and `unauthenticated_control` off: `the dashboard is bound to a non-loopback address (<host>); Control actions beyond loopback need LAN mode (AGENT_DASHBOARD_LAN_MODE=on), or Control without sign-in (AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL=on)`. With it on, available and marked unauthenticated (ADR 0015). |
 | LAN mode | none at startup; the bind is never a reason |
 
 `host_check` no longer enters this function. This is the migration of ADR 0010 and ADR 0012, with no grace period. A deployment with `AGENT_DASHBOARD_DISABLE_HOST_GUARD=1` on a non-loopback bind outside LAN mode keeps running, read-only. At startup it writes `agent-dashboard: Control actions are unavailable: AGENT_DASHBOARD_DISABLE_HOST_GUARD=1 no longer enables them on a non-loopback bind. Turn on LAN mode instead (README: "Migrating from AGENT_DASHBOARD_DISABLE_HOST_GUARD")`. The same applies to the container outside LAN mode, which always binds `0.0.0.0`, also when published only to `127.0.0.1` (ADR 0012).
@@ -316,7 +321,7 @@ A viewer's `review` or `submit` answers 403 with the "Controls unavailable" frag
 
 ### 7.3 Control audit
 
-Every entry (`submitted`, every outcome, `refused`) gets `operator`: the account name in LAN mode, `null` outside it. The sign-in session ID and the client address are never recorded. The `refused` reasons gain `not_permitted`. Nothing else in the entry changes. The UI still never reads the Control audit.
+Every entry (`submitted`, every outcome, `refused`) gets `operator`: the account name in LAN mode, `null` outside it. The sign-in session ID is never recorded. The client address is recorded only under Control without sign-in (ADR 0015): every entry then gains `client`, the direct TCP peer address (never `X-Forwarded-For`); otherwise the key is absent. The `refused` reasons gain `not_permitted`. Nothing else in the entry changes. The UI still never reads the Control audit.
 
 ## 8. UI
 
@@ -348,7 +353,7 @@ On every dashboard page (fleet, Attempt History, Attempt Log, Attempt Progress),
 - After the Stream and Control chips: a chip `Operator <name> · <role>` with `title="Signed in since HH:MM UTC"` (the sign-in session's `created_at`).
 - At the end of the bar: a Sign out button (`.btn`), a plain form POST to `/logout`.
 
-Outside LAN mode the top bar is unchanged.
+Outside LAN mode the top bar is unchanged, except that under Control without sign-in (ADR 0015) the Control chip reads `Control on · no sign-in`.
 
 ### 8.3 `/set-password?token=…`
 
@@ -483,5 +488,6 @@ Slices 1, 2 and 6 can start in parallel. 3 needs 1 and 2. 4 and 5 need 3. 7 come
 - A dashboard left open keeps its sign-in session alive until the absolute limit (12 h by default), by design (ADR 0009).
 - Idle expiry is accurate to about a minute, because activity is written at most once a minute.
 - A Role downgrade does not stop a control exec already in flight.
+- With `AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL=on`, anyone who can reach the port issues Control actions with no sign-in, and with the `Host` check off a DNS-rebinding page can too (ADR 0015).
 - With `AGENT_DASHBOARD_DISABLE_HOST_GUARD=1` in LAN mode, a DNS-rebinding page reaches only `/login`. It never carries the host-scoped cookie (ADR 0010).
 - The mounted Docker socket stays root-equivalent on the host, as does the `docker` group of the host-process install. Sign-in and the Role decide who reaches it (ADR 0012).

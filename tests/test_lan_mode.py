@@ -437,7 +437,8 @@ def test_non_loopback_reason_points_to_lan_mode():
     assert mode.reason == (
         "the dashboard is bound to a non-loopback address (192.168.1.5); "
         "Control actions beyond loopback need LAN mode "
-        "(AGENT_DASHBOARD_LAN_MODE=on)"
+        "(AGENT_DASHBOARD_LAN_MODE=on), or Control without sign-in "
+        "(AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL=on)"
     )
 
 

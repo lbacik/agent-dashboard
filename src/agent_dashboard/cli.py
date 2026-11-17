@@ -79,6 +79,13 @@ def main(argv: list[str] | None = None) -> None:
         )
         if not can_sign_in:
             print(NO_ACCOUNT_LINE)
+    elif not is_loopback(settings.host) and settings.unauthenticated_control:
+        check = "on" if settings.host_check else "off"
+        print(
+            "agent-dashboard: Control actions are on without sign-in: anyone "
+            f"who can reach {settings.host}:{settings.port} can issue them "
+            f"(AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL=on, Host check {check})"
+        )
     elif not is_loopback(settings.host) and not settings.host_check:
         print(MIGRATION_LINE)
 

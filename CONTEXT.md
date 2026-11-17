@@ -29,7 +29,7 @@ The order in which the dashboard lists managed instances: those needing the oper
 _Avoid_: Priority, severity, sort order
 
 **Operator**:
-A person using the dashboard to watch managed instances and, when allowed, issue Control actions; on a dashboard reachable only over loopback there is exactly one, and it is unnamed.
+A person using the dashboard to watch managed instances and, when allowed, issue Control actions; outside LAN mode operators are unnamed (on a dashboard reachable only over loopback there is exactly one).
 _Avoid_: User, admin
 
 **Operator account**:
@@ -49,7 +49,7 @@ The dashboard's own append-only record of every Control action submission and it
 _Avoid_: Audit log, command log, history
 
 **LAN mode**:
-The explicit opt-in under which the dashboard is reached from a private network without an SSH tunnel and every request needs a sign-in session; without it there is no sign-in and Control actions are offered only on a loopback bind.
+The explicit opt-in under which the dashboard is reached from a private network without an SSH tunnel and every request needs a sign-in session; without it there is no sign-in and Control actions are offered only on a loopback bind, unless the operator explicitly accepts Control without sign-in on a trusted network.
 _Avoid_: v2, remote mode, network mode
 
 **Sign-in session**:

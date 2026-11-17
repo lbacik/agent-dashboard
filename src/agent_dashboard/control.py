@@ -99,10 +99,15 @@ VIEWER_REASON = "your account can view but not issue Control actions"
 
 @dataclass(frozen=True)
 class ControlMode:
-    """Dashboard-wide Control availability, computed once at startup."""
+    """Dashboard-wide Control availability, computed once at startup.
+
+    ``unauthenticated`` is true when Control actions are available on a
+    non-loopback bind without sign-in (ADR 0015).
+    """
 
     available: bool = True
     reason: str | None = None
+    unauthenticated: bool = False
 
 
 def compute_control_mode(
@@ -110,12 +115,14 @@ def compute_control_mode(
     control_enabled: bool = True,
     host: str = "127.0.0.1",
     lan_mode: bool = False,
+    unauthenticated_control: bool = False,
 ) -> ControlMode:
     """First matching unavailable reason (spec section 2.4), else available.
 
-    Outside LAN mode a non-loopback bind is read-only; in LAN mode the
-    bind is never a reason. ``host_check`` no longer enters this function
-    (ADR 0010 migration).
+    Outside LAN mode a non-loopback bind is read-only unless
+    ``unauthenticated_control`` is on (ADR 0015); in LAN mode the bind is
+    never a reason. ``host_check`` no longer enters this function (ADR 0010
+    migration).
     """
     if not control_enabled:
         return ControlMode(
@@ -123,12 +130,15 @@ def compute_control_mode(
             reason="control is off (AGENT_DASHBOARD_CONTROL=off, read-only mode)",
         )
     if not lan_mode and not is_loopback(host or ""):
+        if unauthenticated_control:
+            return ControlMode(available=True, reason=None, unauthenticated=True)
         return ControlMode(
             available=False,
             reason=(
                 f"the dashboard is bound to a non-loopback address ({host}); "
                 "Control actions beyond loopback need LAN mode "
-                "(AGENT_DASHBOARD_LAN_MODE=on)"
+                "(AGENT_DASHBOARD_LAN_MODE=on), or Control without sign-in "
+                "(AGENT_DASHBOARD_UNAUTHENTICATED_CONTROL=on)"
             ),
         )
     return ControlMode(available=True, reason=None)

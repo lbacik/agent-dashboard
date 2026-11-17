@@ -49,6 +49,17 @@ def utc_now_ms() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _with_client(entry: dict[str, Any], client: str | None) -> dict[str, Any]:
+    """Add ``client`` (the direct peer address) when one is given (ADR 0015).
+
+    Only Control without sign-in on a non-loopback bind records it; every
+    other entry keeps its shape, without the key.
+    """
+    if client is not None:
+        entry["client"] = client
+    return entry
+
+
 def refused_entry(
     *,
     instance: str,
@@ -69,6 +80,7 @@ def refused_entry(
     error_code: str | None = None,
     replayed: bool | None = None,
     attempts: int = 1,
+    client: str | None = None,
 ) -> dict[str, Any]:
     """Build a ``refused`` audit entry (spec section 7).
 
@@ -79,7 +91,7 @@ def refused_entry(
     names the path that refused (``legacy`` or ``contract``); ``backend``
     is the contract instance's backend, else none.
     """
-    return {
+    return _with_client({
         "at": utc_now_ms(),
         "outcome": "refused",
         "operator": operator,
@@ -106,7 +118,7 @@ def refused_entry(
         "error_code": error_code,
         "replayed": replayed,
         "attempts": attempts,
-    }
+    }, client)
 
 
 def submitted_entry(
@@ -127,6 +139,7 @@ def submitted_entry(
     error_code: str | None = None,
     replayed: bool | None = None,
     attempts: int = 1,
+    client: str | None = None,
 ) -> dict[str, Any]:
     """Build a ``submitted`` audit entry (spec section 7).
 
@@ -136,7 +149,7 @@ def submitted_entry(
     it (``legacy`` or ``contract``); ``backend`` is the contract
     instance's backend, else none.
     """
-    return {
+    return _with_client({
         "at": utc_now_ms(),
         "outcome": "submitted",
         "operator": operator,
@@ -163,7 +176,7 @@ def submitted_entry(
         "error_code": error_code,
         "replayed": replayed,
         "attempts": attempts,
-    }
+    }, client)
 
 
 def outcome_entry(
@@ -193,6 +206,7 @@ def outcome_entry(
     error_code: str | None = None,
     replayed: bool | None = None,
     attempts: int = 1,
+    client: str | None = None,
 ) -> dict[str, Any]:
     """Build an outcome audit entry for one Control exec result.
 
@@ -206,7 +220,7 @@ def outcome_entry(
     Acknowledgement on success), ``replayed`` the reply's flag, and
     ``attempts`` the number of same-ID execs this submit ran.
     """
-    return {
+    return _with_client({
         "at": utc_now_ms(),
         "outcome": outcome,
         "operator": operator,
@@ -233,7 +247,7 @@ def outcome_entry(
         "error_code": error_code,
         "replayed": replayed,
         "attempts": attempts,
-    }
+    }, client)
 
 
 def append_entry(entry: dict[str, Any]) -> Path:
