@@ -207,3 +207,47 @@ def test_dockerfile_does_not_buffer_stdout():
     # Startup lines (LAN mode, no account yet, migration) must reach
     # `docker logs` when written, not when the buffer happens to fill.
     assert 'ENV PYTHONUNBUFFERED=1' in DOCKERFILE.read_text()
+
+
+# --- Dockerfile HEALTHCHECK ----------------------------------------------------
+
+
+def dockerfile_healthcheck() -> str:
+    checks = [
+        line.strip()
+        for line in DOCKERFILE.read_text().splitlines()
+        if line.strip().startswith("HEALTHCHECK")
+    ]
+    assert len(checks) == 1
+    return checks[0]
+
+
+def test_dockerfile_healthcheck_probes_healthz():
+    check = dockerfile_healthcheck()
+    assert "--interval=30s" in check
+    assert "--timeout=5s" in check
+    assert "--retries=3" in check
+    assert "--start-period=15s" in check
+    assert "/healthz" in check
+    assert "AGENT_DASHBOARD_PORT" in check
+    # The probe uses the venv Python standard library only: no curl (or any
+    # other package) in the image for it.
+    assert "curl" not in check
+    assert "urllib" in check
+
+
+def test_compose_config_inherits_the_healthcheck(tmp_path):
+    for files, env in (
+        ((BASE,), {}),
+        ((BASE, LAN), LAN_ENV),
+    ):
+        _, service = resolved_service(tmp_path, *files, env=env)
+        healthcheck = service.get("healthcheck")
+        assert healthcheck is not None, files
+        assert healthcheck["interval"] == "30s", files
+        assert healthcheck["timeout"] == "5s", files
+        assert healthcheck["retries"] == 3, files
+        assert healthcheck["start_period"] == "15s", files
+        probe = " ".join(healthcheck["test"])
+        assert "/healthz" in probe, files
+        assert "curl" not in probe, files

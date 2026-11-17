@@ -48,4 +48,13 @@ ENV PATH="/app/.venv/bin:${PATH}"
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
 USER appuser
+# Process liveness only (not fleet or gateway readiness): GET /healthz
+# answers 200 `ok` without a sign-in session in either mode, behind the
+# Host check. The probe uses the venv Python standard library only (no
+# curl in the image); `-B` keeps bytecode out of the read-only filesystem
+# and the urllib timeout sits under the 5 s healthcheck timeout, so the
+# check passes under `read_only`, `cap_drop: ALL`, `no-new-privileges`
+# as appuser. Compose inherits this; `docker compose up -d --wait` waits
+# for it.
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s CMD ["python", "-B", "-c", "import os,sys,urllib.request\nport=os.environ.get('AGENT_DASHBOARD_PORT') or '8000'\ntry:\n code=urllib.request.urlopen('http://127.0.0.1:%s/healthz'%port,timeout=4).getcode()\nexcept Exception:\n raise SystemExit(1)\nraise SystemExit(0 if code==200 else 1)"]
 CMD ["agent-dashboard"]

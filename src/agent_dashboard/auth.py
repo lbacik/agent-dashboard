@@ -3,8 +3,10 @@
 Every route needs a sign-in session: the gate middleware (spec 5.1) refuses
 requests without one, ``GET``/``POST /login`` signs an Operator in, and
 ``POST /logout`` signs them out. ``GET /whoami`` answers 204 while signed
-in. All templates consume the framework-free view models here (``Operator``,
-``SignInView``); the server's store calls run in a worker thread.
+in. ``GET /healthz`` is the process-liveness probe: anonymous in both
+modes, exact path only. All templates consume the framework-free view
+models here (``Operator``, ``SignInView``); the server's store calls run
+in a worker thread.
 
 The growing sign-in delay (spec 5.5) refuses attempts inside either key's
 delay with 429 before the password is checked. ``GET /login`` with a cookie
@@ -337,15 +339,18 @@ class SignInGateMiddleware(BaseHTTPMiddleware):
     """The sign-in gate (spec 5.1): every route needs a session in LAN mode.
 
     Runs after the ``Host`` check. It resolves the session and puts a
-    framework-free ``Operator`` on ``request.state``. ``/login`` and
+    framework-free ``Operator`` on ``request.state``. ``/login``,
+    ``/set-password``, the exact path ``/healthz`` (process liveness) and
     ``/static/*`` are anonymous. A refused request never reaches Control
     handling and writes no Control audit entry.
     """
 
     async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
-        if request.url.path in ("/login", "/set-password") or request.url.path.startswith(
-            "/static/"
-        ):
+        if request.url.path in (
+            "/login",
+            "/set-password",
+            "/healthz",
+        ) or request.url.path.startswith("/static/"):
             request.state.operator = None
             request.state.session_id_hash = None
             return await call_next(request)
