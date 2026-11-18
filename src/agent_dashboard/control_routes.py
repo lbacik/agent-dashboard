@@ -818,8 +818,10 @@ async def _review_contract(request, name, row, templates, form, action_raw):
                 validation_message = (
                     f"Invalid issue number: {issue_raw!r} (expected 1–2147483647)."
                 )
-        elif n_raw or issue_raw:
-            validation_message = f"Action {action!r} takes no parameter."
+        # The composer submits every action's parameter input (only the
+        # chosen one shows), so a parameter of another action is ignored
+        # here, as on the legacy path. The confirmation carries only the
+        # chosen action's parameter; submit stays strict.
 
     def composer_error(message: str, status: int):
         _write_refused(

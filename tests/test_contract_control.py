@@ -254,6 +254,44 @@ def test_review_resume_confirmation_pins_exact_argv():
     assert "ctl-tone-primary" in response.text
 
 
+def _composer_submission(body: str, action: str) -> dict:
+    """What a browser submits from the composer with ``action`` chosen.
+
+    Every named, enabled input of ``.ctl-composer`` is submitted, including
+    the parameter inputs of the actions not chosen (their labels are only
+    ``hidden``): the composer always sends ``n`` and ``issue``.
+    """
+    form = body.split('<form class="ctl-composer"')[1].split("</form>")[0]
+    fields: dict[str, str] = {}
+    for tag in re.findall(r"<input\b[^>]*>", form):
+        name = re.search(r'name="([^"]*)"', tag)
+        value = re.search(r'value="([^"]*)"', tag)
+        if name is None or " disabled" in tag:
+            continue
+        if 'type="radio"' in tag:
+            if value is not None and value.group(1) == action:
+                fields[name.group(1)] = action
+            continue
+        fields[name.group(1)] = value.group(1) if value is not None else ""
+    return fields
+
+
+def test_review_from_composer_ignores_other_actions_parameters():
+    # Regression: the composer submits the hidden "Attempts before stopping"
+    # default (n=1) with every action; review must not refuse Stop for it.
+    client, _, _ = make_contract_client()
+    body = client.get("/instances/web-0/control", headers={"HX-Request": "true"}).text
+    data = _composer_submission(body, "stop")
+    assert data["action"] == "stop"
+    assert data["n"] == "1"
+    response = review(client, data)
+    assert "takes no parameter" not in response.text
+    assert response.status_code == 200
+    assert "--contract 1 stop --request-id" in response.text
+    assert 'name="n"' not in response.text
+    assert audit_entries() == []
+
+
 def test_review_rejects_action_outside_contract_set():
     client, _, _ = make_contract_client()
     response = review(client, {"action": "recovery_retry"})
