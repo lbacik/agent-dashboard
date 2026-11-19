@@ -37,6 +37,7 @@ from .presentation import (
     NOT_RUNNING,
     RANK_IDLE,
     RANK_OFFLINE,
+    RANK_REASON_NEEDS_OPERATOR,
     RANK_UNREACHABLE,
     RANK_WORKING,
     STALE,
@@ -94,11 +95,17 @@ class FleetRow:
     # label); control argv for contract mutations runs as this user. Legacy
     # rows and misconfigured rows leave it none.
     exec_user: str | None = None
+    # Why a contract row holds its rank, for the rail's rank tag tooltip:
+    # ``RANK_REASON_NEEDS_OPERATOR`` when rank 0 comes from the snapshot
+    # needing the operator (a current halt, or the last finished attempt
+    # requiring attention) rather than the instance being unreachable.
+    # Legacy and noted rows leave it unset and render the plain rank label.
+    rank_reason: str | None = None
 
     @property
     def rank_title(self) -> str:
         """Tooltip for the rail's rank tag (``R<rank>`` or ``OFF``)."""
-        return attention_rank_title(self.rank)
+        return attention_rank_title(self.rank, reason=self.rank_reason)
 
     @property
     def gauge(self) -> SnapshotDetail | AttemptGauge | None:
@@ -450,16 +457,18 @@ class FleetState:
             )
         if detail.has_snapshot:
             headline += stale_suffix(detail)
+        rank_reason: str | None = None
         if reach == UNREACHABLE:
             rank = RANK_UNREACHABLE
         elif is_stopped:
-            rank = (
-                RANK_UNREACHABLE
-                if (detail.has_snapshot and needs_operator(detail))
-                else RANK_OFFLINE
-            )
+            if detail.has_snapshot and needs_operator(detail):
+                rank = RANK_UNREACHABLE
+                rank_reason = RANK_REASON_NEEDS_OPERATOR
+            else:
+                rank = RANK_OFFLINE
         elif detail.has_snapshot and needs_operator(detail):
             rank = RANK_UNREACHABLE
+            rank_reason = RANK_REASON_NEEDS_OPERATOR
         elif detail.has_snapshot:
             state_rank = contract_state_rank(detail.instance_state)
             rank = state_rank if state_rank is not None else RANK_WORKING
@@ -489,6 +498,7 @@ class FleetState:
             backend=backend,
             contract=detail,
             exec_user=entry.exec_user,
+            rank_reason=rank_reason,
         )
 
 

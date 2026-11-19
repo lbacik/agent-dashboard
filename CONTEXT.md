@@ -25,7 +25,7 @@ One sentence the dashboard derives from a managed instance's reach and latest te
 _Avoid_: Summary, status message, state
 
 **Attention rank**:
-The order in which the dashboard lists managed instances: those needing the operator first (unreachable, recovery hold, consecutive errors, handoff in progress), then those approaching the soft threshold, then working, idle, and offline ones.
+The order in which the dashboard lists managed instances: those needing the operator first (unreachable, recovery hold, consecutive errors, handoff in progress), then those approaching the soft threshold, then working, idle, and offline ones. The top tier also covers a contract instance whose snapshot itself needs the operator (a current halt, or the last finished attempt requiring attention): it keeps rank 0 for ordering, and the rank tag tooltip names whichever reason applies ("unreachable" or "needs operator").
 _Avoid_: Priority, severity, sort order
 
 **Operator**:

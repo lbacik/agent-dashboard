@@ -578,6 +578,117 @@ def test_row_headlines_render_end_to_end():
     assert by_name["halted-1"].rank == 0
 
 
+# --- attention rank tooltip: "needs operator" vs "unreachable" ----------------
+
+
+def _attention_result():
+    """A live snapshot whose last finished attempt requires attention."""
+    result = copy.deepcopy(_result("status-idle"))
+    result["last_finished"]["attention_required"] = True
+    return result
+
+
+def _contract_instance(name="web-1", cid="abc123", state="running"):
+    return ManagedInstance(
+        name,
+        cid,
+        state,
+        path=CONTRACT_PATH,
+        instance=name,
+        exec_user="agent",
+        backend="coding-agent",
+    )
+
+
+def test_live_attention_required_row_ranks_zero_with_needs_operator_tooltip():
+    state = FleetState()
+    gateway = FakeGateway([_contract_instance()])
+    gateway.set_contract_snapshot("abc123", _attention_result())
+    _run(state, gateway)
+    (row,) = _rows(state)
+    assert row.reach == "live"
+    assert row.headline.startswith("Needs operator:")
+    assert row.rank == 0
+    assert "needs operator" in row.rank_title
+    assert "unreachable" not in row.rank_title
+
+
+def test_running_halted_row_tooltip_names_needs_operator():
+    state = FleetState()
+    gateway = FakeGateway([_contract_instance()])
+    gateway.set_contract_snapshot("abc123", _result("offline-status-halted"))
+    _run(state, gateway)
+    (row,) = _rows(state)
+    assert row.rank == 0
+    assert "needs operator" in row.rank_title
+    assert "unreachable" not in row.rank_title
+
+
+def test_stopped_halted_row_tooltip_names_needs_operator():
+    from agent_dashboard.gateway import OfflineInspect, OfflineMount
+
+    image = "sha256:" + "ab" * 32
+    state = FleetState()
+    gateway = FakeGateway([_contract_instance(state="exited")])
+    gateway.set_inspect(
+        "abc123",
+        OfflineInspect(
+            running=False,
+            finished_at="2026-11-06T09:58:12.123456789Z",
+            image=image,
+            mounts=(OfflineMount("data-vol", "/data"),),
+        ),
+    )
+    gateway.set_offline_snapshot(image, _result("offline-status-halted"))
+    _run(state, gateway)
+    (row,) = _rows(state)
+    assert row.state == "not running"
+    assert row.rank == 0
+    assert "needs operator" in row.rank_title
+    assert "unreachable" not in row.rank_title
+
+
+def test_unreachable_contract_row_tooltip_stays_unreachable():
+    state = FleetState()
+    gateway = FakeGateway([_contract_instance()])
+    gateway.set_contract_error(
+        "abc123", ControlTimeoutError("docker exec timed out after 10 s")
+    )
+    _run(state, gateway)
+    (row,) = _rows(state)
+    assert row.reach == "unreachable"
+    assert row.rank == 0
+    assert "unreachable" in row.rank_title
+    assert "needs operator" not in row.rank_title
+
+
+def test_legacy_unreachable_row_tooltip_stays_unreachable():
+    state = FleetState()
+    gateway = FakeGateway([ManagedInstance("old-1", "def456", "running")])
+    gateway.set_timeout("def456")
+    _run(state, gateway)
+    (row,) = _rows(state)
+    assert row.reach == "unreachable"
+    assert row.rank == 0
+    assert "unreachable" in row.rank_title
+    assert "needs operator" not in row.rank_title
+
+
+def test_fleet_html_carries_the_needs_operator_tooltip():
+    state = FleetState()
+    gateway = FakeGateway([_contract_instance()])
+    gateway.set_contract_snapshot("abc123", _attention_result())
+    _run(state, gateway)
+    app = create_app(
+        state=state,
+        settings=Settings(poll_interval=5.0),
+        gateway=gateway,
+        start_poller=False,
+    )
+    body = TestClient(app, base_url="http://localhost").get("/").text
+    assert "title=\"Attention rank 0: needs operator" in body
+
+
 # --- collector cycle ---------------------------------------------------------
 
 
