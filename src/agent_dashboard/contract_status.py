@@ -301,6 +301,9 @@ class ContractDetail:
     last_halt_reason: str | None = None
     last_halt_detail: str | None = None
     last_halt_at: str | None = None
+    # ``identity.process_started_at``: null offline, RFC 3339 UTC online.
+    # Decides whether ``last_halt`` is from the current process or history.
+    process_started_at: str | None = None
     pending_stop: bool = False
     stop_plan_remaining: int | None = None
     stop_plan_counted: int | None = None
@@ -1139,6 +1142,7 @@ def read_contract_snapshot(
         last_halt_reason=halt.reason if halt is not None else None,
         last_halt_detail=halt.detail if halt is not None else None,
         last_halt_at=halt.at if halt is not None else None,
+        process_started_at=snapshot.identity.process_started_at,
         pending_stop=snapshot.intake.pending_stop is not None,
         stop_plan_remaining=stop_plan_remaining,
         stop_plan_counted=stop_plan_counted,
@@ -1183,19 +1187,56 @@ def contract_mismatch_headline(supported: Any) -> str:
     )
 
 
+def _parse_halt_time(text: Any) -> float | None:
+    """Parse an RFC 3339 timestamp; none when missing or unparseable."""
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        stamped = text.strip()
+        if stamped.endswith("Z"):
+            stamped = stamped[:-1] + "+00:00"
+        moment = datetime.fromisoformat(stamped)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        return moment.timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def halt_is_current(detail: ContractDetail) -> bool:
+    """True when the snapshot's Halt still describes the current process.
+
+    A Halt is current when ``instance.state`` is ``stopped`` (Offline Read,
+    where ``process_started_at`` is null) or when the Halt's ``at`` is at or
+    after ``identity.process_started_at``. Otherwise it is history from an
+    earlier process. Fail safe: a missing or unparseable timestamp on an
+    online snapshot reads as current. No Halt recorded reads as not current.
+    """
+    if detail.last_halt_reason is None:
+        return False
+    if detail.instance_state == "stopped":
+        return True
+    halt_at = _parse_halt_time(detail.last_halt_at)
+    started_at = _parse_halt_time(detail.process_started_at)
+    if halt_at is None or started_at is None:
+        return True
+    return halt_at >= started_at
+
+
 def contract_headline(detail: ContractDetail) -> str | None:
     """The snapshot-derived headline; none when the state says nothing.
 
     Precedence: a pending stop or stop plan (operator intent in flight),
-    then the last Halt, then a last finished attempt needing the operator,
-    then ``instance.state``. An ``"unknown"`` state reads as nothing so the
-    caller falls back to the generic live headline.
+    then the current Halt, then a last finished attempt needing the
+    operator, then ``instance.state``. A Halt older than the current
+    process is history and is skipped. An ``"unknown"`` state reads as
+    nothing so the caller falls back to the generic live headline.
     """
     if detail.pending_stop:
         return "Stop requested"
     if detail.stop_plan_remaining is not None:
         return f"Stop planned ({detail.stop_plan_remaining} remaining)"
-    if detail.last_halt_reason is not None:
+    if detail.last_halt_reason is not None and halt_is_current(detail):
         halted = f"Halted ({detail.last_halt_reason})"
         if detail.last_halt_detail:
             halted += f": {detail.last_halt_detail}"
@@ -1233,10 +1274,12 @@ def contract_headline(detail: ContractDetail) -> str | None:
 
 
 def needs_operator(detail: ContractDetail) -> bool:
-    """True when the snapshot itself needs the operator (halt or attention)."""
-    return (
-        detail.last_halt_reason is not None or detail.last_finished_attention
-    )
+    """True when the snapshot itself needs the operator (halt or attention).
+
+    A Halt older than the current process is history and does not count;
+    only a current Halt raises the attention tier.
+    """
+    return halt_is_current(detail) or detail.last_finished_attention
 
 
 def contract_state_rank(instance_state: str) -> int | None:
