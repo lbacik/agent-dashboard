@@ -54,6 +54,13 @@ RANK_LABELS = {
     RANK_OFFLINE: "offline",
 }
 
+#: Rank reason for a contract row at the top tier because the snapshot
+#: itself needs the operator (a current halt, or the last finished attempt
+#: requiring attention), rather than because the instance is unreachable.
+#: The numeric rank stays ``RANK_UNREACHABLE``; only the tooltip names the
+#: reason. Legacy rows never carry a rank reason.
+RANK_REASON_NEEDS_OPERATOR = "needs operator"
+
 
 def derive_reach(container_state: str, outcome_kind: str | None) -> str:
     """Map container state plus the last poll outcome kind to a reach."""
@@ -185,9 +192,17 @@ def build_row_headline(
     return build_headline(reach, reason=reason, age_text=age_text, has_snapshot=has_snapshot)
 
 
-def attention_rank_title(rank: int) -> str:
-    """Tooltip text for a rank tag: the rank plus what it means."""
+def attention_rank_title(rank: int, *, reason: str | None = None) -> str:
+    """Tooltip text for a rank tag: the rank plus what it means.
+
+    A contract row at the top tier because the snapshot needs the
+    operator passes ``reason=RANK_REASON_NEEDS_OPERATOR`` so the tooltip
+    names that reason instead of "unreachable"; every other caller leaves
+    the reason unset and gets the plain rank label.
+    """
     label = RANK_LABELS.get(rank, "unknown")
+    if rank == RANK_UNREACHABLE and reason == RANK_REASON_NEEDS_OPERATOR:
+        label = RANK_REASON_NEEDS_OPERATOR
     return f"Attention rank {rank}: {label} (lower needs the operator sooner)"
 
 
