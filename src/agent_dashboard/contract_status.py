@@ -338,6 +338,17 @@ class ContractDetail:
     # Command timeline entries, newest first, at most COMMANDS_SHOWN.
     commands: tuple[ContractCommandEntry, ...] = ()
 
+    @property
+    def halt_is_current(self) -> bool:
+        """Whether the recorded Halt describes the current process.
+
+        The single halt-is-current check (see :func:`halt_is_current`):
+        the headline, the attention rank and both Last cells all read
+        this, so changing the rule there changes them too. The drawer's
+        :attr:`halt` view stays available as history either way.
+        """
+        return halt_is_current(self)
+
 
 @dataclass(frozen=True)
 class ContractCommandStep:

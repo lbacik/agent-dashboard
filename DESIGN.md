@@ -91,6 +91,13 @@ modules in their columns, and the Activity widget's Now / Last call panes
 view element means changing it on both paths, and
 `tests/test_contract_parity.py` changes with it.
 
+On the contract path the rail's Last item and the matrix Last column show a
+Halt only while it is current: the instance is stopped, or the Halt's `at` is
+at or after `identity.process_started_at` (the same check as the Status
+headline and the attention rank). A Halt from an earlier process stays visible
+only as history in the drawer's Last halt section. The legacy path records no
+Halt, so its Last cells show only the last finished attempt.
+
 ## Instrument chrome (prototype variant C)
 
 - **Top bar**: white, `border-top: 3px solid var(--accent)`, mono. Three

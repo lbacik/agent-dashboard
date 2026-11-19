@@ -1022,3 +1022,123 @@ def test_restarted_instance_renders_working_headline_on_the_web():
     assert "startup-check-refused" in drawer.text
     assert "pinned effort mismatch" in drawer.text
     assert STALE_HALT_AT in drawer.text
+
+
+# --- stale Halt hidden in the Last cells ---------------------------------------
+
+
+def _stopped_client(result):
+    """A TestClient over one stopped contract instance read offline."""
+    from agent_dashboard.gateway import OfflineInspect, OfflineMount
+
+    image = "sha256:" + "ab" * 32
+    state = FleetState()
+    gateway = FakeGateway([_contract_instance(state="exited")])
+    gateway.set_inspect(
+        "abc123",
+        OfflineInspect(
+            running=False,
+            finished_at="2026-11-06T09:58:12.123456789Z",
+            image=image,
+            mounts=(OfflineMount("data-vol", "/data"),),
+        ),
+    )
+    gateway.set_offline_snapshot(image, result)
+    _run(state, gateway)
+    app = create_app(
+        state=state,
+        settings=Settings(poll_interval=5.0),
+        gateway=gateway,
+        start_poller=False,
+    )
+    return TestClient(app, base_url="http://localhost")
+
+
+def _rail_item(body, name):
+    """One rail item's markup."""
+    start = body.index(f'data-instance="{name}"')
+    return body[start : body.index("</li>", start)]
+
+
+def _matrix_row(body, name):
+    """One matrix row's markup."""
+    table = body.partition('<table class="fleet">')[2]
+    start = table.index(f'<div class="inst-name">{name}</div>')
+    return table[start : table.index("</tr>", start)]
+
+
+def test_halt_is_current_property_matches_the_single_check():
+    stale = read_contract_snapshot(_result_with_halt("status-active", STALE_HALT_AT))
+    assert stale is not None
+    assert stale.halt_is_current is False
+    assert stale.halt_is_current == halt_is_current(stale)
+    fresh = read_contract_snapshot(_result_with_halt("status-active", FRESH_HALT_AT))
+    assert fresh is not None
+    assert fresh.halt_is_current is True
+    stopped = read_contract_snapshot(_result("offline-status-halted"))
+    assert stopped is not None
+    assert stopped.halt_is_current is True
+    assert ContractDetail().halt_is_current is False
+    assert (
+        ContractDetail(
+            instance_state="active",
+            last_halt_reason="startup-check-refused",
+            last_halt_at="not-a-timestamp",
+            process_started_at="2026-11-06T08:00:00Z",
+        ).halt_is_current
+        is True
+    )
+
+
+def test_stale_halt_hides_in_last_cells_behind_last_finished():
+    client = _stopped_client(_result_with_halt("status-active", STALE_HALT_AT))
+    body = client.get("/").text
+    rail = _rail_item(body, "web-1")
+    assert "#41 · Delivered" in rail
+    assert "Halted" not in rail
+    matrix = _matrix_row(body, "web-1")
+    assert "#41 · Delivered" in matrix
+    assert "Halted" not in matrix
+
+
+def test_stale_halt_without_last_finished_shows_na_in_last_cells():
+    result = _result_with_halt("status-active", STALE_HALT_AT)
+    result["last_finished"] = None
+    client = _stopped_client(result)
+    body = client.get("/").text
+    rail = _rail_item(body, "web-1")
+    assert "Halted" not in rail
+    assert ">n/a<" in rail
+    matrix = _matrix_row(body, "web-1")
+    assert "Halted" not in matrix
+    assert "n/a" in matrix
+
+
+def test_fresh_halt_keeps_last_cells():
+    client = _stopped_client(_result_with_halt("status-active", FRESH_HALT_AT))
+    body = client.get("/").text
+    rail = _rail_item(body, "web-1")
+    assert "Halted (startup-check-refused)" in rail
+    matrix = _matrix_row(body, "web-1")
+    assert "Halted (startup-check-refused)" in matrix
+    assert "#41 · Delivered" in matrix
+
+
+def test_stopped_halt_keeps_last_cells():
+    client = _stopped_client(_result("offline-status-halted"))
+    body = client.get("/").text
+    rail = _rail_item(body, "web-1")
+    assert "Halted (credential-failure)" in rail
+    matrix = _matrix_row(body, "web-1")
+    assert "Halted (credential-failure)" in matrix
+    assert "#41 · Delivered" in matrix
+
+
+def test_stopped_instance_drawer_shows_stale_halt_as_history():
+    client = _stopped_client(_result_with_halt("status-active", STALE_HALT_AT))
+    drawer = client.get("/instances/web-1")
+    assert drawer.status_code == 200
+    assert "Last halt" in drawer.text
+    assert "startup-check-refused" in drawer.text
+    assert "pinned effort mismatch" in drawer.text
+    assert STALE_HALT_AT in drawer.text
