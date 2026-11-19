@@ -257,6 +257,75 @@ def test_idle_contract_row_has_no_bar_and_no_figures():
     assert 'class="budget-bar' not in _matrix_row(body, "web-0")
 
 
+# --- Last cells: a stale Halt is history, like the legacy path -----------------
+
+
+def test_restarted_contract_row_hides_a_stale_halt_in_its_last_cells():
+    """A restarted contract instance shows its Last cells without a stale Halt.
+
+    The offline snapshot still records the previous process's Halt, but the
+    rail's Last item and the matrix Last column render only the last
+    finished attempt — the same ``#<n> · <outcome>`` shape the legacy path
+    shows in the same slot.
+    """
+    from agent_dashboard.collector import GOOD, InstancePoll, PollOutcome
+
+    at = time.time()
+    legacy = fresh_snapshot(load_snapshot("snapshot-attempt-in-progress.json"), at)
+    contract = _contract_result(now=at)
+    contract["instance"]["last_halt"] = {
+        "reason": "startup-check-refused",
+        "detail": "pinned effort mismatch",
+        # Older than identity.process_started_at (2026-11-06T08:00:00Z).
+        "at": "2026-11-05T16:35:05Z",
+    }
+    state = FleetState()
+    asyncio.run(
+        state.apply_cycle(
+            [
+                ManagedInstance("legacy-9", LEGACY_CID, "exited"),
+                ManagedInstance(
+                    "web-9",
+                    CONTRACT_CID,
+                    "exited",
+                    path=CONTRACT_PATH,
+                    instance="web-9",
+                    exec_user="agent",
+                    backend="simple-coding-agent",
+                ),
+            ],
+            {
+                LEGACY_CID: InstancePoll(PollOutcome(GOOD, "", at), legacy),
+                CONTRACT_CID: InstancePoll(
+                    PollOutcome(GOOD, "", at),
+                    contract,
+                    offline_key="2026-11-06T09:58:12Z",
+                ),
+            },
+            now=at,
+        )
+    )
+    app = create_app(
+        state=state,
+        settings=Settings(poll_interval=5.0),
+        gateway=FakeGateway(),
+        start_poller=False,
+    )
+    body = TestClient(app, base_url="http://localhost").get("/").text
+    legacy_rail = _row(body, "legacy-9")
+    assert "#961 · complete" in legacy_rail
+    assert "Halted" not in legacy_rail
+    contract_rail = _row(body, "web-9")
+    assert "#41 · Delivered" in contract_rail
+    assert "Halted" not in contract_rail
+    legacy_cell = _matrix_row(body, "legacy-9")
+    assert "#961 · complete" in legacy_cell
+    assert "Halted" not in legacy_cell
+    contract_cell = _matrix_row(body, "web-9")
+    assert "#41 · Delivered" in contract_cell
+    assert "Halted" not in contract_cell
+
+
 # --- the gauge view model ---------------------------------------------------------
 
 
