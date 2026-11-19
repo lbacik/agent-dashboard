@@ -31,6 +31,7 @@ from agent_dashboard.contract_status import (
     ContractDetail,
     contract_headline,
     contract_state_rank,
+    halt_is_current,
     needs_operator,
     read_contract_snapshot,
 )
@@ -724,3 +725,189 @@ def test_drawer_shows_the_contract_capsule_without_legacy_widgets():
     assert "/instances/web-1/stats" in page.text
     assert "/instances/web-1/control" in page.text
     assert "/instances/web-1/activity" not in page.text
+
+
+# --- stale Halt from a previous process ----------------------------------------
+
+
+STALE_HALT_AT = "2026-11-05T16:35:05Z"
+FRESH_HALT_AT = "2026-11-06T09:00:00Z"
+
+
+def _result_with_halt(
+    name, at, reason="startup-check-refused", detail="pinned effort mismatch"
+):
+    result = copy.deepcopy(_result(name))
+    result["instance"]["last_halt"] = {
+        "reason": reason,
+        "detail": detail,
+        "at": at,
+    }
+    return result
+
+
+def test_stale_halt_on_active_gives_working_headline():
+    result = _result_with_halt("status-active", STALE_HALT_AT)
+    detail = read_contract_snapshot(result)
+    assert detail is not None
+    # The Halt predates the current process (started 2026-11-06T08:00:00Z).
+    assert not halt_is_current(detail)
+    assert contract_headline(detail) == "Working on #42 · run_step"
+    assert not needs_operator(detail)
+
+
+def test_stale_halt_on_idle_paused_and_draining_gives_state_headline():
+    for name, headline in (
+        ("status-idle", "Idle: waiting for a ready issue"),
+        ("status-paused", "Paused"),
+    ):
+        detail = read_contract_snapshot(_result_with_halt(name, STALE_HALT_AT))
+        assert detail is not None, name
+        assert not halt_is_current(detail), name
+        assert contract_headline(detail) == headline, name
+        assert not needs_operator(detail), name
+    draining = _result_with_halt("status-draining", STALE_HALT_AT)
+    draining["intake"]["pending_stop"] = None
+    draining["intake"]["stop_plan"] = None
+    draining_detail = read_contract_snapshot(draining)
+    assert draining_detail is not None
+    assert not halt_is_current(draining_detail)
+    assert contract_headline(draining_detail) == "Draining · #42"
+    assert not needs_operator(draining_detail)
+
+
+def test_stale_halt_with_attention_still_needs_operator():
+    result = _result_with_halt("status-active", STALE_HALT_AT)
+    result["last_finished"]["attention_required"] = True
+    detail = read_contract_snapshot(result)
+    assert detail is not None
+    assert not halt_is_current(detail)
+    assert contract_headline(detail).startswith("Needs operator:")
+    assert needs_operator(detail)
+
+
+def test_fresh_halt_keeps_halted_headline_and_attention():
+    for at in (FRESH_HALT_AT, "2026-11-06T08:00:00Z"):
+        detail = read_contract_snapshot(_result_with_halt("status-active", at))
+        assert detail is not None, at
+        assert halt_is_current(detail), at
+        assert contract_headline(detail).startswith(
+            "Halted (startup-check-refused)"
+        ), at
+        assert needs_operator(detail), at
+
+
+def test_halt_with_fractional_seconds_and_offset_notation():
+    # "at or after" compares parsed timestamps, not strings. The contract
+    # itself only accepts UTC ``Z`` notation, so the offset case reaches the
+    # predicate directly.
+    detail = read_contract_snapshot(
+        _result_with_halt("status-active", "2026-11-06T08:00:00.500Z")
+    )
+    assert detail is not None
+    assert halt_is_current(detail)
+    assert contract_headline(detail).startswith("Halted")
+    offset = ContractDetail(
+        instance_state="active",
+        last_halt_reason="startup-check-refused",
+        last_halt_at="2026-11-06T10:00:00+02:00",
+        process_started_at="2026-11-06T08:00:00Z",
+    )
+    assert halt_is_current(offset)
+
+
+def test_stopped_halt_keeps_halted_headline():
+    detail = read_contract_snapshot(_result("offline-status-halted"))
+    assert detail is not None
+    assert detail.process_started_at is None
+    assert halt_is_current(detail)
+    assert contract_headline(detail).startswith("Halted (credential-failure)")
+    assert needs_operator(detail)
+
+
+def test_stale_halt_keeps_stop_precedence():
+    pending = _result_with_halt("status-active", STALE_HALT_AT)
+    pending["intake"]["pending_stop"] = {"request_id": "req-abc", "sequence": 1}
+    pending_detail = read_contract_snapshot(pending)
+    assert pending_detail is not None
+    assert not halt_is_current(pending_detail)
+    assert contract_headline(pending_detail) == "Stop requested"
+
+    planned = _result_with_halt("status-active", STALE_HALT_AT)
+    planned["intake"]["stop_plan"] = {
+        "request_id": "req-abc",
+        "remaining": 3,
+        "counted": 0,
+    }
+    planned_detail = read_contract_snapshot(planned)
+    assert planned_detail is not None
+    assert contract_headline(planned_detail) == "Stop planned (3 remaining)"
+
+
+def test_unparseable_or_missing_halt_time_stays_current():
+    # Fail safe: without comparable timestamps an online Halt reads as
+    # current (today's behaviour). The contract parser itself rejects a
+    # missing or malformed ``at``, so this reaches the predicate directly.
+    for halt_at, started_at in (
+        (None, "2026-11-06T08:00:00Z"),
+        ("2026-11-05T16:35:05Z", None),
+        ("", "2026-11-06T08:00:00Z"),
+        ("not-a-timestamp", "2026-11-06T08:00:00Z"),
+        ("2026-11-05T16:35:05Z", "not-a-timestamp"),
+    ):
+        detail = ContractDetail(
+            instance_state="active",
+            current_issue=42,
+            current_phase="run_step",
+            last_halt_reason="startup-check-refused",
+            last_halt_detail="refused",
+            last_halt_at=halt_at,
+            process_started_at=started_at,
+        )
+        assert halt_is_current(detail), repr((halt_at, started_at))
+        assert contract_headline(detail).startswith("Halted"), repr(
+            (halt_at, started_at)
+        )
+        assert needs_operator(detail), repr((halt_at, started_at))
+
+
+def test_restarted_instance_renders_working_headline_on_the_web():
+    state = FleetState()
+    gateway = FakeGateway(
+        [
+            ManagedInstance(
+                "web-1",
+                "abc123",
+                "running",
+                path=CONTRACT_PATH,
+                instance="web-1",
+                exec_user="agent",
+                backend="coding-agent",
+            )
+        ]
+    )
+    gateway.set_contract_snapshot(
+        "abc123", _result_with_halt("status-active", STALE_HALT_AT)
+    )
+    _run(state, gateway)
+    (row,) = _rows(state)
+    assert row.headline == "Working on #42 · run_step"
+    assert row.rank != 0
+    app = create_app(
+        state=state,
+        settings=Settings(poll_interval=5.0),
+        gateway=gateway,
+        start_poller=False,
+    )
+    client = TestClient(app, base_url="http://localhost")
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "Working on #42" in page.text
+    assert "Halted (startup-check-refused)" not in page.text
+    drawer = client.get("/instances/web-1")
+    assert drawer.status_code == 200
+    # The old Halt is still shown as history in the drawer's Last halt section.
+    assert "Last halt" in drawer.text
+    assert "startup-check-refused" in drawer.text
+    assert "pinned effort mismatch" in drawer.text
+    assert STALE_HALT_AT in drawer.text
