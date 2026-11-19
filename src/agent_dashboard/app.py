@@ -77,7 +77,14 @@ from .charts import (
     undated_count,
 )
 from .config import Settings
-from .contract_activity import EVENTS_PATH, fetch_members, read_archive_events
+from .contract_activity import (
+    EVENTS_PATH,
+    TRANSCRIPT_PATH,
+    fetch_members,
+    has_evidence,
+    read_archive_events,
+    read_transcript,
+)
 from .contract_attempt import (
     ARTIFACT_PREVIEW_CAP,
     artifact_render_kind,
@@ -911,7 +918,28 @@ def create_app(
                     last_activity_age=age_text,
                     archive_error=archive_error,
                 )
-            activity = find_activity(read_archive_events(events.members[EVENTS_PATH]))
+            rows = read_archive_events(events.members[EVENTS_PATH])
+            files: dict[str, bytes] = {}
+            file_error: str | None = None
+            from_transcript = False
+            if not has_evidence(rows):
+                # No tool calls in the events (coding-agent): read them from
+                # the transcript, Evidence included, in one more exec. When
+                # it cannot be read, the events alone show the model working.
+                try:
+                    transcript = await export([TRANSCRIPT_PATH])
+                except (GatewayError, ValueError):
+                    transcript = None
+                if (
+                    transcript is not None
+                    and transcript.ok
+                    and transcript.members is not None
+                ):
+                    read = read_transcript(transcript.members[TRANSCRIPT_PATH])
+                    if read.events:
+                        rows, files = read.events, dict(read.files or {})
+                        from_transcript = True
+            activity = find_activity(rows)
             wanted: list[str] = []
             for ev in (
                 activity.current[-1] if activity.state == "tool" else None,
@@ -922,9 +950,7 @@ def create_app(
                 if ev is not None and ev.evidence is not None:
                     if ev.evidence.file not in wanted:
                         wanted.append(ev.evidence.file)
-            files: dict[str, bytes] = {}
-            file_error: str | None = None
-            if wanted:
+            if wanted and not from_transcript:
                 try:
                     fetched = await export(wanted)
                 except (GatewayError, ValueError) as exc:
