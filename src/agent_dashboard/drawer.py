@@ -175,6 +175,17 @@ class DrawerDetail:
     compactions_last_pre: Figure = field(default_factory=Figure)
     compactions_last_post: Figure = field(default_factory=Figure)
     subagents: tuple[SubagentView, ...] = ()
+    # Contract 1.1 token figures (model-only until the view issue): the
+    # telemetry path never reports them, so they stay unknown and the view
+    # can treat both paths alike (ADR 0017).
+    context_threshold: Figure = field(default_factory=Figure)
+    handoff_threshold: Figure = field(default_factory=Figure)
+    subagents_running: Figure = field(default_factory=Figure)
+    subagents_ended: Figure = field(default_factory=Figure)
+    #: Per-origin spend (contract 1.1 ``budget.by_origin``): always none
+    #: on this path — the backend reports no per-origin spend — distinct
+    #: from reported cells whose figures are unavailable.
+    by_origin: Any = None
     rate_limit: Figure = field(default_factory=Figure)
     rate_limit_reason: str | None = None
     # Control.

@@ -181,6 +181,19 @@ class SnapshotDetail:
     # Raw figures kept for headline and attention-rank derivation.
     budget_used_basis: str = UNAVAILABLE
     turns_basis_raw: str = UNAVAILABLE
+    # Contract 1.1 token figures (model-only until the view issue): the
+    # telemetry path never reports them, so they stay absent/unknown and
+    # the view can treat both paths alike (ADR 0017).
+    context_threshold_text: str = UNAVAILABLE
+    context_threshold_basis: str = ""
+    handoff_threshold_text: str = UNAVAILABLE
+    handoff_threshold_basis: str = ""
+    subagents_running: int | None = None
+    subagents_ended: int | None = None
+    #: Per-origin spend (contract 1.1 ``budget.by_origin``): always none
+    #: on this path — the backend reports no per-origin spend — distinct
+    #: from reported cells whose figures are unavailable.
+    by_origin: Any = None
 
 
 def _stable_fields(snapshot: dict[str, Any]) -> tuple[str | None, str | None]:

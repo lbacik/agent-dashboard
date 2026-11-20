@@ -107,6 +107,31 @@ class BudgetLimitView:
     limit: FigureView = field(default_factory=FigureView)
 
 
+#: Usage Origins in display order (spec section 7.2): the known names
+#: first, then any unknown origin by its raw name, sorted. The set is
+#: open; a name outside this tuple renders raw, never as another origin.
+ORIGIN_ORDER = ("main", "subagent", "handoff")
+
+
+@dataclass(frozen=True)
+class OriginSpendView:
+    """One Usage Origin's spend cell (contract 1.1 ``budget.by_origin``).
+
+    Every figure keeps its basis and reason, so an ``estimated``
+    (worst-case, upper-bound) cell and an ``unavailable`` ("not recorded")
+    cell are distinguishable from a present one and never read as zero.
+    """
+
+    name: str = UNKNOWN
+    known: bool = False
+    input_tokens: FigureView = field(default_factory=FigureView)
+    cache_read_tokens: FigureView = field(default_factory=FigureView)
+    cache_write_tokens: FigureView = field(default_factory=FigureView)
+    output_tokens: FigureView = field(default_factory=FigureView)
+    effective_tokens: FigureView = field(default_factory=FigureView)
+    cost_usd: FigureView = field(default_factory=FigureView)
+
+
 @dataclass(frozen=True)
 class BudgetView:
     """The attempt budget the way the backend enforces it."""
@@ -115,6 +140,10 @@ class BudgetView:
     effective: FigureView = field(default_factory=FigureView)
     enforced: str = UNKNOWN  # "raw" | "effective" | "none" | "unknown"
     limits: tuple[BudgetLimitView, ...] = ()
+    #: Spend per Usage Origin: none when the backend does not report
+    #: ``by_origin`` at all (contract 1.0, or a 1.1 backend without it),
+    #: distinct from reported cells whose figures are ``unavailable``.
+    by_origin: tuple[OriginSpendView, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +163,8 @@ NATIVE_SOFT_THRESHOLD = "native.soft_threshold_tokens"
 NATIVE_AUTO_COMPACT = "native.auto_compact_threshold"
 NATIVE_COMPACTIONS = "native.compactions"
 NATIVE_CONTINUATION_MAX = "native.continuation_max"
+#: The configured Handoff Threshold (contract 1.1, coding-agent mapping).
+NATIVE_HANDOFF_THRESHOLD = "native.handoff_threshold_tokens"
 NATIVE_TOKEN_CATEGORIES = (
     "native.input_tokens",
     "native.cache_read_input_tokens",
@@ -142,7 +173,9 @@ NATIVE_TOKEN_CATEGORIES = (
 )
 
 #: Optional figures the Current attempt layout shows in a named row; every
-#: other reported figure is listed under "Other figures".
+#: other reported figure is listed under "Other figures". The contract 1.1
+#: token figures are carried in named gauge slots (model-only until the
+#: view issue), so they never sprout generic "Other figures" rows.
 _GAUGE_FIGURES = frozenset(
     {
         "turns",
@@ -151,8 +184,12 @@ _GAUGE_FIGURES = frozenset(
         "context_used",
         "context_peak",
         "context_window",
+        "context_threshold",
+        "subagents_running",
+        "subagents_ended",
         NATIVE_SOFT_THRESHOLD,
         NATIVE_AUTO_COMPACT,
+        NATIVE_HANDOFF_THRESHOLD,
         NATIVE_COMPACTIONS,
         NATIVE_CONTINUATION_MAX,
         *NATIVE_TOKEN_CATEGORIES,
@@ -195,6 +232,13 @@ class AttemptGauge:
     ctx_peak: FigureView = field(default_factory=FigureView)
     ctx_auto_compact: FigureView = field(default_factory=FigureView)
     compactions: FigureView = field(default_factory=FigureView)
+    #: Contract 1.1 token figures (model-only until the view issue): the
+    #: Usable Threshold ``context_used`` is compared with, the Handoff
+    #: Threshold, and the Sub-agent counts. Absent figures read unknown.
+    context_threshold: FigureView = field(default_factory=FigureView)
+    handoff_threshold: FigureView = field(default_factory=FigureView)
+    subagents_running: FigureView = field(default_factory=FigureView)
+    subagents_ended: FigureView = field(default_factory=FigureView)
     # Enforced limits other than the enforced token budget and turns.
     other_limits: tuple[BudgetLimitView, ...] = ()
     tokens: tuple[OptionalFigureView, ...] = ()
@@ -839,6 +883,40 @@ def _read_delivery(result: Any) -> tuple[int | None, str | None]:
         return None, None
 
 
+def _read_origin_cell(name: str, cell: Any) -> OriginSpendView:
+    """One reported Usage Origin cell; unknown names keep their raw name."""
+    figures = cell if cell is not None else None
+
+    def _cell_figure(field: str) -> FigureView:
+        return figure_view(getattr(figures, field, None))
+
+    return OriginSpendView(
+        name=name,
+        known=name in ORIGIN_ORDER,
+        input_tokens=_cell_figure("input_tokens"),
+        cache_read_tokens=_cell_figure("cache_read_tokens"),
+        cache_write_tokens=_cell_figure("cache_write_tokens"),
+        output_tokens=_cell_figure("output_tokens"),
+        effective_tokens=_cell_figure("effective_tokens"),
+        cost_usd=_cell_figure("cost_usd"),
+    )
+
+
+def _read_by_origin(budget: contract_status_lib.Budget) -> tuple[OriginSpendView, ...] | None:
+    """Spend per Usage Origin: none when the backend does not report it.
+
+    Known origins come first in ``ORIGIN_ORDER``, then unknown origins by
+    raw name; a backend that stays silent reads as none, distinct from
+    reported cells whose figures are ``unavailable``.
+    """
+    reported = budget.by_origin
+    if reported is None:
+        return None
+    known = [name for name in ORIGIN_ORDER if name in reported]
+    unknown = sorted(name for name in reported if name not in ORIGIN_ORDER)
+    return tuple(_read_origin_cell(name, reported[name]) for name in (*known, *unknown))
+
+
 def _read_budget(
     budget: contract_status_lib.Budget,
 ) -> BudgetView:
@@ -862,6 +940,7 @@ def _read_budget(
         effective=figure_view(budget.effective_tokens),
         enforced=enforced,
         limits=tuple(limits),
+        by_origin=_read_by_origin(budget),
     )
 
 
@@ -990,6 +1069,10 @@ def read_attempt_gauge(
         raw=_gauge_view(budget.raw_tokens),
         effective=_gauge_view(budget.effective_tokens),
         hard_ceiling=_gauge_view(hard_fig),
+        context_threshold=_gauge_view(figures.get("context_threshold")),
+        handoff_threshold=_gauge_view(figures.get(NATIVE_HANDOFF_THRESHOLD)),
+        subagents_running=_gauge_view(figures.get("subagents_running")),
+        subagents_ended=_gauge_view(figures.get("subagents_ended")),
         soft_threshold=_gauge_view(soft_fig) if soft_fig is not None else FigureView(),
         soft_crossed=soft_crossed,
         budget_used_pct=used_pct,
