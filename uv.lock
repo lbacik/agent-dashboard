@@ -31,7 +31,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-operator-contract", git = "https://github.com/lbacik/agent-operator-contract.git?rev=v1.0.0" },
+    { name = "agent-operator-contract", git = "https://github.com/lbacik/agent-operator-contract.git?rev=v1.1.0" },
     { name = "argon2-cffi", specifier = ">=25.1.0" },
     { name = "fastapi", specifier = "==0.165.0" },
     { name = "httpx", specifier = ">=0.27" },
@@ -45,8 +45,8 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "agent-operator-contract"
-version = "1.0.0"
-source = { git = "https://github.com/lbacik/agent-operator-contract.git?rev=v1.0.0#0bc6a776e2d29441c00eb6cf033976c0a2eeea23" }
+version = "1.1.0"
+source = { git = "https://github.com/lbacik/agent-operator-contract.git?rev=v1.1.0#fb27431014301825d71fac98c198c9dae8a9044d" }
 
 [[package]]
 name = "annotated-doc"
