@@ -191,13 +191,17 @@ def test_cockpit_modules_and_columns_match_the_legacy_cockpit():
 
 def test_current_attempt_rows_match_the_legacy_layout():
     client, _ = _make_client()
-    rows = re.compile(r"<dt>([^<]+)</dt>")
+    rows = re.compile(r"<dt>(.*?)</dt>", re.S)
     legacy_body = client.get("/instances/legacy-0").text
     contract_body = client.get("/instances/web-0").text
 
     def current_rows(body: str) -> list[str]:
         module = body.partition("04 // Current attempt")[2].partition("</section>")[0]
-        return rows.findall(module)
+        cells = []
+        for cell in rows.findall(module):
+            cell = re.sub(r"<span[^>]*>.*?</span>", "", cell, flags=re.S)
+            cells.append(re.sub(r"<[^>]+>", "", cell).strip())
+        return cells
 
     legacy_rows = current_rows(legacy_body)
     contract_rows = current_rows(contract_body)
@@ -234,8 +238,8 @@ def test_current_attempt_rows_match_the_legacy_layout():
         module = body.partition("04 // Current attempt")[2].partition("</section>")[0]
         assert "of window" not in module
         assert "continuation " not in module
-        assert module.count("<dt>Auto-compact threshold</dt>") == 1
-        assert module.count("<dt>Compactions</dt>") <= 1
+        assert len(re.findall(r"<dt>Auto-compact threshold", module)) == 1
+        assert len(re.findall(r"<dt>Compactions", module)) <= 1
 
 
 def test_rail_shows_the_budget_bar_for_both_paths():
@@ -258,12 +262,134 @@ def test_matrix_figure_cells_render_for_both_paths():
     contract = _matrix_row(body, "web-0")
     assert "3,931,510 / 12,000,000" in contract
     assert 'class="budget-bar' in contract
-    assert "100,343" in contract  # main context
+    # Main context compares used against the auto-compact threshold here.
+    assert "100,343 / 367,000" in contract
+    assert "ctx-bar" in contract
+    assert "↻" not in contract  # no continuations yet
     assert ">51 <span" in contract  # turns
     assert "97%" in contract  # cache hit rate
     assert "/instances/web-0/history" in contract  # Logs, like a legacy row
     legacy = _matrix_row(body, "legacy-0")
     assert legacy.count('<div class="figure">') == contract.count('<div class="figure">')
+    # The legacy Main context cell compares against its auto-compact threshold.
+    assert "148,000 (+2) / 190,000" in legacy
+    assert "ctx-bar" in legacy
+
+
+def _fixture_result(name: str) -> dict:
+    """The ``result`` of a pinned package ``status`` fixture."""
+    from agent_operator_contract import documents
+
+    return json.loads(documents.load_fixture(name)["stdout"])["result"]
+
+
+def _spend_table(body: str) -> str:
+    """The Spend by origin table markup in a cockpit body."""
+    module = body.partition("04 // Current attempt")[2]
+    table = module.partition('<table class="spend">')[2]
+    return table.partition("</table>")[0]
+
+
+def test_1_1_matrix_cell_and_cockpit_render_token_figures():
+    """A coding-agent 1.1 instance: anchored context and an estimated origin."""
+    client, _ = _make_client(contract=_fixture_result("status-active-1-1"))
+    matrix = _matrix_row(client.get("/").text, "web-0")
+    # Main context compares used against the Usable Threshold, solid while the
+    # figure is anchored, with the continuations chip and the reason.
+    assert "98,234 / 140,000" in matrix
+    assert '<div class="budget-bar ctx-bar"' in matrix
+    assert "↻1" in matrix
+    assert "anchored on provider-reported input" in matrix
+    body = client.get("/instances/web-0").text
+    module = body.partition("04 // Current attempt")[2].partition("</section>")[0]
+    # Main context block: scale to the Handoff Threshold, danger tick at the
+    # compared threshold, grey tick at the peak, facts with N left.
+    assert "0 … 150,000 (Handoff Threshold)" in module
+    assert "140,000" in module and "41,766 left" in module
+    assert "150,000" in module
+    assert "200,000" in module
+    assert "0 … 200,000 (Model Context Window)" not in module
+    assert "Handoffs" in module
+    assert "Sub-agents" in module and "running" in module
+    # Spend by origin: known origins, Total from budget totals, Limit row
+    # with the enforced tag and both percentages.
+    spend = _spend_table(body)
+    for origin in ("main", "subagent", "handoff"):
+        assert f"<th>{origin}" in spend
+    assert "≤ upper bound" in spend and "spend-est" in spend
+    assert "upper bound: worst-case charge" in body
+    assert "<th>Total</th>" in spend and "82,000" in spend and "256,221" in spend
+    assert "$3.49" in spend
+    assert "Limit" in spend and "enforced-tag" in spend
+    assert "12.8%" in spend and "17.5%" in spend
+
+
+def test_1_1_local_estimate_context_is_hatched():
+    """A local-estimate context figure hatches the Main context bars."""
+    result = _fixture_result("status-active-1-1")
+    result = copy.deepcopy(result)
+    result["current_attempt"]["figures"]["context_used"] = _fig(
+        98234, "tokens", "estimated", "local estimate, no measured response yet"
+    )
+    client, _ = _make_client(contract=result)
+    matrix = _matrix_row(client.get("/").text, "web-0")
+    assert "98,234 / 140,000" in matrix
+    assert "ctx-bar hatched" in matrix
+    body = client.get("/instances/web-0").text
+    module = body.partition("04 // Current attempt")[2].partition("</section>")[0]
+    assert "ctx-bar hatched" in module
+    assert "local estimate, no measured response yet" in body
+
+
+def test_1_1_unavailable_spend_cells_stay_unknown():
+    """Unavailable by_origin cells never render as zero."""
+    client, _ = _make_client(contract=_fixture_result("status-active-1-1"))
+    body = client.get("/instances/web-0").text
+    spend = _spend_table(body)
+    assert "Per-origin spend:" in body and "not recorded" in body
+    assert ">0<" not in spend and ">0.00<" not in spend
+    # Totals stay valid while the handoff cells read unknown.
+    assert "82,000" in spend and "1,590,000" in spend and "256,221" in spend
+
+
+def test_simple_coding_agent_renders_auto_compact_and_fallback():
+    """No context_threshold, no by_origin: auto-compact compare + fallback."""
+    client, _ = _make_client()
+    matrix = _matrix_row(client.get("/").text, "web-0")
+    assert "100,343 / 367,000" in matrix
+    assert "ctx-bar" in matrix
+    body = client.get("/instances/web-0").text
+    module = body.partition("04 // Current attempt")[2].partition("</section>")[0]
+    assert "0 … 400,000 (Model Context Window)" in module
+    assert "Auto-compact threshold" in module and "367,000" in module
+    assert "Usable Threshold" in module
+    assert "reports no per-origin spend" in module
+    assert "Tokens by category" in module and "224,781" in module
+    # The old duplicated rows are gone: no Effective tokens, no continuation
+    # tail, no separate Compactions row (it lists under Other figures).
+    assert "Effective tokens" not in module
+    assert "continuation " not in module
+    assert "<dt>Compactions</dt>" not in module
+    assert "native.compactions" in module
+
+
+def test_legacy_path_renders_the_same_main_context_block():
+    """The legacy path renders the same elements, unknown where it lacks them."""
+    client, _ = _make_client()
+    body = client.get("/instances/legacy-0").text
+    module = body.partition("04 // Current attempt")[2].partition("</section>")[0]
+    for label in (
+        "Main context",
+        "Usable Threshold",
+        "Handoff Threshold",
+        "Model Context Window",
+        "Peak",
+        "Handoffs",
+        "Sub-agents",
+    ):
+        assert label in module
+    assert "reports no per-origin spend" in module
+    assert "Tokens by category" in module
 
 
 def test_idle_contract_row_has_no_bar_and_no_figures():
@@ -373,9 +499,11 @@ def test_gauge_reads_the_enforced_budget_soft_tick_and_native_rows():
     assert g.compactions.text == "0"
     assert [lim.name for lim in g.other_limits] == ["cost_usd"]
     assert [row.label for row in g.tokens] == ["input_tokens", "output_tokens"]
-    # Figures with a named row are not repeated under "Other figures".
+    # Figures with a named row are not repeated under "Other figures";
+    # Compactions has no named row and lists under Other figures.
     assert [row.name for row in g.other_figures] == [
         "elapsed_seconds",
+        "native.compactions",
         "native.timeout_seconds",
     ]
     assert (g.budget_text, g.budget_basis) == ("3,931,510 / 12,000,000", "measured")

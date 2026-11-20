@@ -1054,7 +1054,9 @@ def _spend_sum(cells: list[Any], field: str) -> FigureView:
     cell reports a usable value the total reads unknown.
     """
     values = [
-        number for number in (_dto_number(getattr(cell, field, None)) for cell in cells) if number is not None
+        number
+        for number in (_dto_number(getattr(cell, field, None)) for cell in cells)
+        if number is not None
     ]
     if not values:
         return FigureView()
@@ -1135,6 +1137,12 @@ def read_attempt_gauge(
     turns_fig = turns_limit.used if turns_limit is not None else figures.get("turns")
     turns_view = _gauge_view(turns_fig)
     turns_max = _gauge_view(turns_limit.limit if turns_limit is not None else None)
+    cont_fig = figures.get("continuations")
+    cont_view = (
+        FigureView(NOT_APPLICABLE, "", "count", "na")
+        if cont_fig is None
+        else _gauge_view(cont_fig)
+    )
     ctx_main = _gauge_view(figures.get("context_used"))
     ctx_threshold_view = _gauge_view(figures.get("context_threshold"))
     ctx_auto_view = _gauge_view(figures.get(NATIVE_AUTO_COMPACT))
@@ -1167,10 +1175,11 @@ def read_attempt_gauge(
     if context_hatched and ctx_main.state != "value":
         context_hatched = False
     context_left = FigureView()
-    if used_num is not None and compared_num is not None:
+    threshold_num = _dto_number(figures.get("context_threshold"))
+    if used_num is not None and threshold_num is not None:
         context_left = FigureView(
-            _fmt_number(compared_num - used_num),
-            compared_view.basis,
+            _fmt_number(threshold_num - used_num),
+            ctx_threshold_view.basis,
             "tokens",
             "value",
         )
@@ -1251,18 +1260,19 @@ def read_attempt_gauge(
             if _dto_number(figures.get("cost_usd")) is not None
             else None
         )
-        if cost_fig is None:
-            for entry in budget.limits:
-                name = entry.name if isinstance(entry.name, str) and entry.name else UNKNOWN
-                if name == "cost_usd":
+        for entry in budget.limits:
+            name = entry.name if isinstance(entry.name, str) and entry.name else UNKNOWN
+            if name == "cost_usd":
+                spend_cost_used = _gauge_view(entry.used)
+                spend_cost_limit = _gauge_view(entry.limit)
+                limit_cost = _dto_number(entry.limit)
+                total_cost = _dto_number(cost_fig)
+                if total_cost is None:
+                    total_cost = _dto_number(entry.used)
                     cost_fig = entry.used
-                    spend_cost_used = _gauge_view(entry.used)
-                    spend_cost_limit = _gauge_view(entry.limit)
-                    used_cost = _dto_number(entry.used)
-                    limit_cost = _dto_number(entry.limit)
-                    if used_cost is not None and limit_cost is not None and limit_cost > 0:
-                        spend_cost_pct = _pct(used_cost, limit_cost)
-                    break
+                if total_cost is not None and limit_cost is not None and limit_cost > 0:
+                    spend_cost_pct = _pct(total_cost, limit_cost)
+                break
         if _dto_number(cost_fig) is not None:
             spend_cost_total = _gauge_view(cost_fig)
         for cell in by_origin_cells:
@@ -1326,7 +1336,7 @@ def read_attempt_gauge(
         budget_hatched=hatched,
         turns=turns_view,
         turns_max=turns_max,
-        continuation_index=_gauge_view(figures.get("continuations")),
+        continuation_index=cont_view,
         continuation_max=_gauge_view(figures.get(NATIVE_CONTINUATION_MAX)),
         cache_hit=cache_view,
         ctx_main=ctx_main,

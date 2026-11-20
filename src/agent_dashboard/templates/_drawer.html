@@ -230,7 +230,7 @@
       {% if g.ctx_auto_compact.state == "value" %}<div><dt>Auto-compact threshold <span class="native-tag">native</span></dt><dd>{{ cfig(g.ctx_auto_compact) }}</dd></div>{% endif %}
       <div><dt>Model Context Window</dt><dd>{{ cfig(g.ctx_window) }}</dd></div>
       <div><dt>Peak</dt><dd>{{ cfig(g.ctx_peak) }}</dd></div>
-      <div><dt>Handoffs</dt><dd>{% if g.continuation_index.state == "value" %}{{ cfig(g.continuation_index) }}{% else %}<span class="figure-na">not applicable</span>{% endif %}</dd></div>
+      <div><dt>Handoffs</dt><dd>{{ cfig(g.continuation_index) }}</dd></div>
       <div><dt>Sub-agents</dt><dd>{% if g.subagents_running.state == "value" and g.subagents_ended.state == "value" %}{{ cfig(g.subagents_running) }} running · {{ cfig(g.subagents_ended) }} ended{% else %}<span class="figure-unknown">unknown</span>{% endif %}</dd></div>
     </dl>
     <h4>Spend by origin</h4>

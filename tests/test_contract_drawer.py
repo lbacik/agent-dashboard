@@ -491,7 +491,9 @@ def test_drawer_budget_enforced_and_limits():
     assert "412,530" in body
     # The backend enforces effective tokens: Budget used carries the tag.
     assert body.count("enforced-tag") == 1
-    assert "Effective tokens" in body
+    # The Effective tokens row is gone; without by_origin the Hard ceiling
+    # stays so the enforced budget still reads against its ceiling.
+    assert "Effective tokens" not in body
     assert "Hard ceiling" in body and "2,000,000" in body
     # Every limit shows used against limit, with both bases.
     assert "$3.41" in body and "$20.00" in body
@@ -543,8 +545,8 @@ def test_drawer_unknown_basis_and_unit_render_unknown():
     body = client.get("/instances/web-0").text
     elapsed = body.partition("Elapsed time</dt>")[2].partition("</div>")[0]
     assert "figure-unknown" in elapsed
-    turns = body.partition("<dt>Turns</dt>")[2].partition("</div>")[0]
-    assert 'continuation <span class="figure figure-unknown"' in turns
+    handoffs = body.partition("<dt>Handoffs</dt>")[2].partition("</div>")[0]
+    assert '<span class="figure figure-unknown"' in handoffs
     assert "forthcoming" not in body
     assert "fortnights" not in body
 

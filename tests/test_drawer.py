@@ -441,9 +441,8 @@ def test_drawer_repeated_basis_is_dropped():
 def test_drawer_composite_row_with_dropped_basis():
     """A composite row keeps reading as one line when a basis is dropped.
 
-    With a missing continuation index the Turns row reads
-    "continuation unavailable of 6 configured": the repeated basis is
-    dropped but the rest of the sentence still composes inline.
+    With a missing continuation index the Handoffs row reads unavailable:
+    the repeated basis is dropped but the row still composes inline.
     """
     snap = load_snapshot("snapshot-attempt-in-progress.json")
     snap["current_attempt"]["continuation"] = {
@@ -452,8 +451,8 @@ def test_drawer_composite_row_with_dropped_basis():
     }
     client, _, _ = make_fleet_client({"work": snap})
     body = client.get("/instances/work").text
-    assert "continuation <span class=\"figure\">unavailable</span> of" in body
-    assert "6 <span class=\"basis\">configured</span>" in body
+    handoffs = body.partition("<dt>Handoffs</dt>")[2].partition("</div>")[0]
+    assert '<span class="figure">unavailable</span>' in handoffs
     assert '<span class="basis">unavailable</span>' not in body
 
 
@@ -463,7 +462,7 @@ def test_drawer_figures_are_inline():
     assert '<span class="figure">' in body
     assert '<div class="figure">' not in body
     # Composite rows still compose into one line when they fit.
-    assert "continuation" in body
+    assert "Handoffs" in body
     assert "Main context" in body
     assert "Compactions" in body
 
