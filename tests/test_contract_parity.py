@@ -32,6 +32,7 @@ from agent_dashboard.contract_activity import (
     fetch_members,
     parse_export_members,
     read_archive_events,
+    read_transcript,
 )
 from agent_dashboard.contract_status import read_contract_snapshot
 from agent_dashboard.fleet import FleetState
@@ -504,6 +505,166 @@ def test_archive_events_map_native_evidence_events_onto_legacy_rows():
     )
     assert rows[0].level == "INFO"
     assert rows[2].timestamp_text == "2026-11-06T09:00:02Z"
+
+
+# --- Activity from the Transcript (a backend whose events name no Evidence) -------
+
+
+def _transcript(*records: dict) -> bytes:
+    return b"".join(
+        json.dumps({**record, "seq": seq}).encode() + b"\n"
+        for seq, record in enumerate(records, 1)
+    )
+
+
+def _response(
+    at: str, text: str, *calls: tuple[str, str, dict], thinking: str = ""
+) -> dict:
+    content: list[dict] = []
+    if thinking:
+        content.append({"type": "thinking", "thinking": thinking})
+    if text:
+        content.append({"type": "text", "text": text})
+    return {
+        "kind": "response",
+        "conversation": "step/process/1",
+        "at": at,
+        "message": {
+            "type": "ai",
+            "content": content,
+            "tool_calls": [
+                {"name": name, "id": call_id, "args": args}
+                for name, call_id, args in calls
+            ],
+        },
+    }
+
+
+def _request(at: str, *results: tuple[str, str]) -> dict:
+    return {
+        "kind": "request",
+        "conversation": "step/process/1",
+        "at": at,
+        "new_messages": [
+            {"type": "tool", "content": content, "tool_call_id": call_id}
+            for call_id, content in results
+        ],
+    }
+
+
+STEP_EVENTS = _events(
+    ("2026-11-06T09:00:00Z", "claim_opened", "claim opened implement#42/1"),
+    ("2026-11-06T09:00:01Z", "native.step_opened", "step opened process#1"),
+)
+
+TRANSCRIPT = _transcript(
+    _request("2026-11-06T09:00:02Z"),
+    _response(
+        "2026-11-06T09:00:04Z",
+        "Editing the module.",
+        ("edit_file", "t1", {"path": "src/pricing.py", "old_string": "a", "new_string": "b"}),
+        thinking="Private musing.",
+    ),
+    _request("2026-11-06T09:00:05Z", ("t1", "edited 'src/pricing.py'")),
+    _response(
+        "2026-11-06T09:00:07Z",
+        "",
+        ("run_command", "t2", {"command": "uv run pytest -q"}),
+    ),
+)
+
+
+def test_activity_reads_the_transcript_when_the_events_name_no_evidence():
+    client, gateway = _make_client()
+    gateway.set_contract_archive(
+        CONTRACT_CID,
+        ATTEMPT,
+        {"events.jsonl": STEP_EVENTS, "transcript.jsonl": TRANSCRIPT},
+    )
+    body = client.get("/instances/web-0/activity").text
+    assert 'class="activity-now activity-now-tool"' in body
+    assert "<strong>run_command</strong> running" in body
+    assert "uv run pytest -q" in body
+    assert "Last call" in body
+    assert "<strong>edit_file</strong>" in body
+    assert "src/pricing.py" in body
+    assert "- a\n+ b" in body
+    assert "edited &#39;src/pricing.py&#39;" in body
+    assert "took 1.0 s" in body
+    # Two execs: the events, then the transcript (it carries the Evidence).
+    assert [call[3] for call in gateway.contract_members_calls] == [
+        ("events.jsonl",),
+        ("transcript.jsonl",),
+    ]
+
+
+def test_activity_model_working_after_a_transcript_tool_result():
+    transcript = TRANSCRIPT.rsplit(b"\n", 2)[0] + b"\n"
+    client, gateway = _make_client()
+    gateway.set_contract_archive(
+        CONTRACT_CID,
+        ATTEMPT,
+        {"events.jsonl": STEP_EVENTS, "transcript.jsonl": transcript},
+    )
+    body = client.get("/instances/web-0/activity").text
+    assert 'class="activity-now activity-now-model"' in body
+    assert "model working" in body
+    assert "last: edit_file" in body
+    # The model's text wins over its thinking.
+    assert "Editing the module." in body
+    assert "Private musing." not in body
+
+
+def test_activity_without_a_transcript_reads_as_the_model_working():
+    client, gateway = _make_client()
+    gateway.set_contract_archive(CONTRACT_CID, ATTEMPT, {"events.jsonl": STEP_EVENTS})
+    body = client.get("/instances/web-0/activity").text
+    assert 'class="activity-now activity-now-model"' in body
+    assert "Last call" not in body
+    assert "Could not read" not in body
+
+
+def test_activity_skips_the_transcript_when_the_events_name_evidence():
+    client, gateway = _make_client()
+    gateway.set_contract_archive(
+        CONTRACT_CID, ATTEMPT, {**ARCHIVE, "transcript.jsonl": TRANSCRIPT}
+    )
+    client.get("/instances/web-0/activity")
+    assert ("transcript.jsonl",) not in [
+        call[3] for call in gateway.contract_members_calls
+    ]
+
+
+def test_transcript_maps_onto_legacy_rows_and_evidence_files():
+    subagent = _response(
+        "2026-11-06T09:00:08Z", "", ("read_file", "s1", {"path": "x"}), thinking="Look."
+    )
+    subagent["conversation"] = "subagent:call-9"
+    read = read_transcript(
+        TRANSCRIPT
+        + json.dumps(subagent).encode()
+        + b"\nnot json\n"
+        + b'{"kind": "HumanMessage", "content": "step-end shape"}\n'
+    )
+    assert [(row.event, row.detail) for row in read.events] == [
+        ("model_request", ""),
+        ("model_response", "-> 0001_model_response.txt (chars=19)"),
+        ("tool_call", "edit_file [main] -> 0002_tool_call.json"),
+        ("tool_result", "edit_file [main] -> 0003_tool_result.json"),
+        ("model_request", ""),
+        ("model_response", ""),
+        ("tool_call", "run_command [main] -> 0004_tool_call.json"),
+        ("model_response", "-> 0005_model_response.txt (chars=5)"),
+        ("tool_call", "read_file [subagent:call-9] -> 0006_tool_call.json"),
+    ]
+    assert read.events[2].evidence is not None
+    assert read.events[2].timestamp_text == "2026-11-06T09:00:04Z"
+    assert read.files is not None
+    assert read.files["0001_model_response.txt"] == b"Editing the module."
+    assert json.loads(read.files["0004_tool_call.json"]) == {"command": "uv run pytest -q"}
+    assert read.files["0003_tool_result.json"] == b"edited 'src/pricing.py'"
+    # Thinking stands in for a response without text.
+    assert read.files["0005_model_response.txt"] == b"Look."
 
 
 # --- multi-member export: argv and verification -----------------------------------

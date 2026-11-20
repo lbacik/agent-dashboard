@@ -202,7 +202,7 @@ def call_preview(tool: str, content: bytes) -> tuple[str, str]:
     """``(headline, body)`` preview of one tool_call Evidence file.
 
     Bash shows the description plus the command; Read/Edit/Write show the
-    path plus the ``-/+`` lines; a subagent prompt shows the description
+    path (``file_path`` or ``path``) plus the ``-/+`` lines; a subagent prompt shows the description
     plus the prompt; anything else is compact JSON without ``agent_id``.
     Never raises.
     """
@@ -217,10 +217,11 @@ def call_preview(tool: str, content: bytes) -> tuple[str, str]:
     try:
         if "command" in data:
             return str(data.get("description") or ""), clip_text(str(data["command"]))
-        if "file_path" in data and (
+        target = "file_path" if "file_path" in data else "path"
+        if target in data and (
             "content" in data or "old_string" in data or "edits" in data
         ):
-            return str(data["file_path"]), clip_text(_edit_text(data))
+            return str(data[target]), clip_text(_edit_text(data))
         for key in ("file_path", "path", "pattern", "url", "query"):
             if key in data:
                 rest = {k: v for k, v in data.items() if k not in (key, "agent_id")}
