@@ -388,6 +388,8 @@ def test_legacy_path_renders_the_same_main_context_block():
         "Sub-agents",
     ):
         assert label in module
+    assert "Handoff Threshold <span class=\"native-tag\">native</span>" in module
+    assert "Auto-compact threshold <span class=\"native-tag\">native</span>" in module
     assert "reports no per-origin spend" in module
     assert "Tokens by category" in module
 

@@ -466,8 +466,8 @@
     <dl class="facts">
       <div><dt>Main context</dt><dd>{{ fig(d.ctx_main) }}</dd></div>
       <div><dt>Usable Threshold</dt><dd>{{ fig(d.context_threshold) }}</dd></div>
-      <div><dt>Handoff Threshold</dt><dd>{{ fig(d.handoff_threshold) }}</dd></div>
-      {% if d.ctx_auto_compact.text not in ("unavailable", "n/a") %}<div><dt>Auto-compact threshold</dt><dd>{{ fig(d.ctx_auto_compact) }}</dd></div>{% endif %}
+      <div><dt>Handoff Threshold <span class="native-tag">native</span></dt><dd>{{ fig(d.handoff_threshold) }}</dd></div>
+      {% if d.ctx_auto_compact.text not in ("unavailable", "n/a") %}<div><dt>Auto-compact threshold <span class="native-tag">native</span></dt><dd>{{ fig(d.ctx_auto_compact) }}</dd></div>{% endif %}
       <div><dt>Model Context Window</dt><dd>{{ fig(d.ctx_window) }}</dd></div>
       <div><dt>Peak</dt><dd>{{ fig(d.ctx_peak) }}</dd></div>
       <div><dt>Handoffs</dt><dd>{{ fig(d.continuation_index) }}</dd></div>
