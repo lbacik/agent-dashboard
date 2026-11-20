@@ -49,7 +49,12 @@
 {%- endmacro %}
 {# Budget, Main context, Turns and Cache hit rate cells: one markup for
    both paths (``row.gauge`` is the legacy SnapshotDetail or the contract
-   AttemptGauge, which share these fields; ADR 0017). #}
+   AttemptGauge, which share these fields; ADR 0017). The Main context cell
+   compares ``context_used`` with the compared threshold (the Usable
+   Threshold, else the native auto-compact threshold): the bar fills
+   against it, turns danger colour at 95%, and reads hatched while the
+   figure is a local estimate. The basis line shows the figure's reason
+   shortened, complete in the tooltip. #}
 {% macro figure_cells(g) -%}
       <td>
         {% if g.budget_has_bar %}
@@ -60,7 +65,14 @@
         {% endif %}
         <div class="figure">{{ g.budget_text }}{% if g.budget_basis %} <span class="basis">{{ g.budget_basis }}</span>{% endif %}</div>
       </td>
-      <td><div class="figure">{{ g.context_text }}{% if g.context_basis %} <span class="basis">{{ g.context_basis }}</span>{% endif %}</div></td>
+      <td>
+        {% if g.context_has_bar %}
+        <div class="budget-bar ctx-bar{% if g.context_hatched %} hatched{% endif %}" role="img" aria-label="main context {{ g.context_text }} of {{ g.context_compared_text }}">
+          <div class="budget-fill{% if g.context_hot %} is-hot{% endif %}" style="width: {{ g.context_used_pct }}%"></div>
+        </div>
+        {% endif %}
+        <div class="figure">{{ g.context_text }}{% if g.context_compared_text not in ("unavailable", "unknown", "n/a") %} / {{ g.context_compared_text }}{% endif %}{% if g.context_continuations %} <span class="ctx-chip" title="Context-Window Handoffs in this Attempt">↻{{ g.context_continuations }}</span>{% endif %}{% if g.context_basis %} <span class="basis"{% if g.context_reason %} title="{{ g.context_reason }}"{% endif %}>{{ g.context_basis }}{% if g.context_reason %} · {{ g.context_reason | truncate(32, True, "…") }}{% endif %}</span>{% endif %}</div>
+      </td>
       <td><div class="figure">{{ g.turns_text }}{% if g.turns_basis %} <span class="basis">{{ g.turns_basis }}</span>{% endif %}</div></td>
       <td><div class="figure">{{ g.cache_text }}{% if g.cache_basis %} <span class="basis">{{ g.cache_basis }}</span>{% endif %}</div></td>
 {%- endmacro %}

@@ -175,13 +175,30 @@ class DrawerDetail:
     compactions_last_pre: Figure = field(default_factory=Figure)
     compactions_last_post: Figure = field(default_factory=Figure)
     subagents: tuple[SubagentView, ...] = ()
-    # Contract 1.1 token figures (model-only until the view issue): the
-    # telemetry path never reports them, so they stay unknown and the view
-    # can treat both paths alike (ADR 0017).
+    # Contract 1.1 token figures: the telemetry path never reports them,
+    # so they stay unknown and the view treats both paths alike (ADR 0017).
     context_threshold: Figure = field(default_factory=Figure)
     handoff_threshold: Figure = field(default_factory=Figure)
     subagents_running: Figure = field(default_factory=Figure)
     subagents_ended: Figure = field(default_factory=Figure)
+    #: The compared threshold (the native auto-compact threshold: the
+    #: telemetry path reports no Usable Threshold) and the bar scale (the
+    #: Model Context Window: the telemetry path reports no Handoff
+    #: Threshold), with the bars that compare ``context.main`` against them.
+    context_compared: Figure = field(default_factory=Figure)
+    context_scale: Figure = field(default_factory=Figure)
+    context_scale_is_handoff: bool = False
+    context_left: Figure = field(default_factory=Figure)
+    context_used_pct: float | None = None
+    context_has_bar: bool = False
+    context_hatched: bool = False
+    context_hot: bool = False
+    context_scale_has_bar: bool = False
+    context_scale_used_pct: float | None = None
+    context_scale_compared_pct: float | None = None
+    context_scale_peak_pct: float | None = None
+    #: Handoffs for the ``↻N`` chip: the continuation index when above 0.
+    context_continuations: int | None = None
     #: Per-origin spend (contract 1.1 ``budget.by_origin``): always none
     #: on this path — the backend reports no per-origin spend — distinct
     #: from reported cells whose figures are unavailable.
@@ -430,6 +447,62 @@ def read_drawer(snapshot: dict[str, Any] | None, *, control_stale: bool = False)
         else _read_context({}, missing_current)
     )
 
+    def _ctx_num(name: str) -> int | float | None:
+        if not current:
+            return None
+        context = current.get("context")
+        if not isinstance(context, dict):
+            return None
+        return _num(context.get(name))
+
+    main_num = _ctx_num("main")
+    auto_num = _ctx_num("auto_compact_threshold")
+    window_num = _ctx_num("window")
+    peak_num = _ctx_num("main_peak")
+    missing_ctx = Figure(
+        _missing_text(current_state), "" if current_state == "na" else UNAVAILABLE
+    )
+    context_compared = ctx["auto"]
+    context_scale = ctx["window"]
+    context_left = missing_ctx
+    context_used_pct = context_scale_used_pct = None
+    context_scale_compared_pct = context_scale_peak_pct = None
+    context_has_bar = context_scale_has_bar = False
+    context_hatched = context_hot = False
+    if main_num is not None and auto_num is not None:
+        context_left = Figure(_fmt_tokens(auto_num - main_num), ctx["auto"].basis)
+    if main_num is not None and auto_num is not None and auto_num > 0:
+        context_used_pct = round(min(100.0, max(0.0, main_num / auto_num * 100.0)), 1)
+        context_has_bar = True
+        context_hot = context_used_pct >= 95
+        context_hatched = ctx["main"].basis == "estimated"
+    if main_num is not None and window_num is not None and window_num > 0:
+        context_scale_has_bar = True
+        context_scale_used_pct = round(
+            min(100.0, max(0.0, main_num / window_num * 100.0)), 1
+        )
+        if auto_num is not None and auto_num > 0:
+            context_scale_compared_pct = round(
+                min(100.0, max(0.0, auto_num / window_num * 100.0)), 1
+            )
+        if peak_num is not None and peak_num > 0:
+            context_scale_peak_pct = round(
+                min(100.0, max(0.0, peak_num / window_num * 100.0)), 1
+            )
+    cont_raw = current.get("continuation") if current else None
+    cont_raw = cont_raw if isinstance(cont_raw, dict) else {}
+    cont_index_raw = cont_raw.get("index")
+    cont_index_num = (
+        cont_index_raw.get("value") if isinstance(cont_index_raw, dict) else None
+    )
+    context_continuations = (
+        cont_index_num
+        if isinstance(cont_index_num, int)
+        and not isinstance(cont_index_num, bool)
+        and cont_index_num > 0
+        else None
+    )
+
     turns = Figure(missing_current, "" if current_state == "na" else UNAVAILABLE)
     turns_max = Figure(missing_current, "" if current_state == "na" else UNAVAILABLE)
     cont_index = Figure(missing_current, "" if current_state == "na" else UNAVAILABLE)
@@ -658,6 +731,18 @@ def read_drawer(snapshot: dict[str, Any] | None, *, control_stale: bool = False)
         ctx_peak=ctx["peak"],
         ctx_window=ctx["window"],
         ctx_auto_compact=ctx["auto"],
+        context_compared=context_compared,
+        context_scale=context_scale,
+        context_left=context_left,
+        context_used_pct=context_used_pct,
+        context_has_bar=context_has_bar,
+        context_hatched=context_hatched,
+        context_hot=context_hot,
+        context_scale_has_bar=context_scale_has_bar,
+        context_scale_used_pct=context_scale_used_pct,
+        context_scale_compared_pct=context_scale_compared_pct,
+        context_scale_peak_pct=context_scale_peak_pct,
+        context_continuations=context_continuations,
         compactions_count=ctx["comp_count"],
         compactions_last_at=ctx["last_at"],
         compactions_last_trigger=ctx["last_trigger"],

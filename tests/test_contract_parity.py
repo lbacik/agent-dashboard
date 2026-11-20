@@ -201,7 +201,11 @@ def test_current_attempt_rows_match_the_legacy_layout():
 
     legacy_rows = current_rows(legacy_body)
     contract_rows = current_rows(contract_body)
-    # Every legacy row the Status Snapshot can fill is there, in order.
+    # The Current attempt module keeps the same facts on both paths: the
+    # trimmed base rows, then the Main context block (Usable Threshold with
+    # "N left", the native Handoff Threshold, the Model Context Window as a
+    # number, Peak, Handoffs and Sub-agents). The legacy auto-compact
+    # threshold is reported, so its row is there too.
     for label in (
         "Budget used",
         "Hard ceiling",
@@ -210,14 +214,28 @@ def test_current_attempt_rows_match_the_legacy_layout():
         "Turns",
         "Cache hit rate",
         "Main context",
+        "Usable Threshold",
+        "Handoff Threshold",
         "Auto-compact threshold",
-        "Compactions",
+        "Model Context Window",
+        "Peak",
+        "Handoffs",
+        "Sub-agents",
     ):
         assert label in legacy_rows, label
         assert label in contract_rows, label
     shared = [label for label in contract_rows if label in legacy_rows]
     assert shared == [label for label in legacy_rows if label in contract_rows]
     assert 'class="budget-bar' in contract_body.partition("04 // Current attempt")[2]
+    # The duplicated rows are gone on both paths: no old Main context row
+    # with a window, no separate Auto-compact or Compactions rows, and no
+    # continuation tail on Turns.
+    for body in (legacy_body, contract_body):
+        module = body.partition("04 // Current attempt")[2].partition("</section>")[0]
+        assert "of window" not in module
+        assert "continuation " not in module
+        assert module.count("<dt>Auto-compact threshold</dt>") == 1
+        assert module.count("<dt>Compactions</dt>") <= 1
 
 
 def test_rail_shows_the_budget_bar_for_both_paths():
