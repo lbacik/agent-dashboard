@@ -76,20 +76,45 @@ enforces carries an `enforced` tag (`.enforced-tag`); `native.*` names
 and events carry a `native` tag (`.native-tag`).
 
 In the cockpit's 04 Current attempt module, token figures omit the unit
-word (`3,931,510 measured`): the module keeps the legacy rows (Budget used,
-Hard ceiling, Soft threshold, Turns, Main context, ...), each row names its
-quantity, and the bar above them fills the enforced token budget. Other
-units keep their formatting.
+word (`3,931,510 measured`): the module keeps Budget used (with its bar),
+Raw tokens, the soft-threshold rows, Turns, the main-only Cache hit rate,
+the enforced limits, Phase and the timestamps, plus a Main context block
+and a Spend by origin table. The rows the new elements duplicate are gone:
+the old Main context row, Effective tokens, the Hard ceiling and `cost_usd`
+limit rows when the Spend table's Limit row shows them, the continuation
+tail on Turns, the Auto-compact threshold row (moved into the Main context
+block when reported) and Compactions (under Other figures when reported).
+The Main context cell and block compare `context_used` with the compared
+threshold (the Usable Threshold, else the native auto-compact threshold):
+the bar fills against it, danger colour at 95% or more, hatched while the
+figure is a local estimate; a `↻N` chip shows continuations above 0 and the
+basis line shows the reason shortened (complete in a tooltip). The cockpit
+block scales 0 to the Handoff Threshold (else the Model Context Window,
+always a number never a scale), with a danger tick at the compared
+threshold and a grey tick at the peak, and facts for Usable Threshold
+(with "N left"), Handoff Threshold, auto-compact threshold (when
+reported), Model Context Window, Peak, Handoffs (`not applicable` when
+absent) and Sub-agents (`unknown` when absent). The Spend table lists
+`main`, `subagent`, `handoff`, then unknown origins by raw name, with
+bucket totals summed from the usable cells and Effective/Cost from the
+budget totals; the Limit row carries the enforced tag and both
+percentages. An `estimated` origin is hatched and tagged "≤ upper bound"
+with the reason in a tooltip; `unavailable` cells read "unknown — not
+recorded" and never zero, and without `by_origin` the module says the
+backend reports no per-origin spend while Tokens by category stays.
 
 ## One view for both paths
 
 A legacy instance and a contract instance render the same views: the
 rail item with its budget bar, the fleet matrix row with its Budget, Main
 context, Turns and Cache hit rate cells, the cockpit's six numbered
-modules in their columns, and the Activity widget's Now / Last call panes
-(ADR 0017). Only the data source differs. Adding, removing or renaming a
-view element means changing it on both paths, and
-`tests/test_contract_parity.py` changes with it.
+modules in their columns (04 with the same Main context block and Spend
+by origin table), and the Activity widget's Now / Last call panes
+(ADR 0017). Only the data source differs: the legacy path, which reports
+no Usable Threshold, Handoff Threshold or per-origin spend, renders those
+elements as `unknown` / `not applicable` with the same fallback lines.
+Adding, removing or renaming a view element means changing it on both
+paths, and `tests/test_contract_parity.py` changes with it.
 
 On the contract path the rail's Last item and the matrix Last column show a
 Halt only while it is current: the instance is stopped, or the Halt's `at` is

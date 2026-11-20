@@ -170,6 +170,16 @@ class SnapshotDetail:
     budget_has_tick: bool = False
     context_text: str = UNAVAILABLE
     context_basis: str = ""
+    #: The compared threshold (the native auto-compact threshold: the
+    #: telemetry path reports no Usable Threshold) and the Main context bar.
+    context_compared_text: str = UNAVAILABLE
+    context_reason: str | None = None
+    context_used_pct: float | None = None
+    context_has_bar: bool = False
+    context_hatched: bool = False
+    context_hot: bool = False
+    #: Handoffs for the ``↻N`` chip: the continuation index when above 0.
+    context_continuations: int | None = None
     turns_text: str = UNAVAILABLE
     turns_basis: str = ""
     cache_text: str = UNAVAILABLE
@@ -380,13 +390,22 @@ def read_snapshot(
 
     # Main context plus the number of running subagents.
     context_text, context_basis = UNAVAILABLE, ""
+    context_compared_text: str = UNAVAILABLE
+    context_used_pct: float | None = None
+    context_has_bar = context_hatched = context_hot = False
+    context_continuations: int | None = None
     if current is None:
         context_text = _absent_text(current_was_null)
+        context_compared_text = _absent_text(current_was_null)
     elif current is not None:
         context = current.get("context")
         context = context if isinstance(context, dict) else None
+        main_value: int | float | None = None
+        main_basis = UNAVAILABLE
+        auto_value: int | float | None = None
         if context is not None:
             main_value, main_basis = _figure(context.get("main"))
+            auto_value, _ = _figure(context.get("auto_compact_threshold"))
             subagents = context.get("subagents")
             running: int | None = None
             if isinstance(subagents, list):
@@ -398,6 +417,29 @@ def read_snapshot(
                 if running:
                     context_text += f" (+{running})"
                 context_basis = main_basis if main_basis != UNAVAILABLE else ""
+        if auto_value is not None:
+            context_compared_text = _fmt_tokens(auto_value)
+        if (
+            main_value is not None
+            and auto_value is not None
+            and auto_value > 0
+        ):
+            context_used_pct = round(
+                min(100.0, max(0.0, main_value / auto_value * 100.0)), 1
+            )
+            context_has_bar = True
+            context_hot = context_used_pct >= 95
+            context_hatched = main_basis == "estimated"
+        cont = current.get("continuation")
+        cont = cont if isinstance(cont, dict) else {}
+        index_raw = cont.get("index")
+        index_value = index_raw.get("value") if isinstance(index_raw, dict) else None
+        if (
+            isinstance(index_value, int)
+            and not isinstance(index_value, bool)
+            and index_value > 0
+        ):
+            context_continuations = index_value
 
     # Turns.
     turns_text, turns_basis = UNAVAILABLE, ""
@@ -454,6 +496,12 @@ def read_snapshot(
         budget_has_tick=has_tick,
         context_text=context_text,
         context_basis=context_basis,
+        context_compared_text=context_compared_text,
+        context_used_pct=context_used_pct,
+        context_has_bar=context_has_bar,
+        context_hatched=context_hatched,
+        context_hot=context_hot,
+        context_continuations=context_continuations,
         turns_text=turns_text,
         turns_basis=turns_basis,
         cache_text=cache_text,

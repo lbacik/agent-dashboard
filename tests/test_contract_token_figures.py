@@ -229,8 +229,8 @@ def test_read_attempt_gauge_without_by_origin_reads_none():
 # --- no rendered page changes ------------------------------------------------------
 
 
-def test_1_1_snapshot_renders_the_current_pages_unchanged():
-    """A 1.1 snapshot renders without any new row (the view is next)."""
+def test_1_1_snapshot_renders_the_token_figures():
+    """A 1.1 snapshot renders the Main context and Spend by origin figures."""
     import asyncio
 
     from fake_gateway import FakeGateway
@@ -273,7 +273,12 @@ def test_1_1_snapshot_renders_the_current_pages_unchanged():
         assert "<dt>subagents_running</dt>" not in body
         assert "<dt>subagents_ended</dt>" not in body
         assert "<dt>native.handoff_threshold_tokens</dt>" not in body
-        assert "nightly" not in body
+        # The Main context figure compares used against the Usable Threshold.
+        assert "140,000" in body
+    drawer = client.get("/instances/web-0").text
+    # The Spend table lists every origin, estimated ones as an upper bound.
+    assert "nightly" in drawer
+    assert "≤ upper bound" in drawer
 
 
 # --- legacy path: the same fields, absent/unknown ---------------------------------

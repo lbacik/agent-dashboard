@@ -173,9 +173,10 @@ NATIVE_TOKEN_CATEGORIES = (
 )
 
 #: Optional figures the Current attempt layout shows in a named row; every
-#: other reported figure is listed under "Other figures". The contract 1.1
-#: token figures are carried in named gauge slots (model-only until the
-#: view issue), so they never sprout generic "Other figures" rows.
+#: other reported figure is listed under "Other figures". The token figures
+#: with a named slot in the Main context block never sprout generic "Other
+#: figures" rows; Compactions has no named row and lists under Other
+#: figures when the backend reports it.
 _GAUGE_FIGURES = frozenset(
     {
         "turns",
@@ -190,7 +191,6 @@ _GAUGE_FIGURES = frozenset(
         NATIVE_SOFT_THRESHOLD,
         NATIVE_AUTO_COMPACT,
         NATIVE_HANDOFF_THRESHOLD,
-        NATIVE_COMPACTIONS,
         NATIVE_CONTINUATION_MAX,
         *NATIVE_TOKEN_CATEGORIES,
     }
@@ -232,13 +232,45 @@ class AttemptGauge:
     ctx_peak: FigureView = field(default_factory=FigureView)
     ctx_auto_compact: FigureView = field(default_factory=FigureView)
     compactions: FigureView = field(default_factory=FigureView)
-    #: Contract 1.1 token figures (model-only until the view issue): the
-    #: Usable Threshold ``context_used`` is compared with, the Handoff
-    #: Threshold, and the Sub-agent counts. Absent figures read unknown.
+    #: Contract 1.1 token figures: the Usable Threshold ``context_used`` is
+    #: compared with, the Handoff Threshold, and the Sub-agent counts.
+    #: Absent figures read unknown.
     context_threshold: FigureView = field(default_factory=FigureView)
     handoff_threshold: FigureView = field(default_factory=FigureView)
     subagents_running: FigureView = field(default_factory=FigureView)
     subagents_ended: FigureView = field(default_factory=FigureView)
+    #: The compared threshold (``context_threshold``, else the native
+    #: auto-compact threshold) and the bar scale (the Handoff Threshold, else
+    #: the Model Context Window). Token figures omit the unit word.
+    context_compared: FigureView = field(default_factory=FigureView)
+    context_scale: FigureView = field(default_factory=FigureView)
+    context_scale_is_handoff: bool = False
+    context_left: FigureView = field(default_factory=FigureView)
+    #: Fleet matrix bar: ``context_used`` against the compared threshold.
+    context_used_pct: float | None = None
+    context_has_bar: bool = False
+    context_hatched: bool = False
+    context_hot: bool = False
+    #: Cockpit bar: 0 to the Handoff Threshold (or the Context Window).
+    context_scale_has_bar: bool = False
+    context_scale_used_pct: float | None = None
+    context_scale_compared_pct: float | None = None
+    context_scale_peak_pct: float | None = None
+    #: Handoffs for the ``↻N`` chip: the continuations count when above 0.
+    context_continuations: int | None = None
+    #: Spend by origin totals: bucket sums of the reported cells, while
+    #: Effective and Cost are the budget totals. Token totals omit the unit
+    #: word; unknown when nothing usable was reported.
+    spend_input_total: FigureView = field(default_factory=FigureView)
+    spend_cache_read_total: FigureView = field(default_factory=FigureView)
+    spend_cache_write_total: FigureView = field(default_factory=FigureView)
+    spend_output_total: FigureView = field(default_factory=FigureView)
+    spend_effective_total: FigureView = field(default_factory=FigureView)
+    spend_cost_total: FigureView = field(default_factory=FigureView)
+    spend_has_unavailable: bool = False
+    spend_cost_used: FigureView = field(default_factory=FigureView)
+    spend_cost_limit: FigureView = field(default_factory=FigureView)
+    spend_cost_pct: float | None = None
     # Enforced limits other than the enforced token budget and turns.
     other_limits: tuple[BudgetLimitView, ...] = ()
     tokens: tuple[OptionalFigureView, ...] = ()
@@ -248,6 +280,8 @@ class AttemptGauge:
     budget_basis: str = ""
     context_text: str = UNAVAILABLE
     context_basis: str = ""
+    context_compared_text: str = UNKNOWN
+    context_reason: str | None = None
     turns_text: str = UNAVAILABLE
     turns_basis: str = ""
     cache_text: str = UNAVAILABLE
@@ -972,6 +1006,69 @@ def _cell(view: FigureView) -> tuple[str, str]:
     return view.text, view.basis
 
 
+def _dto_number(fig: Any) -> int | float | None:
+    """The numeric value of a usable figure DTO, else none."""
+    if figure_view(fig).state != "value":
+        return None
+    value = getattr(fig, "value", None)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _dto_reason(fig: Any) -> str | None:
+    """The backend note on a figure DTO, if it carries one."""
+    reason = getattr(fig, "reason", None)
+    return reason if isinstance(reason, str) and reason else None
+
+
+def _is_local_estimate(fig: Any) -> bool:
+    """Whether a context figure is a local estimate (no measured response).
+
+    An anchored estimate (computed from provider-reported input) reads as a
+    solid bar; a local estimate reads hatched, like an estimated budget bar.
+    The backend only marks the difference in the reason text, so a missing
+    reason reads as local (hatched) rather than as anchored.
+    """
+    if figure_view(fig).basis != "estimated":
+        return False
+    reason = _dto_reason(fig)
+    if reason is None:
+        return True
+    return "anchor" not in reason.lower()
+
+
+#: Spend table buckets in column order (contract 1.1 ``by_origin`` names).
+SPEND_BUCKETS = (
+    "input_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "output_tokens",
+)
+
+
+def _spend_sum(cells: list[Any], field: str) -> FigureView:
+    """One bucket total: the sum of the usable reported cells.
+
+    Unavailable cells contribute nothing and never read as zero; when no
+    cell reports a usable value the total reads unknown.
+    """
+    values = [
+        number
+        for number in (_dto_number(getattr(cell, field, None)) for cell in cells)
+        if number is not None
+    ]
+    if not values:
+        return FigureView()
+    total = sum(values)
+    estimated = any(
+        figure_view(getattr(cell, field, None)).basis == "estimated" for cell in cells
+    )
+    return FigureView(
+        _fmt_number(total), "estimated" if estimated else "measured", "tokens", "value"
+    )
+
+
 def read_attempt_gauge(
     budget: contract_status_lib.Budget, figures: dict[str, Any]
 ) -> AttemptGauge:
@@ -980,7 +1077,10 @@ def read_attempt_gauge(
     The bar fills the enforced token budget (``raw_tokens`` or
     ``effective_tokens`` limit) against its ceiling, with the soft
     threshold tick from ``native.soft_threshold_tokens`` when reported; it
-    is hatched when the used figure is estimated. Never raises.
+    is hatched when the used figure is estimated. The Main context cell
+    compares ``context_used`` with the Usable Threshold (else the native
+    auto-compact threshold); its bar is hatched while the figure is a local
+    estimate and turns danger colour at 95%. Never raises.
     """
     enforced = budget.enforced_tokens
     if enforced not in ("raw", "effective", "none"):
@@ -1037,8 +1137,158 @@ def read_attempt_gauge(
     turns_fig = turns_limit.used if turns_limit is not None else figures.get("turns")
     turns_view = _gauge_view(turns_fig)
     turns_max = _gauge_view(turns_limit.limit if turns_limit is not None else None)
-    cache_view = _gauge_view(figures.get("cache_hit_rate"))
+    cont_fig = figures.get("continuations")
+    cont_view = (
+        FigureView(NOT_APPLICABLE, "", "count", "na")
+        if cont_fig is None
+        else _gauge_view(cont_fig)
+    )
     ctx_main = _gauge_view(figures.get("context_used"))
+    ctx_threshold_view = _gauge_view(figures.get("context_threshold"))
+    ctx_auto_view = _gauge_view(figures.get(NATIVE_AUTO_COMPACT))
+    ctx_window_view = _gauge_view(figures.get("context_window"))
+    ctx_peak_view = _gauge_view(figures.get("context_peak"))
+    handoff_view = _gauge_view(figures.get(NATIVE_HANDOFF_THRESHOLD))
+
+    # The compared threshold: the Usable Threshold, else the native
+    # auto-compact threshold when the backend reports one.
+    ctx_used_fig = figures.get("context_used")
+    compared_fig = (
+        figures.get("context_threshold")
+        if _dto_number(figures.get("context_threshold")) is not None
+        else figures.get(NATIVE_AUTO_COMPACT)
+    )
+    compared_view = (
+        ctx_threshold_view
+        if _dto_number(figures.get("context_threshold")) is not None
+        else ctx_auto_view
+    )
+    used_num = _dto_number(ctx_used_fig)
+    compared_num = _dto_number(compared_fig)
+    context_used_pct = context_hot = None
+    context_has_bar = False
+    if used_num is not None and compared_num is not None and compared_num > 0:
+        context_used_pct = _pct(used_num, compared_num)
+        context_has_bar = True
+        context_hot = context_used_pct >= 95
+    context_hatched = _is_local_estimate(ctx_used_fig)
+    if context_hatched and ctx_main.state != "value":
+        context_hatched = False
+    context_left = FigureView()
+    threshold_num = _dto_number(figures.get("context_threshold"))
+    if used_num is not None and threshold_num is not None:
+        context_left = FigureView(
+            _fmt_number(threshold_num - used_num),
+            ctx_threshold_view.basis,
+            "tokens",
+            "value",
+        )
+    # The cockpit bar: 0 to the Handoff Threshold, else the Context Window.
+    handoff_num = _dto_number(figures.get(NATIVE_HANDOFF_THRESHOLD))
+    window_num = _dto_number(figures.get("context_window"))
+    peak_num = _dto_number(figures.get("context_peak"))
+    scale_num = handoff_num if handoff_num is not None else window_num
+    context_scale = (
+        handoff_view if handoff_num is not None else ctx_window_view
+    )
+    context_scale_has_bar = False
+    scale_used_pct = scale_compared_pct = scale_peak_pct = None
+    if used_num is not None and scale_num is not None and scale_num > 0:
+        context_scale_has_bar = True
+        scale_used_pct = _pct(used_num, scale_num)
+        if compared_num is not None and compared_num > 0:
+            scale_compared_pct = _pct(compared_num, scale_num)
+        if peak_num is not None and peak_num > 0:
+            scale_peak_pct = _pct(peak_num, scale_num)
+    cont_num = _dto_number(figures.get("continuations"))
+    context_continuations = (
+        cont_num
+        if isinstance(cont_num, int) and not isinstance(cont_num, bool) and cont_num > 0
+        else None
+    )
+    if context_continuations is None and (
+        isinstance(cont_num, float) and cont_num > 0
+    ):
+        context_continuations = int(cont_num)
+
+    # Cache hit rate is main-only: from the main origin cell when the
+    # backend reports per-origin spend, else the reported figure (which the
+    # backend already scopes to the main conversation).
+    cache_view = _gauge_view(figures.get("cache_hit_rate"))
+    by_origin_raw = budget.by_origin
+    if isinstance(by_origin_raw, dict) and "main" in by_origin_raw:
+        main = by_origin_raw["main"]
+        main_inputs = [_dto_number(getattr(main, field, None)) for field in (
+            "input_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+        )]
+        if all(value is not None for value in main_inputs):
+            denom = sum(main_inputs)  # type: ignore[arg-type]
+            if denom > 0:
+                main_rate = main_inputs[1] / denom  # type: ignore[operator]
+                main_basis = figure_view(getattr(main, "cache_read_tokens", None)).basis
+                cache_view = FigureView(
+                    f"{main_rate * 100:.0f}%",
+                    main_basis or "measured",
+                    "ratio",
+                    "value",
+                )
+
+    # Spend by origin: bucket sums of the usable cells; Effective and Cost
+    # are the budget totals, never a sum that could drift from them.
+    by_origin_cells = _read_by_origin(budget)
+    origin_dtos = (
+        [by_origin_raw[name] for name in by_origin_raw if by_origin_raw[name] is not None]
+        if isinstance(by_origin_raw, dict)
+        else []
+    )
+    spend_buckets = (
+        {field: _spend_sum(origin_dtos, field) for field in SPEND_BUCKETS}
+        if by_origin_cells is not None
+        else {field: FigureView() for field in SPEND_BUCKETS}
+    )
+    spend_effective_total = FigureView()
+    spend_cost_total = FigureView()
+    spend_cost_used = spend_cost_limit = FigureView()
+    spend_cost_pct = None
+    spend_has_unavailable = False
+    if by_origin_cells is not None:
+        spend_effective_total = _gauge_view(budget.effective_tokens)
+        cost_fig = (
+            figures.get("cost_usd")
+            if _dto_number(figures.get("cost_usd")) is not None
+            else None
+        )
+        for entry in budget.limits:
+            name = entry.name if isinstance(entry.name, str) and entry.name else UNKNOWN
+            if name == "cost_usd":
+                spend_cost_used = _gauge_view(entry.used)
+                spend_cost_limit = _gauge_view(entry.limit)
+                limit_cost = _dto_number(entry.limit)
+                total_cost = _dto_number(cost_fig)
+                if total_cost is None:
+                    total_cost = _dto_number(entry.used)
+                    cost_fig = entry.used
+                if total_cost is not None and limit_cost is not None and limit_cost > 0:
+                    spend_cost_pct = _pct(total_cost, limit_cost)
+                break
+        if _dto_number(cost_fig) is not None:
+            spend_cost_total = _gauge_view(cost_fig)
+        for cell in by_origin_cells:
+            for figure in (
+                cell.input_tokens,
+                cell.cache_read_tokens,
+                cell.cache_write_tokens,
+                cell.output_tokens,
+                cell.effective_tokens,
+                cell.cost_usd,
+            ):
+                if figure.state == "unknown":
+                    spend_has_unavailable = True
+                    break
+            if spend_has_unavailable:
+                break
 
     if has_bar:
         hard_view = _gauge_view(hard_fig)
@@ -1047,6 +1297,10 @@ def read_attempt_gauge(
     else:
         budget_text, budget_basis = _cell(used_view)
     context_text, context_basis = _cell(ctx_main)
+    if compared_view.state == "value":
+        context_compared_text = compared_view.text
+    else:
+        context_compared_text = UNKNOWN
     turns_text, turns_basis = _cell(turns_view)
     cache_text, cache_basis = _cell(cache_view)
 
@@ -1082,14 +1336,37 @@ def read_attempt_gauge(
         budget_hatched=hatched,
         turns=turns_view,
         turns_max=turns_max,
-        continuation_index=_gauge_view(figures.get("continuations")),
+        continuation_index=cont_view,
         continuation_max=_gauge_view(figures.get(NATIVE_CONTINUATION_MAX)),
         cache_hit=cache_view,
         ctx_main=ctx_main,
-        ctx_window=_gauge_view(figures.get("context_window")),
-        ctx_peak=_gauge_view(figures.get("context_peak")),
-        ctx_auto_compact=_gauge_view(figures.get(NATIVE_AUTO_COMPACT)),
+        ctx_window=ctx_window_view,
+        ctx_peak=ctx_peak_view,
+        ctx_auto_compact=ctx_auto_view,
         compactions=_gauge_view(figures.get(NATIVE_COMPACTIONS)),
+        context_compared=compared_view,
+        context_scale=context_scale,
+        context_scale_is_handoff=handoff_num is not None,
+        context_left=context_left,
+        context_used_pct=context_used_pct,
+        context_has_bar=context_has_bar,
+        context_hatched=context_hatched,
+        context_hot=bool(context_hot),
+        context_scale_has_bar=context_scale_has_bar,
+        context_scale_used_pct=scale_used_pct,
+        context_scale_compared_pct=scale_compared_pct,
+        context_scale_peak_pct=scale_peak_pct,
+        context_continuations=context_continuations,
+        spend_input_total=spend_buckets["input_tokens"],
+        spend_cache_read_total=spend_buckets["cache_read_tokens"],
+        spend_cache_write_total=spend_buckets["cache_write_tokens"],
+        spend_output_total=spend_buckets["output_tokens"],
+        spend_effective_total=spend_effective_total,
+        spend_cost_total=spend_cost_total,
+        spend_has_unavailable=spend_has_unavailable,
+        spend_cost_used=spend_cost_used,
+        spend_cost_limit=spend_cost_limit,
+        spend_cost_pct=spend_cost_pct,
         other_limits=tuple(other_limits),
         tokens=tokens,
         other_figures=other_figures,
@@ -1097,6 +1374,8 @@ def read_attempt_gauge(
         budget_basis=budget_basis,
         context_text=context_text,
         context_basis=context_basis,
+        context_compared_text=context_compared_text,
+        context_reason=_dto_reason(ctx_used_fig),
         turns_text=turns_text,
         turns_basis=turns_basis,
         cache_text=cache_text,

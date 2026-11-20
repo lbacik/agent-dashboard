@@ -572,6 +572,68 @@ table.fleet td.headline { min-width: 14rem; }
   background: var(--danger-ink);
 }
 
+/* Main context bar: the fill turns danger colour at 95% of the compared
+   threshold; the grey peak tick marks context_peak. The context bar is
+   taller than the budget bar; the scale caption names what 100% is. */
+.budget-fill.is-hot { background: var(--oc-infra); }
+.budget-bar.ctx-bar { height: 0.9rem; }
+.budget-peak {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  background: var(--muted);
+}
+.ctx-scale { color: var(--muted); font-size: 0.74rem; margin: 0.2rem 0 0.5rem; }
+.ctx-chip {
+  display: inline-block;
+  padding: 0 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+
+/* Spend by origin table (module 04): origins as rows, token buckets plus
+   Effective and Cost as columns, with Total and Limit footer rows. An
+   estimated (upper-bound) origin reads hatched with a "≤ upper bound" tag;
+   unknown cells read "unknown", never zero. */
+.table-wrap { overflow-x: auto; }
+table.spend {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+.spend th, .spend td {
+  padding: 0.25rem 0.4rem;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+.spend th:first-child { text-align: left; }
+.spend thead th {
+  background: var(--surface-2);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+.spend tfoot th, .spend tfoot td { border-top: 2px solid var(--ink); }
+.spend tr.limit-row td, .spend tr.limit-row th {
+  color: var(--muted);
+  border-bottom: 0;
+}
+tr.spend-est td {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 4px,
+    var(--warn-bg) 4px,
+    var(--warn-bg) 8px
+  );
+}
+
 tr.fleet-row { cursor: pointer; }
 tr.fleet-row:hover td { background: var(--hover); }
 
