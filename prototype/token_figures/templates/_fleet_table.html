@@ -1,0 +1,239 @@
+{# Fleet Matrix: running and stopped managed instances live in one table,
+   filtered by the KPI strip above it. The strip holds four toggle buttons
+   (`Online units`, `Operator alerts`, `Active executions`, `Offline units`)
+   with server-rendered counts; the fleet script (`fleet.js`) shows a row
+   when any active filter matches its `data-vc-*` attributes. By default only
+   `Online units` is ON, so stopped rows render with `hidden` in the initial
+   HTML. The single `.table-scroll` box keeps `data-scroll-key="fleet-running"`.
+   Every row carries a rank-tier stripe class (`stripe-alert`, `stripe-warning`,
+   `stripe-working`, `stripe-idle`, `stripe-offline`) keyed to its Attention
+   rank; the stripe adds to the Reach pill and Status headline, never replacing
+   them. Rows open the instance drawer; the log buttons stop propagation.
+   The fragment renders a wrapper holding both the `.vc-rail` Fleet units rail
+   and the `.vc-matrix-pane` (KPI strip plus matrix): without an open drawer
+   the rail hides and the matrix spans the width; with a drawer the matrix
+   hides and the rail shows beside the cockpit (see style.css `#live:has`).
+   `selected` names the inspected instance: its rail item carries
+   `is-selected` plus `aria-current="true"`, reapplied client-side after
+   every `fleet` SSE swap from the `?instance=` URL.
+   Under the rail head a scaled-down copy of the four filters (`.vc-chip`,
+   same `data-vc-filter` keys) shares the matrix filter state: rail rows
+   carry the same `data-vc-*` attributes and hide with their matrix rows,
+   except the selected unit, which always stays listed. #}
+{% macro logs_icon() -%}
+<svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 1.5h6L13 5v9.5H3.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9.5 1.5V5H13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 8h5M5.5 10.5h5M5.5 13h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+{%- endmacro %}
+{% macro live_icon() -%}
+<svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M1 8.5h3l1.8-5 3.4 9 1.8-4H15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+{%- endmacro %}
+{% macro stripe_class(row) -%}
+{%- if row.state != "running" %}stripe-offline{%- elif row.rank <= 2 %}stripe-alert{%- elif row.rank <= 4 %}stripe-warning{%- elif row.rank == 5 or (row.detail is not none and row.detail.attempt_kind == "active") %}stripe-working{%- else %}stripe-idle{%- endif %}
+{%- endmacro %}
+{% set selected = selected | default("") %}
+{% set running = rows | selectattr("state", "equalto", "running") | list %}
+{% set stopped = rows | rejectattr("state", "equalto", "running") | list %}
+{% set selected_offline = selected in (stopped | map(attribute="name") | list) %}
+{% set ns = namespace(alerts=0, working=0) %}
+{% for row in running %}
+{% if row.rank <= 4 %}{% set ns.alerts = ns.alerts + 1 %}{% endif %}
+{% if row.detail is not none and row.detail.attempt_kind == "active" %}{% set ns.working = ns.working + 1 %}{% elif row.path == "contract" and row.contract is not none and row.contract.instance_state in ("active", "draining") %}{% set ns.working = ns.working + 1 %}{% endif %}
+{% endfor %}
+{% set filter_specs = [
+  ("online", "Online units", "Online", running | length, "running instances"),
+  ("alerts", "Operator alerts", "Alerts", ns.alerts, "hold / handoff / stale"),
+  ("working", "Active executions", "Active", ns.working, "attempt in progress"),
+  ("offline", "Offline units", "Offline", stopped | length, "not running / exited"),
+] %}
+{% macro filter_attrs(row) -%}
+{%- if row.state == "running" %} data-vc-online="1"{% if row.rank <= 4 %} data-vc-alerts="1"{% endif %}{% if row.detail is not none and row.detail.attempt_kind == "active" %} data-vc-working="1"{% elif row.path == "contract" and row.contract is not none and row.contract.instance_state in ("active", "draining") %} data-vc-working="1"{% endif %}{% else %} data-vc-offline="1"{% endif -%}
+{%- endmacro %}
+{# Budget, Main context, Turns and Cache hit rate cells: one markup for
+   both paths (``row.gauge`` is the legacy SnapshotDetail or the contract
+   AttemptGauge, which share these fields; ADR 0017). #}
+{% macro figure_cells(g) -%}
+      <td>
+        {% if g.budget_has_bar %}
+        <div class="budget-bar{% if g.budget_hatched %} hatched{% endif %}" role="img" aria-label="budget {{ g.budget_text }}">
+          <div class="budget-fill" style="width: {{ g.budget_used_pct }}%"></div>
+          {% if g.budget_has_tick %}<div class="budget-tick" style="left: {{ g.budget_soft_pct }}%"></div>{% endif %}
+        </div>
+        {% endif %}
+        <div class="figure">{{ g.budget_text }}{% if g.budget_basis %} <span class="basis">{{ g.budget_basis }}</span>{% endif %}</div>
+      </td>
+      <td><div class="figure">{{ g.context_text }}{% if g.context_basis %} <span class="basis">{{ g.context_basis }}</span>{% endif %}</div></td>
+      <td><div class="figure">{{ g.turns_text }}{% if g.turns_basis %} <span class="basis">{{ g.turns_basis }}</span>{% endif %}</div></td>
+      <td><div class="figure">{{ g.cache_text }}{% if g.cache_basis %} <span class="basis">{{ g.cache_basis }}</span>{% endif %}</div></td>
+{%- endmacro %}
+{% macro rail_item(row, attempt) -%}
+<li class="vc-rail-row"{{ filter_attrs(row) }}{% if row.state != "running" and row.name != selected %} hidden{% endif %}>
+  <button type="button" class="vc-rail-item {{ stripe_class(row) }}{% if row.name == selected %} is-selected{% endif %}"{% if row.name == selected %} aria-current="true"{% endif %}
+    data-instance="{{ row.name }}"
+    hx-get="/instances/{{ row.name | urlencode }}"
+    hx-target="#drawer-holder"
+    hx-swap="innerHTML"
+    hx-push-url="/?instance={{ row.name | urlencode }}">
+    <span class="vc-rail-line">
+      <span class="vc-rail-rank" title="{{ row.rank_title }}">{% if row.state == "running" %}R{{ row.rank }}{% else %}OFF{% endif %}</span>
+      <span class="vc-rail-name">{{ row.name }}</span>
+      <span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>
+    </span>
+    <span class="vc-rail-line vc-rail-meta">
+      {% if row.path == "contract" %}<span class="vc-rail-repo">{{ row.contract.repository_display if row.contract is not none else "unavailable" }}</span>{% else %}<span class="vc-rail-repo">{{ row.detail.repository_display }}</span>{% endif %}
+      <span class="vc-rail-attempt">{{ attempt }}</span>
+    </span>
+    {% set bar = row.gauge %}
+    {% if row.state == "running" and bar is not none and bar.budget_has_bar %}
+    <span class="budget-bar vc-mini-bar{% if bar.budget_hatched %} hatched{% endif %}" aria-hidden="true">
+      <span class="budget-fill" style="width: {{ bar.budget_used_pct }}%"></span>
+      {% if bar.budget_has_tick %}<span class="budget-tick" style="left: {{ bar.budget_soft_pct }}%"></span>{% endif %}
+    </span>
+    {% endif %}
+    <span class="vc-rail-headline">{{ row.headline }}</span>
+  </button>
+</li>
+{%- endmacro %}
+<div class="vc-wrap">
+<nav class="vc-rail" data-scroll-key="fleet-rail" aria-label="Fleet units">
+  <div class="vc-rail-head">
+    <span class="vc-rail-title">Fleet units ({{ running | length }} on · {{ stopped | length }} off)</span>
+    <button type="button" class="vc-rail-matrix" onclick="closeDrawer()">⊞ Matrix</button>
+  </div>
+  {% if rows %}
+  <div class="vc-rail-filters" role="group" aria-label="Fleet units filters">
+    {% for key, name, short, count, hint in filter_specs %}
+    <button type="button" class="vc-chip{% if key == "online" %} is-on{% endif %}{% if key == "alerts" and ns.alerts > 0 %} has-alert{% endif %}" data-vc-filter="{{ key }}" aria-pressed="{{ "true" if key == "online" else "false" }}" title="{{ name }} · filter: {{ hint }}">
+      <span class="vc-chip-name">{{ short }}</span>
+      <span class="vc-chip-bottom">
+        <span class="vc-chip-count">{{ count }}</span>
+        <span class="vc-led" aria-hidden="true"></span>
+      </span>
+    </button>
+    {% endfor %}
+  </div>
+  {% if running %}
+  <ul class="vc-rail-list">
+    {% for row in running %}
+    {% if row.path == "contract" %}{{ rail_item(row, row.contract.attempt_text if row.contract is not none else "—") }}{% else %}{{ rail_item(row, row.detail.attempt_text) }}{% endif %}
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if stopped %}
+  <details class="vc-rail-stopped" open{% if not selected_offline %} hidden{% endif %}>
+    <summary>Offline units ({{ stopped | length }})</summary>
+    <ul class="vc-rail-list">
+      {% for row in stopped %}
+      {% set d = row.drawer %}
+      {% if row.path == "contract" and row.contract is not none and ((row.contract.halt is not none and row.contract.halt_is_current) or row.contract.last_finished is not none) %}{% if row.contract.halt is not none and row.contract.halt_is_current %}{{ rail_item(row, "Halted (" ~ row.contract.halt.reason ~ ")") }}{% elif row.contract.last_finished.issue_number is not none %}{{ rail_item(row, "#" ~ row.contract.last_finished.issue_number ~ " · " ~ (row.contract.last_finished.outcome_label or "n/a")) }}{% else %}{{ rail_item(row, row.contract.last_finished.outcome_label or "n/a") }}{% endif %}{% else %}{{ rail_item(row, (("#" ~ d.last_issue ~ " · ") if d and d.last_present and d.last_issue is not none else "") ~ ((d.last_outcome or "n/a") if d and d.last_present else "n/a")) }}{% endif %}
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+  <p class="hint vc-rail-empty" data-vc-rail-empty{% if running or selected_offline %} hidden{% endif %}>No units match the active filters.</p>
+  {% else %}
+  <p class="hint vc-rail-empty">No managed instances found.</p>
+  {% endif %}
+</nav>
+<div class="vc-matrix-pane">
+{% if error %}
+<div class="banner" role="alert">Discovery failed: {{ error }}</div>
+{% endif %}
+<div class="vc-filters" role="group" aria-label="Fleet filters">
+  {% for key, name, short, count, hint in filter_specs %}
+  <button type="button" class="vc-tile{% if key == "online" %} is-on{% endif %}{% if key == "alerts" and ns.alerts > 0 %} has-alert{% endif %}" data-vc-filter="{{ key }}" aria-pressed="{{ "true" if key == "online" else "false" }}">
+    <span class="vc-tile-top">
+      <span class="vc-led" aria-hidden="true"></span>
+      <span class="vc-name">{{ name }}</span>
+      <span class="vc-state">{{ "ON" if key == "online" else "OFF" }}</span>
+    </span>
+    <span class="vc-tile-bottom">
+      <span class="vc-count">{{ count }}</span>
+      <span class="vc-hint">filter: {{ hint }}</span>
+    </span>
+  </button>
+  {% endfor %}
+</div>
+{% if rows %}
+<div class="table-scroll" data-scroll-key="fleet-running">
+<div class="vc-panel-bar">
+  <span>Operations matrix // <span class="vc-summary" aria-live="polite" data-vc-summary>ONLINE ({{ running | length }} SHOWN)</span></span>
+  <span class="vc-panel-sub">Toggle the tiles above to filter · click a row to open its cockpit</span>
+</div>
+<table class="fleet">
+  <thead>
+    <tr><th>Instance</th><th>Status headline</th><th>Reach</th><th>Intake</th><th>Attempt</th>{% include "proto/fleet_head_" ~ proto.variant ~ ".html" %}<th>Errors</th><th><span class="sr-only">Logs</span></th></tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    {% if row.state == "running" %}
+    {% if row.path == "contract" %}
+    <tr class="fleet-row {{ stripe_class(row) }}"
+       {{ filter_attrs(row) }}
+        hx-get="/instances/{{ row.name | urlencode }}"
+        hx-target="#drawer-holder"
+        hx-swap="innerHTML"
+        hx-push-url="/?instance={{ row.name | urlencode }}">
+      <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{% if row.backend %}{{ row.backend }}{% else %}<span class="hint">n/a</span>{% endif %}</div></td>
+      <td class="headline">{{ row.headline }}</td>
+      <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.reach != "live" and row.age_text %} <span class="age">{{ row.age_text }} ago</span>{% endif %}</td>
+      <td>{% if row.contract is not none and row.contract.intake_state %}{{ row.contract.intake_state }}{% if row.contract.pending_stop %} · Stop requested{% endif %}{% if row.contract.stop_plan_remaining is not none %} · Stop planned ({{ row.contract.stop_plan_remaining }} remaining){% endif %}{% if row.contract.priority_issue is not none %} · Next #{{ row.contract.priority_issue }}{% endif %}{% else %}<span class="hint">n/a</span>{% endif %}</td>
+      <td>{{ row.contract.attempt_text if row.contract is not none else "—" }}</td>
+      {% set t = ptok(row.name) %}{% set g = row.gauge %}{% include "proto/fleet_cells_" ~ proto.variant ~ ".html" %}
+      <td><span class="hint">n/a</span></td>
+      <td class="row-actions"><div class="row-actions-inner">
+        <a class="btn" href="/instances/{{ row.name | urlencode }}/history" onclick="event.stopPropagation()">{{ logs_icon() }} Logs</a>
+      </div></td>
+    </tr>
+    {% else %}
+    <tr class="fleet-row {{ stripe_class(row) }}"
+       {{ filter_attrs(row) }}
+        hx-get="/instances/{{ row.name | urlencode }}"
+        hx-target="#drawer-holder"
+        hx-swap="innerHTML"
+        hx-push-url="/?instance={{ row.name | urlencode }}">
+      <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{{ row.detail.repository_display }}</div></td>
+      <td class="headline">{{ row.headline }}</td>
+      <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.reach != "live" and row.age_text %} <span class="age">{{ row.age_text }} ago</span>{% endif %}</td>
+      <td>{{ row.detail.intake_text }}{% if row.detail.intake_stale %} <span class="stale-tag">stale</span>{% endif %}{% for chip in row.control_chips %} <span class="ctl-chip{% if row.detail.control_stale %} is-stale{% endif %}">{{ chip }}</span>{% endfor %}</td>
+      <td>{{ row.detail.attempt_text }}{% if row.detail.attempt_stale %} <span class="stale-tag">stale</span>{% endif %}</td>
+      {{ figure_cells(row.gauge) }}
+      <td>{{ row.detail.errors_text }}{% if row.detail.errors_stale %} <span class="stale-tag">stale</span>{% endif %}</td>
+      <td class="row-actions"><div class="row-actions-inner">
+        <a class="btn" href="/instances/{{ row.name | urlencode }}/history" onclick="event.stopPropagation()">{{ logs_icon() }} Logs</a>
+        {% if row.live_url %}<a class="btn btn-live" href="{{ row.live_url }}" onclick="event.stopPropagation()">{{ live_icon() }} Live #{{ row.live_issue }}</a>{% endif %}
+      </div></td>
+    </tr>
+    {% endif %}
+    {% else %}
+    {% set d = row.drawer %}
+    <tr class="fleet-row {{ stripe_class(row) }}"
+       {{ filter_attrs(row) }}
+        hidden
+        hx-get="/instances/{{ row.name | urlencode }}"
+        hx-target="#drawer-holder"
+        hx-swap="innerHTML"
+        hx-push-url="/?instance={{ row.name | urlencode }}">
+      <td><div class="inst-name">{{ row.name }}</div><div class="inst-repo">{% if row.path == "contract" %}{% if row.backend %}{{ row.backend }}{% else %}<span class="hint">n/a</span>{% endif %}{% else %}{{ row.detail.repository_display }}{% endif %}</div></td>
+      <td class="headline">{{ row.headline }}</td>
+      <td><span class="pill pill-{{ row.reach|replace(" ", "-") }}">{{ row.reach }}</span>{% if row.age_text %} <span class="age">last seen {{ row.age_text }} ago</span>{% endif %}</td>
+      <td>{% if row.path == "contract" and row.contract is not none %}{% if row.contract.intake_state %}{{ row.contract.intake_state }}{% else %}<span class="hint">n/a</span>{% endif %}{% if row.contract.stop_plan_remaining is not none %} · Stop planned ({{ row.contract.stop_plan_remaining }} remaining){% endif %}{% if row.contract.pending_stop %} · Stop requested{% endif %}{% if row.contract.priority_issue is not none %} · Next #{{ row.contract.priority_issue }}{% endif %}{% else %}<span class="hint">n/a</span>{% endif %}</td>
+      <td>{% if row.path == "contract" and row.contract is not none and ((row.contract.halt is not none and row.contract.halt_is_current) or row.contract.last_finished is not none) %}{% if row.contract.halt is not none and row.contract.halt_is_current %}Halted ({{ row.contract.halt.reason }}){% endif %}{% if row.contract.halt is not none and row.contract.halt_is_current and row.contract.last_finished is not none %} · {% endif %}{% if row.contract.last_finished is not none %}{% if row.contract.last_finished.issue_number is not none %}#{{ row.contract.last_finished.issue_number }} · {% endif %}{{ row.contract.last_finished.outcome_label or "n/a" }}{% endif %}{% elif d and d.last_present %}{% if d.last_issue is not none %}#{{ d.last_issue }} · {% endif %}{{ d.last_outcome or "n/a" }}{% if d.last_finished_at %} <span class="age">{{ d.last_finished_at }}</span>{% endif %}{% else %}<span class="hint">n/a</span>{% endif %}</td>
+      {% for _ in range(proto.cols) %}<td><div class="figure"><span class="hint">n/a</span></div></td>{% endfor %}
+      <td><span class="hint">n/a</span></td>
+      <td class="row-actions">
+        {% if row.path == "contract" %}<span class="hint">n/a</span>{% else %}<a class="btn" href="/instances/{{ row.name | urlencode }}/history" onclick="event.stopPropagation()">{{ logs_icon() }} Logs</a>{% endif %}
+      </td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="vc-empty" data-vc-empty hidden>No filters active — the matrix is hiding every unit. <button type="button" data-vc-reset>Reset to Online units</button></p>
+{% if not running %}
+<p class="empty" data-vc-no-running>No running managed instances.</p>
+{% endif %}
+{% else %}
+<p class="empty">No managed instances found.</p>
+{% endif %}
+</div>
+</div>

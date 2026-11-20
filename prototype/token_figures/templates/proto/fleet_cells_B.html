@@ -1,0 +1,27 @@
+{# B · Gauges: Budget becomes an origin-stacked bar; Context is % of the compared threshold; Sub-agents get a column. #}
+      <td>
+        {% if t and t.has_origins %}
+        <div class="p-stack" role="img" aria-label="effective tokens by origin">
+          {% for o, c in t.origins.items() %}<span class="p-seg p-o-{{ o }}{% if c.basis == 'estimated' %} p-seg-est{% endif %}" style="width: {{ pct(c.effective, t.eff_limit) }}%"></span>{% endfor %}
+        </div>
+        <div class="figure">{{ k(t.eff_total) }} / {{ k(t.eff_limit) }} <span class="basis">{{ usd(t.cost_total) }} of {{ usd(t.cost_limit) }}</span></div>
+        {% elif g is not none %}
+        {% if g.budget_has_bar %}<div class="budget-bar"><div class="budget-fill" style="width: {{ g.budget_used_pct }}%"></div></div>{% endif %}
+        <div class="figure">{{ g.budget_text }} <span class="basis">{% if t and t.is_coding_agent %}origins not recorded{% else %}{{ g.budget_basis }}{% endif %}</span></div>
+        {% else %}<span class="hint">n/a</span>{% endif %}
+      </td>
+      <td>
+        {% if t %}{% set cmp = t.compare if t.compare else t.auto_compact %}
+        {% set p = pct(t.used, cmp) %}
+        <div class="p-ctx-cell">
+          <span class="p-big{% if p >= 95 %} p-hot-ink{% endif %}">{{ p | round(0) | int }}%</span>
+          <span class="p-ctx-sub">{{ k(t.used) }} of {{ k(cmp) }}{% if t.handoffs %} · ↻{{ t.handoffs }}{% endif %}</span>
+        </div>
+        <div class="budget-bar p-thin{% if t.used_reason and t.used_reason.startswith('local') %} hatched{% endif %}"><div class="budget-fill{% if p >= 95 %} p-hot{% endif %}" style="width: {{ p }}%"></div></div>
+        {% else %}<span class="hint">n/a</span>{% endif %}
+      </td>
+      <td><div class="figure">{% if t and t.sub_running is not none %}{% if t.sub_running %}<b>{{ t.sub_running }}</b> running{% else %}none running{% endif %}<span class="basis">{{ t.sub_ended }} ended</span>{% else %}<span class="hint">n/a</span>{% endif %}</div></td>
+{% if g is not none %}
+      <td><div class="figure">{{ g.turns_text }}{% if g.turns_basis %} <span class="basis">{{ g.turns_basis }}</span>{% endif %}</div></td>
+      <td><div class="figure">{{ g.cache_text }}{% if g.cache_basis %} <span class="basis">{{ g.cache_basis }}</span>{% endif %}</div></td>
+{% else %}<td></td><td></td>{% endif %}

@@ -1,0 +1,48 @@
+{# C · Ladder: the thresholds as a sorted ladder with distances; spend as a share heatmap. #}
+{% if t %}
+<h4>Context ladder <span class="p-variant">C</span></h4>
+{% set rungs = [] %}
+{% if t.window %}{% set _ = rungs.append(("Model Context Window", t.window, t.window_basis, "window")) %}{% endif %}
+{% if t.handoff %}{% set _ = rungs.append(("Handoff Threshold", t.handoff, "configured", "handoff")) %}{% endif %}
+{% if t.compare %}{% set _ = rungs.append(("Usable Threshold", t.compare, "configured · compared", "usable")) %}{% endif %}
+{% if t.auto_compact %}{% set _ = rungs.append(("Auto-compact threshold", t.auto_compact, "native · compared", "usable")) %}{% endif %}
+{% if t.peak %}{% set _ = rungs.append(("Peak this Attempt", t.peak, t.peak_reason or "", "peak")) %}{% endif %}
+{% set _ = rungs.append(("Main context now", t.used, "estimated · " ~ (t.used_reason or ""), "now")) %}
+{% set rungs = rungs | sort(attribute="1", reverse=True) %}
+<ol class="p-ladder">
+  {% for label, value, note, kind in rungs %}
+  <li class="p-rung p-rung-{{ kind }}">
+    <span class="p-rung-value">{{ n(value) }}</span>
+    <span class="p-rung-label">{{ label }}</span>
+    <span class="p-rung-note">{{ note }}</span>
+  </li>
+  {% if not loop.last %}<li class="p-gap">Δ {{ n(value - rungs[loop.index][1]) }}</li>{% endif %}
+  {% endfor %}
+</ol>
+<p class="p-scale">Handoffs: {% if t.handoffs is not none %}<b>{{ t.handoffs }}</b>{% else %}not applicable{% endif %} · Sub-agents: {% if t.sub_running is not none %}<b>{{ t.sub_running }}</b> running, <b>{{ t.sub_ended }}</b> ended{% if t.sub_reason %} ({{ t.sub_reason }}){% endif %}{% else %}n/a{% endif %}</p>
+<h4>Spend heatmap <span class="p-variant">C</span></h4>
+{% if t.has_origins %}
+{% set rows = BUCKETS + [("effective", "Effective"), ("cost", "Cost")] %}
+<div class="p-table-wrap">
+<table class="p-heat">
+  <thead><tr><th></th>{% for o in t.origins %}<th>{{ ORIGIN_LABELS.get(o, o) }}</th>{% endfor %}<th>Total</th></tr></thead>
+  <tbody>
+  {% for key, label in rows %}
+  {% set tot = t.origins.values() | sum(attribute=key) %}
+  <tr class="{% if key in ('effective', 'cost') %}p-heat-key{% endif %}"><th>{{ label }}</th>
+    {% for o, c in t.origins.items() %}{% set share = pct(c[key], tot) %}
+    <td style="--share: {{ (share * 0.4) | round(0) | int }}%" class="{% if c.basis == 'estimated' %}p-est{% endif %}" title="{{ c.reason or '' }}">
+      <span class="p-heat-v">{{ usd(c[key]) if key == 'cost' else k(c[key]) }}</span><span class="p-heat-s">{{ share | round(0) | int }}%{% if c.basis == 'estimated' %} ≤{% endif %}</span></td>
+    {% endfor %}
+    <td><b>{{ usd(tot) if key == 'cost' else k(tot) }}</b>{% if key == 'effective' %}<span class="p-heat-s">{{ pct(tot, t.eff_limit) | round(0) | int }}% of {{ k(t.eff_limit) }}</span>{% elif key == 'cost' %}<span class="p-heat-s">{{ pct(tot, t.cost_limit) | round(0) | int }}% of {{ usd(t.cost_limit) }}</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% elif t.is_coding_agent %}
+<p class="hint">By origin: <span class="figure-unknown">unknown</span> — not recorded (Attempt started before the upgrade).</p>
+{% else %}
+<p class="hint">This backend reports no per-origin spend.</p>
+{% endif %}
+{% endif %}

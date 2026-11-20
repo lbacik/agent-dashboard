@@ -1,0 +1,6 @@
+<div class="p-switcher" role="navigation" aria-label="Prototype variant switcher">
+  <button type="button" data-p-step="-1" aria-label="Previous variant">←</button>
+  <span class="p-switcher-label">PROTOTYPE · {{ proto.variant }} ({{ proto.name }})</span>
+  <button type="button" data-p-step="1" aria-label="Next variant">→</button>
+</div>
+<script>window.PROTO_VARIANTS = {{ proto.variants.keys() | list | tojson }}; window.PROTO_CURRENT = {{ proto.variant | tojson }};</script>

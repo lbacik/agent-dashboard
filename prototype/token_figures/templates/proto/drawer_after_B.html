@@ -1,0 +1,66 @@
+{# B · Gauges: two dedicated modules under 04. #}
+{% if t %}
+{% set cmp = t.compare if t.compare else t.auto_compact %}
+{% set zoom = t.handoff if t.handoff else t.window %}
+<section class="drawer-section vc-module">
+  <h3 class="vc-module-bar">04a // Main context <span class="p-variant">B</span></h3>
+  <div class="vc-module-body">
+    <div class="p-gauge-head">
+      <span class="p-big{% if pct(t.used, cmp) >= 95 %} p-hot-ink{% endif %}">{{ n(t.used) }}</span>
+      <span class="p-gauge-of">of {{ n(cmp) }} {{ 'Usable Threshold' if t.compare else 'auto-compact' }}</span>
+      <span class="p-gauge-left">{% if t.headroom is not none %}{{ n(t.headroom) }} left before handoff{% endif %}</span>
+    </div>
+    <p class="p-reason">estimated · {{ t.used_reason or 'no reason given' }}</p>
+    <div class="p-window" title="Model Context Window {{ n(t.window) }}">
+      <div class="p-window-zone" style="width: {{ pct(zoom, t.window) }}%"></div>
+      <div class="p-window-used" style="width: {{ pct(t.used, t.window) }}%"></div>
+    </div>
+    <div class="p-scale-row"><span>0</span><span>Model Context Window {{ k(t.window) }} <span class="basis">{{ t.window_basis }}</span></span></div>
+    <div class="p-zoom-caption">zoomed: 0 … {{ k(zoom) }} {{ '(Handoff Threshold)' if t.handoff else '' }}</div>
+    <div class="p-zoom{% if t.used_reason and t.used_reason.startswith('local') %} hatched{% endif %}">
+      <div class="p-zoom-fill{% if pct(t.used, cmp) >= 95 %} p-hot{% endif %}" style="width: {{ pct(t.used, zoom) }}%"></div>
+      {% if cmp %}<div class="p-zoom-mark p-mark-usable" style="left: {{ pct(cmp, zoom) }}%"><span>{{ 'usable' if t.compare else 'compact' }} {{ k(cmp) }}</span></div>{% endif %}
+      {% if t.peak %}<div class="p-zoom-mark p-mark-peak" style="left: {{ pct(t.peak, zoom) }}%"><span>peak {{ k(t.peak) }}</span></div>{% endif %}
+    </div>
+    <div class="p-tiles">
+      <div class="p-tile"><span class="p-tile-label">Handoffs</span><span class="p-tile-value">{% if t.handoffs is not none %}{{ t.handoffs }}{% else %}—{% endif %}</span></div>
+      <div class="p-tile"><span class="p-tile-label">Peak</span><span class="p-tile-value">{{ k(t.peak) }}</span>{% if t.peak_reason %}<span class="p-reason">{{ t.peak_reason }}</span>{% endif %}</div>
+      <div class="p-tile"><span class="p-tile-label">Sub-agents</span><span class="p-tile-value">{% if t.sub_running is not none %}{{ t.sub_running }}<small> running</small> · {{ t.sub_ended }}<small> ended</small>{% else %}—{% endif %}</span>{% if t.sub_reason %}<span class="p-reason">{{ t.sub_reason }}</span>{% endif %}</div>
+    </div>
+  </div>
+</section>
+<section class="drawer-section vc-module">
+  <h3 class="vc-module-bar">04b // Spend by origin <span class="p-variant">B</span></h3>
+  <div class="vc-module-body">
+  {% if t.has_origins %}
+    {% for label, field, total, limit, fmt in [("Effective tokens", "effective", t.eff_total, t.eff_limit, "n"), ("Cost", "cost", t.cost_total, t.cost_limit, "usd")] %}
+    <div class="p-limit-row">
+      <div class="p-limit-head"><b>{{ label }}</b> <span>{{ n(total) if fmt == 'n' else usd(total) }} of {{ n(limit) if fmt == 'n' else usd(limit) }}</span>{% if field == 'effective' %} <span class="enforced-tag">enforced</span>{% endif %} <span class="p-pct">{{ pct(total, limit) | round(0) | int }}%</span></div>
+      <div class="p-stack p-stack-lg">
+        {% for o, c in t.origins.items() %}<span class="p-seg p-o-{{ o }}{% if c.basis == 'estimated' %} p-seg-est{% endif %}" style="width: {{ pct(c[field], limit) }}%" title="{{ ORIGIN_LABELS.get(o, o) }} {{ n(c[field]) if fmt == 'n' else usd(c[field]) }}"></span>{% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+    <ul class="p-legend">
+      {% for o, c in t.origins.items() %}
+      <li><span class="p-swatch p-o-{{ o }}"></span>{{ ORIGIN_LABELS.get(o, o) }} <b>{{ k(c.effective) }}</b> · {{ usd(c.cost) }}{% if c.basis == 'estimated' %} <span class="basis" title="{{ c.reason }}">≤ upper bound</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    <details class="p-buckets">
+      <summary>Buckets (input · cache read · cache write · output)</summary>
+      <table class="p-spend">
+        <thead><tr><th></th>{% for o in t.origins %}<th>{{ ORIGIN_LABELS.get(o, o) }}</th>{% endfor %}<th>Total</th></tr></thead>
+        <tbody>
+          {% for key, label in BUCKETS %}<tr><th>{{ label }}</th>{% for o, c in t.origins.items() %}<td>{{ n(c[key]) }}</td>{% endfor %}<td>{{ n(t.origins.values() | sum(attribute=key)) }}</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </details>
+  {% elif t.is_coding_agent %}
+    <div class="p-stack p-stack-lg p-stack-unknown"><span class="p-seg" style="width: {{ pct(t.eff_total, t.eff_limit) }}%"></span></div>
+    <p class="hint">{{ n(t.eff_total) }} of {{ n(t.eff_limit) }} effective tokens · {{ usd(t.cost_total) }} of {{ usd(t.cost_limit) }}. Split by origin: <span class="figure-unknown">unknown</span> (not recorded — Attempt started before the upgrade).</p>
+  {% else %}
+    <p class="hint">This backend reports no per-origin spend.</p>
+  {% endif %}
+  </div>
+</section>
+{% endif %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+{# The overview panel loads from /overview once it is visible (closed, it
+   reads nothing), so the live table below never waits for attempt-summary
+   reads. #}
+<details class="overview" id="overview" data-persist="overview" open>
+  <summary><span class="panel-tag">Overview</span> Fleet overview</summary>
+  <div id="overview-slot" hx-get="/overview" hx-trigger="intersect once" hx-swap="innerHTML">
+    <p class="hint">Loading…</p>
+  </div>
+</details>
+<div id="live"
+     hx-ext="sse"
+     sse-connect="/stream">
+  <div id="fleet"
+       sse-swap="fleet"
+       hx-swap="innerHTML">
+    {% include "_fleet_table.html" %}
+  </div>
+  <div id="drawer-holder">
+    {% if drawer_open %}
+    {% include "_drawer.html" %}
+    {% endif %}
+  </div>
+</div>
+<noscript>
+  <p class="hint">Enable JavaScript for live updates; otherwise reload the page.</p>
+</noscript>
+<div class="chart-tip" id="chart-tip" hidden></div>
+<script src="/static/scroll-keep.js" defer></script>
+<script src="/static/fleet.js" defer></script>
+<script src="/static/charts.js" defer></script>
+<script src="/static/drawer.js" defer></script>
+<script src="/static/control.js" defer></script>
+<script src="/static/control-error-swap.js" defer></script>
+<link rel="stylesheet" href="/proto-static/proto.css">
+{% include "proto/switcher.html" %}
+<script src="/proto-static/proto.js" defer></script>
+{% endblock %}

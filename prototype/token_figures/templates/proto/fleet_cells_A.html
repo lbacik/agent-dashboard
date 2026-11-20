@@ -1,0 +1,21 @@
+{# A · Ledger: the same four columns; Main context is "used / compared threshold" with a bar and the handoff count. #}
+{% if g is not none %}
+      <td>
+        {% if g.budget_has_bar %}
+        <div class="budget-bar"><div class="budget-fill" style="width: {{ g.budget_used_pct }}%"></div></div>
+        {% endif %}
+        <div class="figure">{{ g.budget_text }}{% if g.budget_basis %} <span class="basis">{{ g.budget_basis }}</span>{% endif %}</div>
+      </td>
+{% else %}<td><div class="figure"><span class="hint">n/a</span></div></td>{% endif %}
+      <td>
+        {% if t %}
+        {% set cmp = t.compare if t.compare else t.auto_compact %}
+        {% if cmp %}<div class="budget-bar{% if t.used_reason and t.used_reason.startswith('local') %} hatched{% endif %}"><div class="budget-fill{% if pct(t.used, cmp) >= 95 %} p-hot{% endif %}" style="width: {{ pct(t.used, cmp) }}%"></div></div>{% endif %}
+        <div class="figure">{{ n(t.used) }}{% if cmp %} / {{ n(cmp) }}{% endif %}{% if t.handoffs %} <span class="p-chip" title="Context-Window Handoffs in this Attempt">↻{{ t.handoffs }}</span>{% endif %}
+        <span class="basis">{% if t.used_reason and t.used_reason.startswith('anchored') %}anchored{% elif t.used_reason %}local estimate{% else %}estimated{% endif %}</span></div>
+        {% else %}<div class="figure"><span class="hint">n/a</span></div>{% endif %}
+      </td>
+{% if g is not none %}
+      <td><div class="figure">{{ g.turns_text }}{% if g.turns_basis %} <span class="basis">{{ g.turns_basis }}</span>{% endif %}</div></td>
+      <td><div class="figure">{{ g.cache_text }}{% if g.cache_basis %} <span class="basis">{{ g.cache_basis }}</span>{% endif %}</div></td>
+{% else %}<td></td><td></td>{% endif %}

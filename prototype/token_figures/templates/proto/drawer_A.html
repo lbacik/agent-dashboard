@@ -1,0 +1,43 @@
+{# A · Ledger: module 04 grows in place — a context block, a spend table (origins as rows), Sub-agents as one fact. #}
+{% if t %}
+<h4>Main context <span class="p-variant">A</span></h4>
+{% set cmp = t.compare if t.compare else t.auto_compact %}
+{% set scale = t.handoff if t.handoff else t.window %}
+<div class="budget-bar p-ctx-bar{% if t.used_reason and t.used_reason.startswith('local') %} hatched{% endif %}" role="img"
+     aria-label="main context {{ n(t.used) }} of {{ n(scale) }}">
+  <div class="budget-fill{% if pct(t.used, cmp) >= 95 %} p-hot{% endif %}" style="width: {{ pct(t.used, scale) }}%"></div>
+  {% if cmp %}<div class="budget-tick" style="left: {{ pct(cmp, scale) }}%" title="{{ 'Usable Threshold' if t.compare else 'auto-compact threshold' }} {{ n(cmp) }}"></div>{% endif %}
+  {% if t.peak %}<div class="p-peak" style="left: {{ pct(t.peak, scale) }}%" title="peak {{ n(t.peak) }}"></div>{% endif %}
+</div>
+<p class="p-scale">0 … {{ n(scale) }} ({{ 'Handoff Threshold' if t.handoff else 'Model Context Window' }}) · red tick: {{ 'Usable Threshold' if t.compare else 'auto-compact' }} · grey tick: peak</p>
+<dl class="facts">
+  <div><dt>Main context</dt><dd>{{ n(t.used) }} <span class="basis">estimated</span>{% if t.used_reason %} <span class="p-reason">{{ t.used_reason }}</span>{% endif %}</dd></div>
+  {% if t.compare %}<div><dt>Usable Threshold</dt><dd>{{ n(t.compare) }} <span class="basis">configured</span> · {{ n(t.headroom) }} left</dd></div>{% endif %}
+  {% if t.handoff %}<div><dt>Handoff Threshold <span class="native-tag">native</span></dt><dd>{{ n(t.handoff) }} <span class="basis">configured</span></dd></div>{% endif %}
+  {% if t.auto_compact %}<div><dt>Auto-compact threshold <span class="native-tag">native</span></dt><dd>{{ n(t.auto_compact) }}</dd></div>{% endif %}
+  <div><dt>Model Context Window</dt><dd>{{ n(t.window) }} <span class="basis">{{ t.window_basis }}</span></dd></div>
+  <div><dt>Peak</dt><dd>{{ n(t.peak) }}{% if t.peak_reason %} <span class="p-reason">{{ t.peak_reason }}</span>{% endif %}</dd></div>
+  <div><dt>Handoffs</dt><dd>{% if t.handoffs is not none %}{{ t.handoffs }}{% else %}<span class="figure-na">not applicable</span>{% endif %}</dd></div>
+  <div><dt>Sub-agents</dt><dd>{% if t.sub_running is not none %}{{ t.sub_running }} running · {{ t.sub_ended }} ended{% if t.sub_reason %} <span class="p-reason">{{ t.sub_reason }}</span>{% endif %}{% else %}<span class="figure-unknown">unknown</span>{% endif %}</dd></div>
+</dl>
+<h4>Spend by origin</h4>
+{% if t.has_origins %}
+<div class="p-table-wrap">
+<table class="p-spend">
+  <thead><tr><th>Origin</th>{% for key, label in BUCKETS %}<th>{{ label }}</th>{% endfor %}<th>Effective</th><th>Cost</th></tr></thead>
+  <tbody>
+  {% for o, c in t.origins.items() %}
+  <tr{% if c.basis == 'estimated' %} class="p-est" title="{{ c.reason }}"{% endif %}><th>{{ ORIGIN_LABELS.get(o, o) }}{% if c.basis == 'estimated' %} <span class="basis">≤ upper bound</span>{% endif %}</th>
+    {% for key, label in BUCKETS %}<td>{{ n(c[key]) }}</td>{% endfor %}<td><b>{{ n(c.effective) }}</b></td><td>{{ usd(c.cost) }}</td></tr>
+  {% endfor %}
+  </tbody>
+  <tfoot><tr><th>Total</th>{% for key, label in BUCKETS %}<td>{{ n(t.origins.values() | sum(attribute=key)) }}</td>{% endfor %}<td><b>{{ n(t.eff_total) }}</b></td><td>{{ usd(t.cost_total) }}</td></tr>
+  <tr class="p-limit"><th>Limit</th><td colspan="4"></td><td>{{ n(t.eff_limit) }} <span class="enforced-tag">enforced</span><br>{{ pct(t.eff_total, t.eff_limit) | round(0) | int }}%</td><td>{{ usd(t.cost_limit) }}<br>{{ pct(t.cost_total, t.cost_limit) | round(0) | int }}%</td></tr></tfoot>
+</table>
+</div>
+{% elif t.is_coding_agent %}
+<p class="hint">Per-origin spend: <span class="figure-unknown">unknown</span> — not recorded (Attempt started before the upgrade). Totals above stay valid.</p>
+{% else %}
+<p class="hint">This backend reports no per-origin spend (<code>budget.by_origin</code> absent). Tokens by category below are its native figures.</p>
+{% endif %}
+{% endif %}

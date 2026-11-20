@@ -1,0 +1,18 @@
+{# C · Ladder: the matrix carries the figures as compact text; Turns drop out (not applicable on coding-agent). #}
+      <td>
+        {% if t %}{% set cmp = t.compare if t.compare else t.auto_compact %}
+        <div class="figure"><b class="{% if pct(t.used, cmp) >= 95 %}p-hot-ink{% endif %}">{{ k(t.used) }}</b> / {{ k(cmp) }}{% if t.handoffs %} · ↻{{ t.handoffs }}{% endif %}
+          <span class="basis">peak {{ k(t.peak) }} · window {{ k(t.window) }}</span></div>
+        {% else %}<span class="hint">n/a</span>{% endif %}
+      </td>
+      <td>
+        {% if t and t.eff_total is not none %}
+        <div class="figure">{{ k(t.eff_total) }} eff · {{ usd(t.cost_total) }}
+          <span class="basis">{% if t.has_origins %}{% for o, c in t.origins.items() %}{{ ORIGIN_LABELS.get(o, o)[0] }} {{ pct(c.effective, t.eff_total) | round(0) | int }}%{% if c.basis == 'estimated' %}≤{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}{% else %}by origin: unknown{% endif %}</span></div>
+        {% elif g is not none %}<div class="figure">{{ g.budget_text }} <span class="basis">{{ g.budget_basis }}</span></div>
+        {% else %}<span class="hint">n/a</span>{% endif %}
+      </td>
+      <td><div class="figure">{% if t and t.sub_running is not none %}{{ t.sub_running }} ▸ · {{ t.sub_ended }} ✓{% else %}<span class="hint">n/a</span>{% endif %}</div></td>
+{% if g is not none %}
+      <td><div class="figure">{{ g.cache_text }}{% if g.cache_basis %} <span class="basis">{{ g.cache_basis }}</span>{% endif %}</div></td>
+{% else %}<td></td>{% endif %}
